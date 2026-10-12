@@ -41,6 +41,29 @@ def ensure_origin():
         run(["remote", "add", "origin", ORIGIN_URL])
 
 
+def _count(range_spec):
+    r = run(["rev-list", "--count", range_spec], capture=True, text=True)
+    try:
+        return int((r.stdout or "").strip() or "0")
+    except ValueError:
+        return 0
+
+
+def sync():
+    """推送前先 fetch；若本地落后远端则 rebase，遇冲突自动中止以免破坏工作区。"""
+    run(["fetch", "origin"])
+    behind = _count("HEAD..origin/main")
+    if behind > 0:
+        print(f"本地落后远端 {behind} 个提交，执行 rebase ...")
+        rr = run(["rebase", "origin/main"])
+        if rr.returncode != 0:
+            run(["rebase", "--abort"])
+            sys.exit(
+                "rebase 发生冲突，已自动中止。请手动 `git pull --rebase` "
+                "解决冲突后再运行本脚本。"
+            )
+
+
 def secret_guard():
     """若 users.json（含口令）被暂存则中止，避免泄密。"""
     r = run(["diff", "--cached", "--name-only"], capture=True)
@@ -77,7 +100,10 @@ def main():
             print(out)
             sys.exit("git commit 失败")
 
-    # 4) 推送（可选临时嵌入 token）
+    # 4) 推送前同步远端（处理「远端在我编辑期间被改动」的情况）
+    sync()
+
+    # 5) 推送（可选临时嵌入 token）
     if token:
         run(["remote", "set-url", "origin",
              f"https://{token}@github.com/SeekShaw/MLCC-AI-Inspection.git"])
