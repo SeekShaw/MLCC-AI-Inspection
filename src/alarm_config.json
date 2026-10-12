@@ -1,0 +1,188 @@
+{
+  "bin_full": {
+    "OK": 50000,
+    "NG1": 50000,
+    "NG2": 50000,
+    "RST": 50000
+  },
+  "valve_life": {
+    "OK": 5000000000,
+    "NG1": 5000000000,
+    "NG2": 5000000000,
+    "RST": 5000000000
+  },
+  "speed_quality": {
+    "turntable_low": 10,
+    "turntable_high": 22,
+    "detect_low": 8000,
+    "detect_high": 12000,
+    "good_low": 90,
+    "cam_yield_low": 85,
+    "recheck_high": 5
+  },
+  "alarm_timing": {
+    "duration_ms": 3000,
+    "delay_ms": 1000
+  },
+  "features": {
+    "auto_clear": true,
+    "mis_wrong_alarm": false,
+    "mis_wrong_plan": "方案 1",
+    "mis_wrong_pcs": 10,
+    "mis_miss_alarm": false,
+    "mis_miss_plan": "方案 1",
+    "mis_miss_pcs": 10,
+    "door_alarm": false,
+    "door_mode": "alarm",
+    "buzzer": true,
+    "bin_taken_timeout": true,
+    "bin_taken_timeout_ms": 5000,
+    "bin_taken_timeout_plan": "方案 1",
+    "bin_taken_timeout_mode": "alarm",
+    "bin_full_alarm": true,
+    "bin_full_plan": "方案 1",
+    "bin_full_pct": 90,
+    "bin_full_stop": true,
+    "bin_full_stop_plan": "方案 1",
+    "bin_full_stop_pct": 100,
+    "cont_mix": false,
+    "cont_mix_pcs": 5,
+    "cont_mix_plan": "方案 1",
+    "cont_tilt": false,
+    "cont_tilt_pcs": 8,
+    "cont_tilt_plan": "方案 1",
+    "cont_stick": false,
+    "cont_stick_pcs": 5,
+    "cont_stick_plan": "方案 1",
+    "cont_fly": true,
+    "cont_fly_pcs": 25,
+    "cont_fly_plan": "方案 3",
+    "estop_alarm": true,
+    "estop_mode": "blink",
+    "valve_alarm_pct": 90,
+    "valve_alarm_plan": "方案 1",
+    "valve_stop_pct": 100,
+    "valve_stop_enabled": false,
+    "door_alarm_plan": "方案 1",
+    "ion_fan_alarm": true,
+    "ion_fan_plan": "方案 1",
+    "glass_disk_jump_alarm": true,
+    "glass_disk_jump_plan": "方案 1",
+    "glass_disk_jump_count": 10,
+    "item_yield_plan": "方案 1"
+  },
+  "state_plans": {
+    "count": 10,
+    "plans": [
+      {
+        "alias": "方案 1",
+        "red": "闪烁",
+        "green": "关",
+        "yellow": "关",
+        "buzzer": "开",
+        "stop": "关",
+        "duration_ms": 3000,
+        "delay_ms": 1000
+      },
+      {
+        "alias": "方案 2",
+        "red": "开",
+        "green": "开",
+        "yellow": "开",
+        "buzzer": "关",
+        "stop": "关",
+        "duration_ms": 3000,
+        "delay_ms": 1000
+      },
+      {
+        "alias": "方案 3",
+        "red": "开",
+        "green": "关",
+        "yellow": "关",
+        "buzzer": "关",
+        "stop": "关",
+        "duration_ms": 3000,
+        "delay_ms": 1000
+      },
+      {
+        "alias": "方案 4",
+        "red": "开",
+        "green": "关",
+        "yellow": "关",
+        "buzzer": "关",
+        "stop": "关",
+        "duration_ms": 3000,
+        "delay_ms": 1000
+      },
+      {
+        "alias": "方案 5",
+        "red": "开",
+        "green": "关",
+        "yellow": "关",
+        "buzzer": "关",
+        "stop": "关",
+        "duration_ms": 3000,
+        "delay_ms": 1000
+      },
+      {
+        "alias": "方案 6",
+        "red": "开",
+        "green": "关",
+        "yellow": "关",
+        "buzzer": "关",
+        "stop": "关",
+        "duration_ms": 3000,
+        "delay_ms": 1000
+      },
+      {
+        "alias": "方案 7",
+        "red": "开",
+        "green": "关",
+        "yellow": "关",
+        "buzzer": "关",
+        "stop": "关",
+        "duration_ms": 3000,
+        "delay_ms": 1000
+      },
+      {
+        "alias": "方案 8",
+        "red": "开",
+        "green": "关",
+        "yellow": "关",
+        "buzzer": "关",
+        "stop": "关",
+        "duration_ms": 3000,
+        "delay_ms": 1000
+      },
+      {
+        "alias": "方案 9",
+        "red": "开",
+        "green": "关",
+        "yellow": "关",
+        "buzzer": "关",
+        "stop": "关",
+        "duration_ms": 3000,
+        "delay_ms": 1000
+      },
+      {
+        "alias": "方案 10",
+        "red": "开",
+        "green": "关",
+        "yellow": "关",
+        "buzzer": "关",
+        "stop": "关",
+        "duration_ms": 3000,
+        "delay_ms": 1000
+      }
+    ]
+  },
+  "sq_plan": {
+    "turntable_low": "方案 1",
+    "turntable_high": "方案 1",
+    "detect_low": "方案 1",
+    "detect_high": "方案 1",
+    "good_low": "方案 1",
+    "cam_yield_low": "方案 1",
+    "recheck_high": "方案 1"
+  }
+}

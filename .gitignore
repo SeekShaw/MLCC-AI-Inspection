@@ -1,0 +1,44 @@
+# ===== Python =====
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# ===== PyInstaller / build artifacts (exclude all build outputs) =====
+build/
+dist/
+old_exes/
+
+# ===== Credentials / runtime config with secrets =====
+# 真实账号配置（含明文口令）不入库；仓库提供 users.example.json 模板
+users.json
+
+# ===== Project memory (personal) =====
+.workbuddy/
+
+# ===== Web prototypes / design refs (not part of the desktop program) =====
+mlcc-hmi/
+mlcc_hmi_prototype/
+
+# ===== Temp / logs =====
+*.log
+*_tmp.txt
+smoke_out*.txt
+build_out_tmp.txt
+demo_zip_tmp.txt
+_tmp_shot_users.json
+_shot2/
+_shots/
+
+# ===== OS =====
+.DS_Store
+Thumbs.db
+
+# ===== Committed build artifacts (用户要求：源码 + 构建产物) =====
+# 仅放行以下两个发布文件；output/ 其余内容（日志、users.json 等）与解压后的演示目录仍排除
+output/*
+!output/电子元件视觉检测系统_V3.0.exe
+*.zip
+!电子元件视觉检测系统_演示程序包.zip
+电子元件视觉检测系统_演示程序包/
