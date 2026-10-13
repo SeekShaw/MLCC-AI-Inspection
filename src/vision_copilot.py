@@ -239,14 +239,16 @@ def _card_style(selected: bool) -> str:
 SUGGESTIONS = [
     ("✦", "帮我搭建一个工件圆孔直径测量流程"),
     ("🧭", "为什么当前节点报错了？帮我排查原因"),
-    ("👁", "截取视口画面，分析表面划痕特征并推荐算子"),
+    ("👁", "截取窗图画面，分析表面划痕特征并推荐算子"),
 ]
 
 QUICK_ACTIONS = [
     ("✦ 故障诊断", COLORS["accent_blue"], "white"),
     ("▶ 执行全流程", COLORS["accent_green"], "white"),
     ("🧩 缺陷检测模板", COLORS["accent_blue"], "white"),
-    ("🖼 截取视口", COLORS["bg_card"], COLORS["text_primary"]),
+    # 「算法调优」紧邻「截取窗图」左侧：先填调优指令，再一键截图带入上下文
+    ("🧠 算法调优", COLORS["accent_blue"], "white"),
+    ("🖼 截取窗图", COLORS["bg_card"], COLORS["text_primary"]),
 ]
 
 
@@ -395,7 +397,8 @@ class VisionCopilotDialog(QDialog):
         self._quick_btns[0].clicked.connect(lambda: self._use_quick("故障诊断"))
         self._quick_btns[1].clicked.connect(lambda: self._use_quick("执行全流程"))
         self._quick_btns[2].clicked.connect(lambda: self._use_quick("缺陷检测模板"))
-        self._quick_btns[3].clicked.connect(self._capture_viewport)
+        self._quick_btns[3].clicked.connect(lambda: self._use_quick("算法调优"))
+        self._quick_btns[4].clicked.connect(self._capture_viewport)
         return row
 
     def _build_input(self):
@@ -500,6 +503,8 @@ class VisionCopilotDialog(QDialog):
             "故障诊断": "请基于当前检测配置做一次故障诊断：列出可能的失效环节、排查顺序与处置建议。",
             "执行全流程": "请给出从进料到判定剔除的完整检测流程建议，并标注每步关键参数。",
             "缺陷检测模板": "请给我一套 MLCC 常见缺陷（崩边、偏位、污渍、划痕等）的检测模板与推荐阈值。",
+            "算法调优": ("请基于当前检测画面与配置做一次算法调优：对比实际检出效果与目标，"
+                       "指出阈值/参数的差距，给出具体调整建议与预期收益；如有必要可结合截图分析。"),
         }
         self._input.setPlainText(prompts.get(kind, kind))
         self._input.setFocus()
@@ -695,9 +700,13 @@ class VisionCopilotDialog(QDialog):
     def _open_config(self):
         dlg = CopilotConfigDialog(self._cfg, self)
         if dlg.exec() == QDialog.DialogCode.Accepted:
-            self._cfg = dlg.result_cfg()
-            copilot_config.save_cfg(self._cfg)
-            self._refresh_header()
+            try:
+                self._cfg = dlg.result_cfg()
+                copilot_config.save_cfg(self._cfg)
+                self._refresh_header()
+            except Exception:
+                # 配置回读异常不应影响对话窗继续使用
+                pass
 
     # ---------------- 拖放 ----------------
     def dragEnterEvent(self, e):
@@ -733,6 +742,9 @@ class CopilotConfigDialog(QDialog):
         self._cards = {}
         self._key_visible = False
         self._probe = None
+        # 「返回对话」（顶栏）与「完成并返回对话」（底部）均可能直接 accept 返回，
+        # result_cfg() 需在无 _result 时兜底收集，避免 AttributeError 崩溃。
+        self._result = None
         self.setWindowTitle("AI & MCP 服务配置")
         self.resize(620, 760)
         self.setMinimumSize(540, 640)
@@ -778,7 +790,9 @@ class CopilotConfigDialog(QDialog):
         h.addStretch(1)
         back = QPushButton("返回对话")
         back.setStyleSheet(_btn_style(COLORS["accent_blue"], "white", None, 12, "5px 14px"))
-        back.clicked.connect(self.accept)
+        # 与底部「完成并返回对话」同链路：先收集表单再 accept，避免直接 accept
+        # 导致 result_cfg() 取不到 _result 而崩溃
+        back.clicked.connect(self._on_done)
         h.addWidget(back)
         close_btn = QPushButton("✕")
         close_btn.setFixedWidth(34)
@@ -1176,6 +1190,9 @@ class CopilotConfigDialog(QDialog):
         }
 
     def result_cfg(self) -> dict:
+        # 顶栏「返回对话」直连 accept 时不会经过 _on_done，这里兜底收集当前表单值
+        if self._result is None:
+            self._result = self._collect()
         return self._result
 
     def _on_done(self):

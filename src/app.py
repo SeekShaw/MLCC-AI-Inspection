@@ -297,8 +297,10 @@ except Exception:  # pragma: no cover - 仅在缺失 ctypes / 非 Windows 时触
 
 
 class MainWindow(QMainWindow):
-    def __init__(self):
+    def __init__(self, splash=None):
         super().__init__()
+        # 启动加载窗（可为 None）：在耗时构建阶段分阶段上报进度，改善冷启动体验
+        self._startup_splash = splash
         self.setWindowTitle("电子元件视觉检测系统")
         # 自适应屏幕：启动即最大化铺满当前显示器。生产运行/相机调试等页面均按
         # 窗口实际尺寸（resizeEvent）重新布局，故不同分辨率下卡片都能铺满、不留空。
@@ -338,6 +340,7 @@ class MainWindow(QMainWindow):
         self.user_manager = UserManager()
         self.current_user, self.default_login_username = \
             resolve_startup_user(self.user_manager)
+        self._splash(22, "正在加载用户与产品配置…")
         self._playing = False
         # 高级设置（会话级开关，存于主窗口）；开机自启动 / 抽盒剔除逻辑 / 密码确认周期为持久化项
         self._adv_settings = {
@@ -508,10 +511,17 @@ class MainWindow(QMainWindow):
         self._style_switch_user_btn()
         header_layout.addWidget(self.btn_switch_user)
 
+        # 「切换用户」右侧：AI助手入口（打开视觉助手对话窗，与左侧导航同一功能）
+        self.btn_ai_copilot = QPushButton("🤖 AI助手")
+        self.btn_ai_copilot.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_ai_copilot.clicked.connect(self._open_ai_copilot)
+        header_layout.addWidget(self.btn_ai_copilot)
+
         content.addWidget(header)
 
         # 页面栈：生产运行 + 每路相机一个调试界面 + 占位页
         self.stack = QStackedWidget()
+        self._splash(38, "正在初始化生产界面…")
         self.production = ProductionView(user_manager=self.user_manager)
         # 生产界面「扫码录入」等操作入口接入空闲确认（超时需重新输入密码）
         self.production.idle_confirm_cb = self.confirm_if_idle
@@ -555,7 +565,9 @@ class MainWindow(QMainWindow):
         self._pulse_timer.setInterval(600)
         self._pulse_timer.timeout.connect(self._pulse_tick)
         self.debug_views = []
-        for name in CAMERA_NAMES:
+        for _i, name in enumerate(CAMERA_NAMES):
+            self._splash(38 + 34 * (_i + 1) // len(CAMERA_NAMES),
+                         f"正在初始化调试界面 {_i + 1}/{len(CAMERA_NAMES)}…")
             dv = DebugView(camera_name=name, main_window=self)
             self.debug_views.append(dv)
             self.stack.addWidget(dv)
@@ -683,11 +695,23 @@ class MainWindow(QMainWindow):
         main_layout.addWidget(nav)
         main_layout.addLayout(content, 1)
 
+        self._splash(92, "正在加载界面组件…")
         self.switch_page(0)
         self._update_button_states(False)  # 初始：启动绿色（可点）、停止常规灰
         self._apply_permissions()  # 按当前用户权限门控各功能入口
         self.production.set_scan_locked(False)  # 初始未运行：料号/批号可录入、扫码按钮可用
         register_restyle(self._restyle_self)
+        self._splash(98, "正在准备启动…")
+
+    def _splash(self, pct, text=None):
+        """向启动加载窗上报进度（无加载窗时为空操作，异常不影响启动）。"""
+        s = getattr(self, "_startup_splash", None)
+        if s is None:
+            return
+        try:
+            s.set_progress(pct, text)
+        except Exception:
+            pass
 
     def _update_button_states(self, playing):
         """启动 / 停止按钮状态：
@@ -848,13 +872,14 @@ class MainWindow(QMainWindow):
             self.production.set_current_user(user["name"], user["username"])
 
     def _style_switch_user_btn(self):
-        """顶部「切换用户」按钮样式（随主题刷新）。"""
-        btn = getattr(self, "btn_switch_user", None)
-        if btn is None:
-            return
-        btn.setStyleSheet(
-            f"background-color: {COLORS['accent_blue']}; color: #FFFFFF; "
-            f"border: none; border-radius: 4px; padding: 4px 12px; font-size: 12px;")
+        """顶部「切换用户」/「AI助手」按钮样式（随主题刷新）。"""
+        for btn in (getattr(self, "btn_switch_user", None),
+                    getattr(self, "btn_ai_copilot", None)):
+            if btn is None:
+                continue
+            btn.setStyleSheet(
+                f"background-color: {COLORS['accent_blue']}; color: #FFFFFF; "
+                f"border: none; border-radius: 4px; padding: 4px 12px; font-size: 12px;")
 
     def _switch_user(self):
         """切换用户：直接弹出登录框，登录成功后切换当前账号。
@@ -1588,14 +1613,20 @@ class MainWindow(QMainWindow):
         self._align_header_buttons()
 
 
-def run():
-    app = QApplication(sys.argv)
+def run(splash=None):
+    # main_b.py 已提前创建 QApplication 与启动加载窗，这里复用实例
+    app = QApplication.instance() or QApplication(sys.argv)
     # 任务栏分组标识（须在创建窗口前设置，否则部分环境任务栏图标显示为空白）
     _set_windows_app_id()
     font = QFont("Microsoft YaHei", 10)
     app.setFont(font)
-    window = MainWindow()
+    window = MainWindow(splash=splash)
     # 应用级图标：主窗口与各弹窗统一，任务栏图标更可靠
     app.setWindowIcon(window._app_icon)
     window.show()
+    if splash is not None:
+        try:
+            splash.finish(window)
+        except Exception:
+            pass
     sys.exit(app.exec())

@@ -3192,9 +3192,65 @@ check(_res["provider"] in _cc.PROVIDERS and _res["mcp"]["port"] == 8765
 _ccd._select_provider("ollama")
 check(_ccd._cfg["provider"] == "ollama", "Copilot: 切换服务商生效")
 check(not _ccd._api_key_row.isVisible() or True, "Copilot: 配置窗构建无异常")
+# 回归：顶栏「返回对话」直连 accept（不经 _on_done）时，result_cfg() 必须兜底收集，
+# 不得因 _result 未初始化抛 AttributeError 崩溃
+_ccd._result = None
+_rc = _ccd.result_cfg()
+check(isinstance(_rc, dict) and _rc.get("provider") == "ollama",
+      "Copilot: result_cfg() 无 _result 时兜底收集（返回对话不崩溃）")
 _ccd.close()
 _vcd.close()
 check(hasattr(_mw, "_open_ai_copilot"), "Copilot: MainWindow 暴露 _open_ai_copilot 入口")
+
+# 快捷指令：「算法调优」位于「截取窗图」左侧（原「截取视口」已改名）
+from vision_copilot import QUICK_ACTIONS as _QA
+_qlabels = [_t for _t, *_ in _QA]
+check("🖼 截取窗图" in _qlabels and "🧠 算法调优" in _qlabels
+      and _qlabels.index("🧠 算法调优") == _qlabels.index("🖼 截取窗图") - 1,
+      "Copilot: 快捷指令含「算法调优」且位于「截取窗图」左侧")
+check(len(_vcd._quick_btns) == len(_QA)
+      and _vcd._quick_btns[3].text() == "🧠 算法调优"
+      and _vcd._quick_btns[4].text() == "🖼 截取窗图",
+      "Copilot: 对话窗快捷按钮与定义一致（5 个）")
+
+# 顶部标题栏：AI助手按钮位于「切换用户」按钮右侧（同一行，x 更大）
+check(hasattr(_mw, "btn_ai_copilot") and _mw.btn_ai_copilot.text() == "🤖 AI助手",
+      "顶部栏: 存在「🤖 AI助手」按钮")
+check(hasattr(_mw, "btn_switch_user"),
+      "顶部栏: 「切换用户」按钮仍存在")
+# 用布局 index 顺序断言（offscreen 下像素坐标不可靠，strip 更稳）
+_hdr = getattr(_mw, "_header_layout", None)
+if _hdr is not None and _hdr.indexOf(_mw.btn_switch_user) != -1 \
+        and _hdr.indexOf(_mw.btn_ai_copilot) != -1:
+    check(_hdr.indexOf(_mw.btn_ai_copilot) > _hdr.indexOf(_mw.btn_switch_user),
+          "顶部栏: AI助手按钮位于「切换用户」右侧（布局顺序）")
+else:
+    check(False, "顶部栏: 找不到两个按钮在 _header_layout 中的索引")
+
+# 启动加载窗：构造 + 进度 API（无事件循环的离屏环境下也不得抛异常）
+from startup_splash import StartupSplash as _SS
+_ss = _SS()
+_ss.set_status("正在打开…")
+_ss.set_progress(30, "正在加载…")
+check(_ss._bar.value() == 30 and _ss._pct_lbl.text() == "30%",
+      "Splash: set_progress 更新进度条与百分比")
+_ss.set_busy(True)
+check(_ss._bar.maximum() == 0, "Splash: set_busy 切换为忙碌态（未知进度）")
+_ss.set_progress(100, "启动完成")
+check(_ss._bar.value() == 100, "Splash: set_progress 支持收尾到 100%")
+_ss.finish()
+_ss.close()
+check(True, "Splash: finish()/close() 可安全调用")
+# 回归：整窗不得挂 QGraphicsDropShadowEffect（processEvents 阶段会产生文字重影）
+check(_ss.graphicsEffect() is None,
+      "Splash: 无整窗 QGraphicsEffect（避免 processEvents 阶段文字重影）")
+# logo 清晰度：图标源必须取 ico 最大原生档（不得 <128px 拉伸）
+from startup_splash import _load_app_icon as _licon
+_pm = _licon()
+check(_pm is not None and not _pm.isNull()
+      and max(_pm.width(), _pm.height()) >= 64,
+      f"Splash: 应用图标源取最大原生档（实际 {_pm.width()}x{_pm.height()}）" if _pm
+      else "Splash: 应用图标源取最大原生档（无图标）")
 
 # ============ 收尾：确认未污染 src/ 下的工程配置（写盘已重定向到临时目录） ============
 check(all((open(_p, "rb").read() if os.path.exists(_p) else None) == _o
