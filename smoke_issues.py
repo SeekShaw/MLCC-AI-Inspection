@@ -3227,6 +3227,21 @@ if _hdr is not None and _hdr.indexOf(_mw.btn_switch_user) != -1 \
 else:
     check(False, "顶部栏: 找不到两个按钮在 _header_layout 中的索引")
 
+# 调试界面相机卡片标题栏不得再有「AI助手」按钮（入口已删除，仅保留顶部栏与左侧导航）
+from PyQt6.QtWidgets import QPushButton as _QPushButton2
+_debug_ai_btns = []
+if hasattr(_mw, "debug_views"):
+    for _dv in _mw.debug_views:
+        for _cam in getattr(_dv, "_cams", []):
+            _tr = getattr(_cam, "_title_row", None)
+            if _tr is None:
+                continue
+            for _i in range(_tr.count()):
+                _w = _tr.itemAt(_i).widget()
+                if isinstance(_w, _QPushButton2) and "AI助手" in _w.text():
+                    _debug_ai_btns.append(_w)
+check(not _debug_ai_btns, "调试卡片: 相机标题栏已无「AI助手」按钮（入口已删除）")
+
 # 启动加载窗：构造 + 进度 API（无事件循环的离屏环境下也不得抛异常）
 from startup_splash import StartupSplash as _SS
 _ss = _SS()
