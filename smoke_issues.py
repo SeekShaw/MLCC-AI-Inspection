@@ -3141,7 +3141,7 @@ check(all("image_save" in ks for ks in _app.NAV_VISIBILITY.values()),
 
 liw.close()
 
-# ============ Vision Copilot（AI 助手）功能 ============
+# ============ Vision Copilot（AI助手）功能 ============
 import tempfile as _tf_cp
 import copilot_config as _cc
 _cc_tmp = os.path.join(_tf_cp.mkdtemp(), "copilot_config.json")
@@ -3163,12 +3163,12 @@ check(_cc.effective_base_url({"provider": "deepseek", "base_url": ""})
       == "https://api.deepseek.com/v1", "Copilot 配置: 默认 Base URL 生效")
 
 check("ai_copilot" in [k for k, *_ in _app.FUNC_NAV_ITEMS],
-      "导航: FUNC_NAV_ITEMS 含「视觉助手」(ai_copilot)")
+      "导航: FUNC_NAV_ITEMS 含「AI助手」(ai_copilot)")
 for _role, _kset in _app.NAV_VISIBILITY.items():
     if _role != "设备操作员":
-        check("ai_copilot" in _kset, f"导航可见性: {_role} 可见「视觉助手」")
+        check("ai_copilot" in _kset, f"导航可见性: {_role} 可见「AI助手」")
 check("ai_copilot" not in _app.NAV_VISIBILITY["设备操作员"],
-      "导航可见性: 设备操作员不可见「视觉助手」")
+      "导航可见性: 设备操作员不可见「AI助手」")
 
 from vision_copilot import VisionCopilotDialog, CopilotConfigDialog
 from PyQt6.QtGui import QImage as _QI, QColor as _QC

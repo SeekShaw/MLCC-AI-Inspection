@@ -220,7 +220,7 @@ FUNC_NAV_ITEMS = [
     ("sort_settings", "🗑️", "分选设置", "_open_reject_settings"),
     ("alarm_settings", "🔔", "报警设置", "_open_alarm_settings"),
     ("advanced_settings", "🧩", "高级设置", "_open_advanced_settings"),
-    ("ai_copilot", "🤖", "视觉助手", "_open_ai_copilot"),
+    ("ai_copilot", "🤖", "AI助手", "_open_ai_copilot"),
     ("production_report", "📊", "生产报表", "_open_production_report"),
     ("log_manage", "📝", "日志管理", "_open_log_manager"),
     ("image_save", "💾", "图片保存", "_open_image_save"),
@@ -1169,8 +1169,8 @@ class MainWindow(QMainWindow):
         self._dlg_img_save.show()
 
     def _open_ai_copilot(self, image=None):
-        """打开「视觉助手」(Vision Copilot) 非模态对话窗。
-        image 可为 QImage/QPixmap/路径：由调试界面「AI 助手」按钮把当前画面带入。"""
+        """打开「AI助手」(Vision Copilot) 非模态对话窗。
+        image 可为 QImage/QPixmap/路径：由调试界面「AI助手」按钮把当前画面带入。"""
         dlg = getattr(self, "_dlg_copilot", None)
         if dlg is None or not dlg.isVisible():
             self._dlg_copilot = VisionCopilotDialog(self, self)

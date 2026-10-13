@@ -2543,10 +2543,10 @@ class DebugView(QWidget):
         preview_row.setSpacing(16)
         main_preview = CameraPreview(f"相机：{self.camera_name}", 400, 300)
         preview_row.addWidget(main_preview)
-        # 相机卡片名称右侧「AI 助手」按钮：把当前相机画面发送到 Vision Copilot 做多模态分析/调参
+        # 相机卡片名称右侧「AI助手」按钮：把当前相机画面发送到 Vision Copilot 做多模态分析/调参
         # ⚠️ add_title_button 固定 insertWidget(2,...)，后加的会排在前面；为保证「拍照设置」
-        # 仍紧贴名称右侧（smoke 断言），这里先加 AI 助手、后加拍照设置。
-        btn_ai = QPushButton("🤖 AI 助手")
+        # 仍紧贴名称右侧（smoke 断言），这里先加 AI助手、后加拍照设置。
+        btn_ai = QPushButton("🤖 AI助手")
         btn_ai.setFixedHeight(22)
         btn_ai.setCursor(Qt.CursorShape.PointingHandCursor)
         btn_ai.setFont(QFont("Microsoft YaHei", 9))
@@ -3832,7 +3832,7 @@ class DebugView(QWidget):
         dlg.show()
 
     def _on_ai_assist(self):
-        """把当前相机画面发送到「视觉助手」(Vision Copilot) 做多模态分析 / 调参建议。"""
+        """把当前相机画面发送到「AI助手」(Vision Copilot) 做多模态分析 / 调参建议。"""
         mw = self.main_window
         if mw is None or not hasattr(mw, "_open_ai_copilot"):
             return
