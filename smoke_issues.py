@@ -3251,6 +3251,12 @@ check(_pm is not None and not _pm.isNull()
       and max(_pm.width(), _pm.height()) >= 64,
       f"Splash: 应用图标源取最大原生档（实际 {_pm.width()}x{_pm.height()}）" if _pm
       else "Splash: 应用图标源取最大原生档（无图标）")
+# 版本信息下一行显示「开发：ZY.SHAW」
+from PyQt6.QtWidgets import QLabel as _QLabel
+_ss2 = _SS()
+check(any(_l.text() == "开发：ZY.SHAW" for _l in _ss2.findChildren(_QLabel)),
+      "Splash: 显示「开发：ZY.SHAW」信息")
+_ss2.close()
 
 # ============ 收尾：确认未污染 src/ 下的工程配置（写盘已重定向到临时目录） ============
 check(all((open(_p, "rb").read() if os.path.exists(_p) else None) == _o
