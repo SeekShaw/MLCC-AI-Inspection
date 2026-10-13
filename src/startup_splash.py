@@ -122,7 +122,7 @@ class StartupSplash(QWidget):
         name_lbl = QLabel(title)
         name_lbl.setStyleSheet(f"color: {C_TEXT}; font-size: 17px; font-weight: bold;")
         # 版本行：纯文字（去掉灰色底框），与标题/开发行同左缘对齐
-        ver_lbl = QLabel(f"版本 {version}")
+        ver_lbl = QLabel(f"版本：{version}")
         ver_lbl.setStyleSheet(f"color: {C_TEXT2}; font-size: 11px;")
         dev_lbl = QLabel("开发：ZY.SHAW")
         # 与版本行同字号/同颜色、同左对齐
