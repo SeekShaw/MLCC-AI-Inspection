@@ -118,17 +118,15 @@ class StartupSplash(QWidget):
                                    Qt.TransformationMode.SmoothTransformation))
         top.addWidget(icon_lbl)
         name_box = QVBoxLayout()
-        name_box.setSpacing(4)
+        name_box.setSpacing(9)  # 标题与版本行上下间隙拉宽
         name_lbl = QLabel(title)
         name_lbl.setStyleSheet(f"color: {C_TEXT}; font-size: 17px; font-weight: bold;")
+        # 版本行：纯文字（去掉灰色底框），与标题/开发行同左缘对齐
         ver_lbl = QLabel(f"版本 {version}")
-        ver_lbl.setStyleSheet(
-            f"color: {C_TEXT2}; font-size: 11px; "
-            f"background-color: {C_CARD}; border-radius: 8px; padding: 1px 8px;")
-        ver_lbl.setFixedHeight(20)
+        ver_lbl.setStyleSheet(f"color: {C_TEXT2}; font-size: 11px;")
         dev_lbl = QLabel("开发：ZY.SHAW")
-        # 与版本芯片同字号/同颜色，且 padding-left 8px 使文字与「版本」文字左对齐
-        dev_lbl.setStyleSheet(f"color: {C_TEXT2}; font-size: 11px; padding-left: 8px;")
+        # 与版本行同字号/同颜色、同左对齐
+        dev_lbl.setStyleSheet(f"color: {C_TEXT2}; font-size: 11px;")
         name_box.addWidget(name_lbl)
         name_box.addWidget(ver_lbl)
         name_box.addWidget(dev_lbl)
