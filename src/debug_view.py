@@ -2543,6 +2543,20 @@ class DebugView(QWidget):
         preview_row.setSpacing(16)
         main_preview = CameraPreview(f"相机：{self.camera_name}", 400, 300)
         preview_row.addWidget(main_preview)
+        # 相机卡片名称右侧「AI 助手」按钮：把当前相机画面发送到 Vision Copilot 做多模态分析/调参
+        # ⚠️ add_title_button 固定 insertWidget(2,...)，后加的会排在前面；为保证「拍照设置」
+        # 仍紧贴名称右侧（smoke 断言），这里先加 AI 助手、后加拍照设置。
+        btn_ai = QPushButton("🤖 AI 助手")
+        btn_ai.setFixedHeight(22)
+        btn_ai.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_ai.setFont(QFont("Microsoft YaHei", 9))
+        btn_ai.setStyleSheet(
+            f"QPushButton {{ background-color: {COLORS['bg_card']}; color: {COLORS['accent_orange']}; "
+            f"border: 1px solid {COLORS['accent_orange']}; border-radius: 4px; padding: 0 8px; "
+            f"font-size: 10px; }}"
+            f"QPushButton:hover {{ background-color: {COLORS['accent_orange']}; color: white; }}")
+        btn_ai.clicked.connect(self._on_ai_assist)
+        main_preview.add_title_button(btn_ai)
         # 相机卡片名称右侧「拍照设置」按钮：内容与左侧导航「拍照设置」窗口完全一致
         btn_photo = QPushButton("拍照设置")
         btn_photo.setFixedHeight(22)
@@ -3816,6 +3830,30 @@ class DebugView(QWidget):
         dlg.setModal(False)
         self._dist_dlg = dlg
         dlg.show()
+
+    def _on_ai_assist(self):
+        """把当前相机画面发送到「视觉助手」(Vision Copilot) 做多模态分析 / 调参建议。"""
+        mw = self.main_window
+        if mw is None or not hasattr(mw, "_open_ai_copilot"):
+            return
+        pm = QPixmap()
+        cam = self._cams[0] if getattr(self, "_cams", None) else None
+        if cam is not None and hasattr(cam, "current_frame"):
+            try:
+                frame = cam.current_frame()
+                if frame is not None and not frame.isNull():
+                    pm = frame
+            except Exception:
+                pm = QPixmap()
+        if pm.isNull():
+            try:
+                pm = self._cams[0].grab()
+            except Exception:
+                pm = QPixmap()
+        if pm.isNull():
+            QMessageBox.information(self, "提示", "当前没有可发送的画面。")
+            return
+        mw._open_ai_copilot(image=pm)
 
     def _open_teach(self, name, r):
         """点击「教导」：弹出教导窗口。优先冻结抓取相机画布最新帧，否则回退产品样张。

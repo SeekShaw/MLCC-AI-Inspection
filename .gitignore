@@ -13,6 +13,12 @@ old_exes/
 # ===== Credentials / runtime config with secrets =====
 # 真实账号配置（含明文口令）不入库；仓库提供 users.example.json 模板
 users.json
+# Vision Copilot 运行时配置（含混淆后的 API Key 与 MCP 访问令牌），不入库
+copilot_config.json
+src/copilot_config.json
+
+# ===== 临时探针脚本 =====
+_probe_*.py
 
 # ===== Project memory (personal) =====
 .workbuddy/

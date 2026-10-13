@@ -209,6 +209,7 @@ from nav_dialogs import (
     AdvancedSettingsDialog, PlaceholderDialog, AboutDialog,
     PasswordConfirmDialog, ImageSaveDialog,
 )
+from vision_copilot import VisionCopilotDialog
 
 # 左侧导航「功能按钮」定义：顺序即显示顺序；key 用于权限可见性控制
 FUNC_NAV_ITEMS = [
@@ -219,6 +220,7 @@ FUNC_NAV_ITEMS = [
     ("sort_settings", "🗑️", "分选设置", "_open_reject_settings"),
     ("alarm_settings", "🔔", "报警设置", "_open_alarm_settings"),
     ("advanced_settings", "🧩", "高级设置", "_open_advanced_settings"),
+    ("ai_copilot", "🤖", "视觉助手", "_open_ai_copilot"),
     ("production_report", "📊", "生产报表", "_open_production_report"),
     ("log_manage", "📝", "日志管理", "_open_log_manager"),
     ("image_save", "💾", "图片保存", "_open_image_save"),
@@ -228,12 +230,12 @@ FUNC_NAV_ITEMS = [
 # 各用户类别可见的「功能按钮」key 集合（不在集合内的按钮隐藏）
 NAV_VISIBILITY = {
     "超级管理员": {k for k, *_ in FUNC_NAV_ITEMS},
-    "设备管理员": {"production_report", "log_manage", "image_save", "user_manage"},
+    "设备管理员": {"production_report", "log_manage", "image_save", "user_manage", "ai_copilot"},
     "设备工程师": {"alarm_settings", "production_report", "log_manage", "image_save",
                    "user_manage", "photo_settings", "sort_settings",
-                   "box_monitor", "run_settings"},
+                   "box_monitor", "run_settings", "ai_copilot"},
     "设备技术员": {"alarm_settings", "production_report", "log_manage", "image_save",
-                   "user_manage", "photo_settings", "sort_settings"},
+                   "user_manage", "photo_settings", "sort_settings", "ai_copilot"},
     "设备操作员": {"alarm_settings", "production_report", "log_manage", "image_save", "user_manage"},
 }
 
@@ -1165,6 +1167,22 @@ class MainWindow(QMainWindow):
             return
         self._dlg_img_save = ImageSaveDialog(self)
         self._dlg_img_save.show()
+
+    def _open_ai_copilot(self, image=None):
+        """打开「视觉助手」(Vision Copilot) 非模态对话窗。
+        image 可为 QImage/QPixmap/路径：由调试界面「AI 助手」按钮把当前画面带入。"""
+        dlg = getattr(self, "_dlg_copilot", None)
+        if dlg is None or not dlg.isVisible():
+            self._dlg_copilot = VisionCopilotDialog(self, self)
+            dlg = self._dlg_copilot
+            dlg.show()
+        dlg.raise_()
+        dlg.activateWindow()
+        if image is not None:
+            try:
+                dlg.attach_image(image)
+            except Exception:
+                pass
 
     def _add_nav_btn(self, layout, icon, label, target, key=None, tip=None, perm=None):
         """左侧导航按钮：仅图标（emoji），保持原有窄栏样式。

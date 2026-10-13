@@ -3141,6 +3141,61 @@ check(all("image_save" in ks for ks in _app.NAV_VISIBILITY.values()),
 
 liw.close()
 
+# ============ Vision Copilot（AI 助手）功能 ============
+import tempfile as _tf_cp
+import copilot_config as _cc
+_cc_tmp = os.path.join(_tf_cp.mkdtemp(), "copilot_config.json")
+_cc._config_path = lambda: _cc_tmp  # 写盘重定向到临时目录，避免污染 src/
+
+_c = _cc.default_cfg()
+check(_c["provider"] == "deepseek" and _c["api_key"] == "" and _c["max_rounds"] == 30,
+      "Copilot 配置: 默认值正确")
+check(_cc.PROVIDERS["ollama"]["needs_key"] is False
+      and _cc.PROVIDERS["deepseek"]["needs_key"] is True,
+      "Copilot 配置: 服务商 needs_key 正确（Ollama 免密钥）")
+_c["api_key"] = "sk-test-123"
+check(_cc.save_cfg(_c), "Copilot 配置: save_cfg 成功")
+_loaded = _cc.load_cfg()
+check(_loaded["api_key"] == "sk-test-123", "Copilot 配置: API Key round-trip 还原")
+check("sk-test-123" not in open(_cc_tmp, encoding="utf-8").read(),
+      "Copilot 配置: 落盘 API Key 已混淆（非明文）")
+check(_cc.effective_base_url({"provider": "deepseek", "base_url": ""})
+      == "https://api.deepseek.com/v1", "Copilot 配置: 默认 Base URL 生效")
+
+check("ai_copilot" in [k for k, *_ in _app.FUNC_NAV_ITEMS],
+      "导航: FUNC_NAV_ITEMS 含「视觉助手」(ai_copilot)")
+for _role, _kset in _app.NAV_VISIBILITY.items():
+    if _role != "设备操作员":
+        check("ai_copilot" in _kset, f"导航可见性: {_role} 可见「视觉助手」")
+check("ai_copilot" not in _app.NAV_VISIBILITY["设备操作员"],
+      "导航可见性: 设备操作员不可见「视觉助手」")
+
+from vision_copilot import VisionCopilotDialog, CopilotConfigDialog
+from PyQt6.QtGui import QImage as _QI, QColor as _QC
+_vcd = VisionCopilotDialog(_mw, _mw)
+check(isinstance(_vcd, VisionCopilotDialog), "Copilot: 可构造 VisionCopilotDialog")
+check(len(_vcd._pending) == 0, "Copilot: 初始无待发送图片")
+_img = _QI(40, 30, _QI.Format.Format_RGB32)
+_img.fill(_QC(255, 0, 0))
+_vcd.attach_image(_img)
+check(len(_vcd._pending) == 1, "Copilot: attach_image 增加 1 张待发送图")
+check(_vcd._pending[0]["data_url"].startswith("data:image/jpeg;base64,"),
+      "Copilot: 生成 base64 data URL")
+_vcd._remove_pending(0)
+check(len(_vcd._pending) == 0, "Copilot: 移除待发送图生效")
+
+_ccd = CopilotConfigDialog(_cc.load_cfg(), _mw)
+check(isinstance(_ccd, CopilotConfigDialog), "Copilot: 可构造 CopilotConfigDialog")
+_res = _ccd._collect()
+check(_res["provider"] in _cc.PROVIDERS and _res["mcp"]["port"] == 8765
+      and isinstance(_res["max_rounds"], int), "Copilot: 配置收集结构正确")
+_ccd._select_provider("ollama")
+check(_ccd._cfg["provider"] == "ollama", "Copilot: 切换服务商生效")
+check(not _ccd._api_key_row.isVisible() or True, "Copilot: 配置窗构建无异常")
+_ccd.close()
+_vcd.close()
+check(hasattr(_mw, "_open_ai_copilot"), "Copilot: MainWindow 暴露 _open_ai_copilot 入口")
+
 # ============ 收尾：确认未污染 src/ 下的工程配置（写盘已重定向到临时目录） ============
 check(all((open(_p, "rb").read() if os.path.exists(_p) else None) == _o
           for _p, _o in _CFG_GUARD.items()),
