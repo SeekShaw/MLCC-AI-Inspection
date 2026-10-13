@@ -127,7 +127,8 @@ class StartupSplash(QWidget):
             f"background-color: {C_CARD}; border-radius: 8px; padding: 1px 8px;")
         ver_lbl.setFixedHeight(20)
         dev_lbl = QLabel("开发：ZY.SHAW")
-        dev_lbl.setStyleSheet(f"color: {C_TEXT2}; font-size: 11px;")
+        # 与版本芯片同字号/同颜色，且 padding-left 8px 使文字与「版本」文字左对齐
+        dev_lbl.setStyleSheet(f"color: {C_TEXT2}; font-size: 11px; padding-left: 8px;")
         name_box.addWidget(name_lbl)
         name_box.addWidget(ver_lbl)
         name_box.addWidget(dev_lbl)
