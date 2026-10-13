@@ -2186,6 +2186,33 @@ if hasattr(dv, "_cams") and len(dv._cams) > 0:
         check(_opened.get("hit", False),
               "拍照设置: 点击按钮调用 main_window._open_trigger_settings（与导航拍照设置一致）")
 
+# ============ 新需求：计算元素精确查找行首「眼睛」显隐按钮 ============
+from components import CameraScreen as _CamScreen
+_tc = getattr(dv, "_target_content", None)
+check(_tc is not None and len(_tc._find_eye_btns) == len(_tc.FIND_ITEMS)
+      and len(_tc._find_eye_btns) == 16,
+      f"眼睛按钮: 计算元素每行行首均有眼睛按钮（{0 if _tc is None else len(_tc._find_eye_btns)} 个）")
+check(_tc is not None and _tc.FIND_ITEMS == list(_CamScreen.CANVAS_ITEM_SHAPES.keys()),
+      "眼睛按钮: FIND_ITEMS 与画布叠加形状定义按名称一一对应")
+if _tc is not None and _tc._find_rows:
+    _r0w = _tc._find_rows[0][0]
+    _w0 = _r0w.layout().itemAt(0).widget()
+    _w1 = _r0w.layout().itemAt(1).widget()
+    check(_w0 is _tc._find_eye_btns[0] and getattr(_w1, "text", lambda: "")() == "1",
+          "眼睛按钮: 位于序列号左侧（行内第一个控件，其后为序号 1）")
+    _scr = dv._cams[0].screen
+    _nm0 = _tc.FIND_ITEMS[0]
+    _vis0 = _scr.item_visible(_nm0)
+    _tc._find_eye_btns[0].click()
+    check(_scr.item_visible(_nm0) == (not _vis0),
+          "眼睛按钮: 点击后该元素在图像画布中的显隐状态翻转")
+    _tc._find_eye_btns[0].click()
+    check(_scr.item_visible(_nm0) == _vis0,
+          "眼睛按钮: 再次点击恢复原显隐状态")
+    # 隐藏后画布叠加绘制应跳过该项（CANVAS_ITEM_SHAPES 全部有形状定义）
+    check(all(_CamScreen.CANVAS_ITEM_SHAPES.get(n) for n in _tc.FIND_ITEMS),
+          "眼睛按钮: 每个计算元素均有画布叠加形状定义（隐藏即不绘制）")
+
 # ============ 修正反馈1：调试界面运行日志「日志详情」按钮（与「日志管理」一致） ============
 check(hasattr(dv._run_log, "_detail_btn") and dv._run_log._detail_btn.text() == "日志详情",
       "日志详情: 调试界面运行日志标题栏含「日志详情」按钮")

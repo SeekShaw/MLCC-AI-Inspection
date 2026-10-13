@@ -17,8 +17,8 @@ from PyQt6.QtGui import QColor, QFont, QPainter, QPen, QBrush, QImage, QPixmap
 
 from styles import COLORS, register_restyle
 from components import (
-    Card, SectionTitle, CameraPreview, LogView, FloatPanel, ToggleSwitch,
-    make_sample_frames, _extract_channel)
+    Card, SectionTitle, CameraPreview, CameraScreen, LogView, FloatPanel,
+    ToggleSwitch, make_sample_frames, _extract_channel)
 from production_view import (
     StatsPanel, _make_user_frames, _CAMERA_FRAME_IMAGES, _camera_frame_dir,
     CAMERA_NAMES,
@@ -789,23 +789,18 @@ class TargetLocationContent(QWidget):
     不再单独成为显示区域，卡片也不再显示「产品定位搜索设置」标题。
     """
 
-    # 计算元素精确查找项（第 12 项原表与第 10 项重复，按对称结构修正为「右端头内侧轮廓查找」）
-    FIND_ITEMS = [
-        "产品外围左边直线查找", "产品外围右边直线查找",
-        "产品外围上边直线查找", "产品外围下边直线查找",
-        "产品外围左边轮廓查找", "产品外围右边轮廓查找",
-        "产品外围上边轮廓查找", "产品外围下边轮廓查找",
-        "左端头内侧直线查找", "右端头内侧直线查找",
-        "左端头内侧轮廓查找", "右端头内侧轮廓查找",
-        "左端头外围轮廓查找", "右端头外围轮廓查找",
-        "字符连通区域查找",
-        "前后端面轮廓查找",
-    ]
+    # 计算元素精确查找项：与 CameraScreen.CANVAS_ITEM_SHAPES 的键一一对应
+    # （每项都有画布叠加形状，行首眼睛按钮逐项控制其在图像画布中的显隐；
+    #   第 12 项原表与第 10 项重复，按对称结构修正为「右端头内侧轮廓查找」）
+    FIND_ITEMS = list(CameraScreen.CANVAS_ITEM_SHAPES.keys())
 
-    def __init__(self, parent=None, run_log=None, camera_name=None):
+    def __init__(self, parent=None, run_log=None, camera_name=None,
+                 camera_preview=None):
         super().__init__(parent)
         self._run_log = run_log
         self._camera_name = camera_name
+        # 所属相机画布：行首眼睛按钮逐项控制该画布上计算元素的显示 / 隐藏
+        self._camera_preview = camera_preview
         # 其它工位相机：用于「共享模板 / 共享模型」下拉选项的候选
         self._other_cameras = [c for c in CAMERA_NAMES if c != camera_name]
         self._model_path = ""
@@ -1023,12 +1018,28 @@ class TargetLocationContent(QWidget):
         inner_lay.setSpacing(10)   # 行间距放宽，列表不再拥挤
 
         self._find_rows = []   # 每行: (row_widget, checkbox, btn, name)
+        self._find_eye_btns = []          # 每行行首眼睛按钮（与 FIND_ITEMS 顺序一致）
+        self._item_visible = {}           # 逐项显隐状态：{name: bool}，缺省显示
         for i, name in enumerate(self.FIND_ITEMS, 1):
             row_w = QWidget()
             row = QHBoxLayout(row_w)
             # 上下各留 3px，序号列加宽到 26px，名称与勾选框之间留 10px 呼吸感
             row.setContentsMargins(0, 3, 0, 3)
             row.setSpacing(10)
+            # 行首「显示/隐藏」眼睛按钮（序列号左侧）：控制该元素在图像画布中的叠加显隐
+            eye = QPushButton()
+            eye.setFixedSize(22, 22)
+            eye.setCursor(Qt.CursorShape.PointingHandCursor)
+            eye.setToolTip(f"显示 / 隐藏「{name}」在图像画布中的叠加")
+            eye.setStyleSheet(
+                "QPushButton{background-color: rgba(20,22,26,0.60); border:none; "
+                "border-radius:4px;}"
+                "QPushButton:hover{background-color: rgba(20,22,26,0.90);}")
+            vis = self._item_visible.get(name, True)
+            eye.setIcon(CameraPreview._eye_icon(vis))
+            eye.setIconSize(QSize(14, 14))
+            eye.clicked.connect(
+                lambda _, n=name, e=eye: self._on_toggle_item_visible(n, e))
             idx = QLabel(f"{i}")
             idx.setFixedWidth(26)
             idx.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -1041,12 +1052,14 @@ class TargetLocationContent(QWidget):
             btn.setFixedSize(72, 24)
             btn.setStyleSheet(self._find_btn_style())
             btn.clicked.connect(lambda _, n=name, b=btn: self._on_param_setting(n, b))
+            row.addWidget(eye)
             row.addWidget(idx)
             row.addWidget(sw)
             row.addWidget(nm, 1)
             row.addWidget(btn)
             inner_lay.addWidget(row_w)
             self._find_btns.append(btn)
+            self._find_eye_btns.append(eye)
             self._find_rows.append((row_w, sw, btn, name))
             # 在「显示已选」模式下，开关状态变化实时刷新可见行
             sw.toggled.connect(lambda *_, s=sw: self._refilter())
@@ -1054,6 +1067,20 @@ class TargetLocationContent(QWidget):
         inner_lay.addStretch(1)
         scroll.setWidget(inner)
         v.addWidget(scroll, 1)
+
+    def _on_toggle_item_visible(self, name, eye_btn):
+        """点击行首眼睛按钮：切换该计算元素在图像画布中的显示 / 隐藏。
+
+        显示（睁眼）时该元素的直线 / 轮廓叠加在画布上绘制；隐藏（闭眼）时不绘制。
+        """
+        vis = not self._item_visible.get(name, True)
+        self._item_visible[name] = vis
+        eye_btn.setIcon(CameraPreview._eye_icon(vis))
+        scr = getattr(self._camera_preview, "screen", None) \
+            if self._camera_preview is not None else None
+        if scr is not None and hasattr(scr, "set_item_visible"):
+            scr.set_item_visible(name, vis)
+        self._log(f"{'显示' if vis else '隐藏'}计算元素画布叠加：{name}")
 
     def _on_param_setting(self, name, btn):
         """点击「参数设置」弹出目标查找参数设置窗口（非模态，不阻塞其它操作）。
@@ -2634,7 +2661,9 @@ class DebugView(QWidget):
         signal_card.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
         self._signal_card = signal_card   # 供相机标定窗口定位锚点（置于其上方、左对齐）
 
-        target = TargetLocationContent(camera_name=self.camera_name, run_log=self._run_log)
+        target = TargetLocationContent(camera_name=self.camera_name,
+                                       run_log=self._run_log,
+                                       camera_preview=main_preview)
         self._target_content = target
 
         tabs = QTabWidget()

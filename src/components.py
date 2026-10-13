@@ -536,6 +536,29 @@ def _extract_channel(pm, mode):
 class CameraScreen(QWidget):
     """相机画布显示区：未播放时显示提示；播放时逐帧快速切换样张帧。"""
 
+    # 计算元素精确查找各项在画布上的示例叠加形状（归一化坐标 0..1，按名称一一对应）。
+    # 每个 item 映射为一组基本图元："line"=直线（黄色实线），"rect"=轮廓（绿色虚线框）。
+    # 「计算元素精确查找」列表行的眼睛按钮逐项控制这里的名称显隐。
+    CANVAS_ITEM_SHAPES = {
+        "产品外围左边直线查找":   [("line", (0.27, 0.16, 0.27, 0.84))],
+        "产品外围右边直线查找":   [("line", (0.73, 0.16, 0.73, 0.84))],
+        "产品外围上边直线查找":   [("line", (0.16, 0.27, 0.84, 0.27))],
+        "产品外围下边直线查找":   [("line", (0.16, 0.73, 0.84, 0.73))],
+        "产品外围左边轮廓查找":   [("rect", (0.10, 0.12, 0.34, 0.88))],
+        "产品外围右边轮廓查找":   [("rect", (0.66, 0.12, 0.90, 0.88))],
+        "产品外围上边轮廓查找":   [("rect", (0.10, 0.12, 0.90, 0.36))],
+        "产品外围下边轮廓查找":   [("rect", (0.10, 0.64, 0.90, 0.88))],
+        "左端头内侧直线查找":     [("line", (0.38, 0.30, 0.38, 0.70))],
+        "右端头内侧直线查找":     [("line", (0.62, 0.30, 0.62, 0.70))],
+        "左端头内侧轮廓查找":     [("rect", (0.20, 0.28, 0.44, 0.72))],
+        "右端头内侧轮廓查找":     [("rect", (0.56, 0.28, 0.80, 0.72))],
+        "左端头外围轮廓查找":     [("rect", (0.04, 0.24, 0.18, 0.76))],
+        "右端头外围轮廓查找":     [("rect", (0.82, 0.24, 0.96, 0.76))],
+        "字符连通区域查找":       [("rect", (0.40, 0.42, 0.60, 0.58))],
+        "前后端面轮廓查找":       [("rect", (0.02, 0.30, 0.10, 0.70)),
+                                   ("rect", (0.90, 0.30, 0.98, 0.70))],
+    }
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self._hint = "实时画面模拟"
@@ -543,7 +566,8 @@ class CameraScreen(QWidget):
         self._idx = 0
         self._playing = False
         self._channel = "src"        # 显示通道：src / gray / r / g / b
-        self._show_elements = False  # 是否叠加显示计算元素
+        self._show_elements = False  # 是否叠加显示计算元素（总开关，画布右上角眼睛）
+        self._item_visible = {}      # 计算元素逐项显隐：{名称: bool}，缺省为显示
         self._chan_cache = {}        # (帧id, 通道) -> 转换后 QPixmap，避免每帧重算
         self.setStyleSheet("background-color: #15171B; border-radius: 4px;")
 
@@ -584,6 +608,15 @@ class CameraScreen(QWidget):
         self._show_elements = visible
         self.update()
 
+    def set_item_visible(self, name, visible):
+        """设置单个计算元素（如「产品外围左边直线查找」）在画布上的显隐。"""
+        self._item_visible[name] = bool(visible)
+        self.update()
+
+    def item_visible(self, name):
+        """查询单个计算元素当前是否显示（未设置过默认显示）。"""
+        return self._item_visible.get(name, True)
+
     def frame_index(self):
         """返回当前显示的帧序号（供外部同步多路相机画面使用）。"""
         return self._idx
@@ -620,21 +653,23 @@ class CameraScreen(QWidget):
             p.drawText(rect, Qt.AlignmentFlag.AlignCenter, self._hint)
 
     def _draw_elements(self, p, rect):
-        """在画布上叠加示例计算元素：产品外围轮廓（虚线）+ 左/右两条边直线。"""
-        m = 0.14
-        x0 = rect.width() * m
-        y0 = rect.height() * m
-        x1 = rect.width() * (1 - m)
-        y1 = rect.height() * (1 - m)
-        pen = QPen(QColor("#39D98A"), 2, Qt.PenStyle.DashLine)
-        p.setPen(pen)
-        p.drawRect(int(x0), int(y0), int(x1 - x0), int(y1 - y0))
-        pen2 = QPen(QColor("#FFC53D"), 2)
-        p.setPen(pen2)
-        lx = x0 + (x1 - x0) * 0.18
-        rx = x1 - (x1 - x0) * 0.18
-        p.drawLine(int(lx), int(y0), int(lx), int(y1))
-        p.drawLine(int(rx), int(y0), int(rx), int(y1))
+        """在画布上叠加计算元素：按「计算元素精确查找」逐项显隐状态绘制。
+
+        直线查找项画黄色实线，轮廓查找项画绿色虚线框；被眼睛按钮隐藏的项不绘制。
+        """
+        W, H = rect.width(), rect.height()
+        for name, shapes in self.CANVAS_ITEM_SHAPES.items():
+            if not self.item_visible(name):
+                continue
+            for kind, (u0, v0, u1, v1) in shapes:
+                x0, y0, x1, y1 = u0 * W, v0 * H, u1 * W, v1 * H
+                if kind == "line":
+                    p.setPen(QPen(QColor("#FFC53D"), 2))
+                    p.drawLine(int(x0), int(y0), int(x1), int(y1))
+                else:
+                    p.setPen(QPen(QColor("#39D98A"), 1, Qt.PenStyle.DashLine))
+                    p.drawRect(int(min(x0, x1)), int(min(y0, y1)),
+                               int(abs(x1 - x0)), int(abs(y1 - y0)))
 
 
 class CameraPreview(QFrame):
