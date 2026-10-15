@@ -10,6 +10,7 @@
    FlowDocument 数据模型，两边节点/连线实时同步，大窗口里从容编辑。
 """
 import json
+import math
 import uuid
 
 from PyQt6.QtCore import (
@@ -223,7 +224,12 @@ class FlowCanvas(QWidget):
         return self._doc
 
     # ---- 坐标变换 ----
-    def _to_screen(self, wx, wy):
+    def _to_screen(self, a, b=None):
+        # 兼容两种调用：_to_screen(wx, wy) 或 _to_screen(某QPointF)
+        if b is None:
+            wx, wy = a.x(), a.y()
+        else:
+            wx, wy = a, b
         return QPointF(self._offset.x() + wx * self._scale,
                        self._offset.y() + wy * self._scale)
 
@@ -236,11 +242,11 @@ class FlowCanvas(QWidget):
 
     def _input_port_w(self, n):
         r = self._node_rect_w(n)
-        return QPointF(r.center().x(), r.top())
+        return (r.center().x(), r.top())
 
     def _output_port_w(self, n):
         r = self._node_rect_w(n)
-        return QPointF(r.center().x(), r.bottom())
+        return (r.center().x(), r.bottom())
 
     # ---- 缩放/视图 ----
     def zoom_in(self):
@@ -286,14 +292,14 @@ class FlowCanvas(QWidget):
 
     def _hit_input(self, wx, wy):
         for n in reversed(self._doc.nodes() if self._doc else []):
-            p = self._input_port_w(n)
-            if (p.x() - wx) ** 2 + (p.y() - wy) ** 2 <= 14 ** 2:
+            px, py = self._input_port_w(n)
+            if (px - wx) ** 2 + (py - wy) ** 2 <= 14 ** 2:
                 return n
         return None
 
     def _at_output(self, n, wx, wy):
-        p = self._output_port_w(n)
-        return (p.x() - wx) ** 2 + (p.y() - wy) ** 2 <= 10 ** 2
+        px, py = self._output_port_w(n)
+        return (px - wx) ** 2 + (py - wy) ** 2 <= 10 ** 2
 
     # ---- 鼠标 ----
     def mousePressEvent(self, event):
@@ -423,14 +429,19 @@ class FlowCanvas(QWidget):
         t = self._to_screen(*self._input_port_w(dst))
         path = QPainterPath(s)
         dy = (t.y() - s.y()) * 0.5
-        path.cubicTo(s.x(), s.y() + dy, t.x(), t.y() - dy, t.x(), t.y())
+        # 第二控制点 = (t.x, t.y - dy)：末端切线方向即 (t - c2)
+        c2x, c2y = t.x(), t.y() - dy
+        path.cubicTo(s.x(), s.y() + dy, c2x, c2y, t.x(), t.y())
         p.setPen(QPen(QColor("#4261FF"), 2))
         p.setBrush(Qt.BrushStyle.NoBrush)
         p.drawPath(path)
-        # 箭头（沿末端切线方向）
+        # 箭头（沿末端切线方向；Qt6 已移除 QPainterPath.angleAtPercent，这里手算切线角）
+        dx, dy2 = t.x() - c2x, t.y() - c2y
+        if dx == 0 and dy2 == 0:
+            dx, dy2 = 0.0, 1.0
+        ang = math.degrees(math.atan2(dy2, dx))
         p.setBrush(QColor("#4261FF"))
         p.setPen(Qt.PenStyle.NoPen)
-        ang = path.angleAtPercent(1.0)
         p.save()
         p.translate(t)
         p.rotate(-ang)
