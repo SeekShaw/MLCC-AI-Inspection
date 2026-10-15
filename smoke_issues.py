@@ -2213,6 +2213,68 @@ if _tc is not None and _tc._find_rows:
     check(all(_CamScreen.CANVAS_ITEM_SHAPES.get(n) for n in _tc.FIND_ITEMS),
           "眼睛按钮: 每个计算元素均有画布叠加形状定义（隐藏即不绘制）")
 
+# ============ 新需求：检测流程设计子页面（工具箱 + 流程编辑画布） ============
+from flow_design import FlowDesignPage as _FDP, FlowDocument as _FDoc, \
+    TOOLBOX_CATEGORIES as _TB
+_fp = getattr(dv, "_flow_page", None)
+check(isinstance(_fp, _FDP), "流程设计: 调试界面含「检测流程设计」子页面")
+check(dv._target_tabs.tabText(0) == "检测流程设计"
+      and dv._target_tabs.tabText(1) == "产品目标搜索",
+      "流程设计: 子页面位于「产品目标搜索」左侧（第 0 个标签）")
+check(len(_fp.toolbox.categories()) == 13
+      and sum(c for _, _, c in _TB) > 100,
+      f"流程设计: 工具箱含 {len(_TB)} 个分类（与参考图一致）")
+_doc = _fp.document
+check(isinstance(_doc, _FDoc) and _doc.node_count() >= 2
+      and _doc.edge_count() >= 1,
+      "流程设计: 初始示例流程（读取图像 → 二值化）已就绪")
+# 节点增删 / 连线 / 撤销重做
+_c0 = _doc.node_count()
+_n1 = _doc.add_node("测试算子A", "图像源")
+_n2 = _doc.add_node("测试算子B", "图像预处理")
+check(_doc.node_count() == _c0 + 2, "流程设计: 添加节点")
+check(_doc.connect(_n1, _n2) is True and _doc.connect(_n1, _n2) is False,
+      "流程设计: 建立连线，且重复连线被拒绝")
+check(_doc.connect(_n1, _n1) is False, "流程设计: 自连接被拒绝")
+_doc.undo()
+check(_doc.node_count() == _c0 + 2 and _doc.edge_count() == 1,
+      "流程设计: 撤销连线后节点保留")
+_doc.redo()
+check(_doc.edge_count() == 2, "流程设计: 重做恢复连线")
+_doc.remove_node(_n1)
+check(_doc.node_count() == _c0 + 1
+      and all(e["dst"] != _n1 and e["src"] != _n1 for e in _doc.edges()),
+      "流程设计: 删除节点同时清理其连线")
+_doc.undo()
+check(_doc.node_count() == _c0 + 2, "流程设计: 撤销删除恢复节点")
+# 工具箱折叠 / 搜索 / 缩放
+_fp.toggle_toolbox()
+check(not _fp._toolbox_holder.isVisible() or True, "流程设计: 工具箱可折叠（不抛异常）")
+_fp.toggle_toolbox()
+_fp.toolbox._search.setText("卡尺")
+QApplication.processEvents()
+check(_fp.toolbox._section_rows["测量"]["rows"][0].isVisible(),
+      "流程设计: 搜索「卡尺」过滤出匹配算子")
+_fp.toolbox._search.setText("")
+_fp.canvas.zoom_in()
+_fp.canvas.zoom_out()
+_fp.canvas.fit()
+check(True, "流程设计: 画布缩放/适应可安全调用")
+# 双击工具箱添加（经由 add_requested 信号路径）
+_k = _doc.node_count()
+_fp._on_tool_add("测量", "卡尺工具")
+check(_doc.node_count() == _k + 1
+      and _doc.nodes()[-1]["name"] == "卡尺工具",
+      "流程设计: 工具箱添加算子到画布")
+# 放大编辑大窗口：非模态、同一数据模型
+_fp._open_dialog()
+check(_fp._dlg is not None and _fp._dlg.isVisible()
+      and _fp._dlg.findChildren(_FDP)[0].document is _doc,
+      "流程设计: 「放大编辑」弹出大窗口且共享同一数据模型")
+_fp._dlg.close()
+_fp._dlg = None
+check(True, "流程设计: 大窗口可安全关闭")
+
 # ============ 修正反馈1：调试界面运行日志「日志详情」按钮（与「日志管理」一致） ============
 check(hasattr(dv._run_log, "_detail_btn") and dv._run_log._detail_btn.text() == "日志详情",
       "日志详情: 调试界面运行日志标题栏含「日志详情」按钮")

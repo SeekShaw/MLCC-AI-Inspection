@@ -2666,8 +2666,15 @@ class DebugView(QWidget):
                                        camera_preview=main_preview)
         self._target_content = target
 
+        # 「检测流程设计」子页面：与「产品目标搜索」同级、置于其左侧（第 0 个标签）。
+        # 卡片内嵌区域宽高受限的拥挤问题由 flow_design 模块内解：
+        # 工具箱可折叠 / 画布可缩放+自动布局 / 「⛶ 放大编辑」弹出大窗口（同一数据模型实时同步）。
+        from flow_design import FlowDesignPage
+        self._flow_page = FlowDesignPage(run_log=self._run_log)
+
         tabs = QTabWidget()
         self._target_tabs = tabs
+        tabs.addTab(self._flow_page, "检测流程设计")
         tabs.addTab(target._tab1, "产品目标搜索")
         tabs.addTab(target._tab2, "2. 计算元素精确查找")
         # 「图像效果调节」：与上面两个子页面同级（第三个标签页）
