@@ -2222,7 +2222,7 @@ check(dv._target_tabs.tabText(0) == "检测流程设计"
       and dv._target_tabs.tabText(1) == "产品目标搜索",
       "流程设计: 子页面位于「产品目标搜索」左侧（第 0 个标签）")
 check(len(_fp.toolbox.categories()) == 13
-      and sum(c for _, _, c in _TB) > 100,
+      and sum(c for _, c in _TB) > 100,
       f"流程设计: 工具箱含 {len(_TB)} 个分类（与参考图一致）")
 _doc = _fp.document
 check(isinstance(_doc, _FDoc) and _doc.node_count() >= 2

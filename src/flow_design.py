@@ -6,7 +6,7 @@
 三个手段解决：
 1. 工具箱可折叠（«/» 按钮）：折叠后画布独占整行宽度；
 2. 画布可缩放（Ctrl+滚轮 / 工具栏 − 适应 ＋）＋ 自动布局：节点多时也能概览全流程；
-3. 「⛶ 放大编辑」弹出 1100×720 可最大化的非模态窗口：与内嵌页共享同一个
+3. 「放大编辑」弹出 1100×720 可最大化的非模态窗口：与内嵌页共享同一个
    FlowDocument 数据模型，两边节点/连线实时同步，大窗口里从容编辑。
 """
 import json
@@ -14,9 +14,9 @@ import math
 import uuid
 
 from PyQt6.QtCore import (
-    Qt, QPointF, QRectF, QObject, pyqtSignal, QEvent)
+    Qt, QPointF, QRectF, QObject, pyqtSignal, QEvent, QSize)
 from PyQt6.QtGui import (
-    QColor, QFont, QPainter, QPen, QPainterPath, QPolygonF)
+    QColor, QFont, QPainter, QPen, QPainterPath, QPolygonF, QIcon, QPixmap)
 from PyQt6.QtWidgets import (
     QWidget, QLabel, QPushButton, QVBoxLayout, QHBoxLayout, QScrollArea,
     QLineEdit, QDialog, QSizePolicy)
@@ -24,15 +24,38 @@ from PyQt6.QtWidgets import (
 from styles import COLORS
 
 # ---------------------------------------------------------------------------
-# 工具箱数据：分类（图标, 数量）+ 每类算子名（未提供的按「分类名+序号」补齐）
+# 工具箱数据：分类（数量）+ 每类算子名（未提供的按「分类名+序号」补齐）
+# 注：图标一律用 QPainter 现绘矢量图 / CJK 文字，避免依赖 emoji 在 YaHei 下的字形。
 # ---------------------------------------------------------------------------
 TOOLBOX_CATEGORIES = [
-    ("图像源", "📷", 2), ("图像预处理", "🎚", 26), ("图像分割", "✂", 18),
-    ("区域处理", "▦", 18), ("几何生成", "◇", 10), ("模板匹配", "⧉", 9),
-    ("测量", "📏", 17), ("灰度特征", "▥", 3), ("形状特征", "⬡", 6),
-    ("轮廓处理", "◎", 24), ("结果输出", "🖥", 1), ("设备通讯", "🖧", 11),
-    ("流程逻辑", "⋯", 8),
+    ("图像源", 2), ("图像预处理", 26), ("图像分割", 18),
+    ("区域处理", 18), ("几何生成", 10), ("模板匹配", 9),
+    ("测量", 17), ("灰度特征", 3), ("形状特征", 6),
+    ("轮廓处理", 24), ("结果输出", 1), ("设备通讯", 11),
+    ("流程逻辑", 8),
 ]
+
+# 节点圆标 / 工具箱色块使用的分类色（与 _cat_color 一致）
+_CAT_PALETTE = ["#4261FF", "#0D822B", "#FF8C1A", "#B37FEB", "#13C2C2"]
+
+
+def _cat_color(cat):
+    """分类对应的稳定色（用于节点圆标与工具箱色块）。"""
+    return _CAT_PALETTE[sum(map(ord, cat)) % len(_CAT_PALETTE)]
+
+
+# 节点圆标里显示的中文缩写（保证任意字体可见，且与分类一一对应）
+CAT_BADGE = {
+    "图像源": "源", "图像预处理": "预", "图像分割": "割", "区域处理": "区",
+    "几何生成": "几", "模板匹配": "模", "测量": "测", "灰度特征": "灰",
+    "形状特征": "形", "轮廓处理": "轮", "结果输出": "出",
+    "设备通讯": "讯", "流程逻辑": "逻",
+}
+
+
+def _cat_badge(cat):
+    return CAT_BADGE.get(cat, (cat[0] if cat else "?"))
+
 
 _REAL_ITEMS = {
     "图像源": ["读取图像", "读取视频流"],
@@ -51,8 +74,6 @@ _REAL_ITEMS = {
     "流程逻辑": ["条件分支", "循环执行", "并行分支", "延时等待"],
 }
 
-CAT_ICON = {name: icon for name, icon, _ in TOOLBOX_CATEGORIES}
-
 
 def toolbox_items(cat, count):
     """返回某分类的算子名列表（优先真实名，不足则按序号补齐）。"""
@@ -66,6 +87,80 @@ def toolbox_items(cat, count):
 
 def _elide(text, limit=13):
     return text if len(text) <= limit else text[:limit] + "…"
+
+
+# ---------------------------------------------------------------------------
+# 工具栏矢量图标：全部用 QPainter 现绘，不依赖任何字体字形
+# ---------------------------------------------------------------------------
+def _draw_glyph(p, kind, x, y, w, h):
+    """在 (x,y,w,h) 盒子里绘制 kind 对应的矢量图标（线条统一由调用方设好）。"""
+    mid = y + h / 2
+
+    def _L(x1, y1, x2, y2):
+        p.drawLine(QPointF(x1, y1), QPointF(x2, y2))
+
+    def _arrow_head(ax, ay, dx, dy, size=4.0):
+        # 在 (ax,ay) 处画指向 (dx,dy) 方向的箭头（dx,dy 为单位方向）
+        px, py = -dy, dx  # 垂直方向
+        _L(ax, ay, ax - dx * size + px * size * 0.7, ay - dy * size + py * size * 0.7)
+        _L(ax, ay, ax - dx * size - px * size * 0.7, ay - dy * size - py * size * 0.7)
+
+    if kind == "undo":                       # 左箭头
+        _L(x + w * 0.72, mid, x + w * 0.30, mid)
+        _arrow_head(x + w * 0.30, mid, -1, 0)
+    elif kind == "redo":                     # 右箭头
+        _L(x + w * 0.28, mid, x + w * 0.70, mid)
+        _arrow_head(x + w * 0.70, mid, 1, 0)
+    elif kind in ("zoom_out", "zoom_in"):    # 放大镜 + (减/加)
+        cx, cy, r = x + w * 0.40, y + h * 0.40, w * 0.24
+        p.drawEllipse(QPointF(cx, cy), r, r)
+        _L(cx + r * 0.7, cy + r * 0.7, x + w * 0.84, y + h * 0.84)
+        if kind == "zoom_out":
+            _L(cx - r * 0.6, cy, cx + r * 0.6, cy)
+        else:
+            _L(cx - r * 0.6, cy, cx + r * 0.6, cy)
+            _L(cx, cy - r * 0.6, cx, cy + r * 0.6)
+    elif kind == "fit":                      # 四角括号（适应视窗）
+        t, a, b = 0.22, 0.13, 0.13
+        # 左上
+        _L(x + w * t, y + h * (t + b), x + w * t, y + h * t)
+        _L(x + w * t, y + h * t, x + w * (t + a), y + h * t)
+        # 右上
+        _L(x + w * (1 - t), y + h * (t + b), x + w * (1 - t), y + h * t)
+        _L(x + w * (1 - t), y + h * t, x + w * (1 - t - a), y + h * t)
+        # 左下
+        _L(x + w * t, y + h * (1 - t - b), x + w * t, y + h * (1 - t))
+        _L(x + w * t, y + h * (1 - t), x + w * (t + a), y + h * (1 - t))
+        # 右下
+        _L(x + w * (1 - t), y + h * (1 - t - b), x + w * (1 - t), y + h * (1 - t))
+        _L(x + w * (1 - t), y + h * (1 - t), x + w * (1 - t - a), y + h * (1 - t))
+    elif kind == "layout":                   # 上下双箭头（自动布局）
+        x1 = x + w * 0.35
+        _L(x1, y + h * 0.76, x1, y + h * 0.26)
+        _arrow_head(x1, y + h * 0.26, 0, -1)
+        x2 = x + w * 0.65
+        _L(x2, y + h * 0.24, x2, y + h * 0.74)
+        _arrow_head(x2, y + h * 0.74, 0, 1)
+    elif kind == "expand":                   # 方框 + 对角箭头（放大编辑）
+        m = 0.22
+        p.drawRect(QRectF(x + w * m, y + h * m, w * 0.56, h * 0.56))
+        _L(x + w * 0.40, y + h * 0.60, x + w * 0.60, y + h * 0.40)
+        _arrow_head(x + w * 0.60, y + h * 0.40, 0.7, -0.7)
+
+
+def _make_icon(kind, color="#4261FF"):
+    """把矢量图标渲染成 QIcon（尺寸 16×16，离屏可绘）。"""
+    sz = 16
+    pm = QPixmap(sz, sz)
+    pm.fill(Qt.GlobalColor.transparent)
+    pp = QPainter(pm)
+    pp.setRenderHint(QPainter.RenderHint.Antialiasing)
+    pp.setPen(QPen(QColor(color), 1.6, Qt.PenStyle.SolidLine,
+                   Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
+    pp.setBrush(Qt.BrushStyle.NoBrush)
+    _draw_glyph(pp, kind, 1, 1, sz - 2, sz - 2)
+    pp.end()
+    return QIcon(pm)
 
 
 # ---------------------------------------------------------------------------
@@ -418,8 +513,7 @@ class FlowCanvas(QWidget):
             x += step
 
     def _cat_color(self, cat):
-        palette = ["#4261FF", "#0D822B", "#FF8C1A", "#B37FEB", "#13C2C2"]
-        return palette[sum(map(ord, cat)) % len(palette)]
+        return _cat_color(cat)
 
     def _draw_edge(self, p, e):
         src, dst = self._doc.node(e["src"]), self._doc.node(e["dst"])
@@ -478,9 +572,9 @@ class FlowCanvas(QWidget):
         p.setPen(Qt.PenStyle.NoPen)
         p.drawEllipse(QRectF(rect.left() + 10 * s, rect.center().y() - d / 2, d, d))
         p.setPen(QColor("#FFFFFF"))
-        p.setFont(QFont("Microsoft YaHei", int(11 * max(0.7, s))))
+        p.setFont(QFont("Microsoft YaHei", int(11 * max(0.7, s)), QFont.Weight.Bold))
         p.drawText(QRectF(rect.left() + 10 * s, rect.center().y() - d / 2, d, d),
-                   Qt.AlignmentFlag.AlignCenter, CAT_ICON.get(n["cat"], "▣"))
+                   Qt.AlignmentFlag.AlignCenter, _cat_badge(n["cat"]))
         # 标题 / 副标题
         tx = rect.left() + (10 + d + 8) * s
         p.setPen(QColor(COLORS["text_primary"]))
@@ -491,11 +585,18 @@ class FlowCanvas(QWidget):
         p.setFont(QFont("Microsoft YaHei", int(10 * max(0.7, s))))
         p.drawText(QRectF(tx, rect.top() + 30 * s, rect.right() - tx - 8 * s, 16 * s),
                    Qt.AlignmentFlag.AlignVCenter, n["cat"])
-        # 耗时徽标（右上，示例）
+        # 耗时徽标（右上，示例）：绿色对勾（矢量绘制，不依赖字体）+ 数值
+        p.setPen(QPen(QColor("#0D822B"), 1.6))
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        cxp = rect.right() - 66 * s
+        cyp = rect.top() - 9 * s
+        p.drawLine(QPointF(cxp, cyp + 3 * s), QPointF(cxp + 3 * s, cyp + 6 * s))
+        p.drawLine(QPointF(cxp + 3 * s, cyp + 6 * s), QPointF(cxp + 8 * s, cyp))
         p.setPen(QColor("#0D822B"))
-        p.drawText(QRectF(rect.right() - 70 * s, rect.top() - 16 * s, 70 * s, 14 * s),
-                   Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
-                   f"✓ {n['ms']:.2f} ms")
+        p.setFont(QFont("Microsoft YaHei", int(10 * max(0.7, s))))
+        p.drawText(QRectF(rect.right() - 54 * s, rect.top() - 16 * s, 54 * s, 14 * s),
+                   Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                   f"{n['ms']:.2f} ms")
         # 输入端（顶部圆环）/ 输出端（底部蓝点）
         ip = self._to_screen(*self._input_port_w(n))
         p.setPen(QPen(QColor("#8A9099"), 1.5))
@@ -524,7 +625,7 @@ class FlowToolBox(QWidget):
         v.setSpacing(6)
 
         self._search = QLineEdit()
-        self._search.setPlaceholderText("🔍 搜索算子")
+        self._search.setPlaceholderText("搜索算子")
         self._search.setFixedHeight(26)
         self._search.setClearButtonEnabled(True)
         self._search.textChanged.connect(self._refilter)
@@ -539,25 +640,13 @@ class FlowToolBox(QWidget):
         self._inner_lay.setContentsMargins(0, 0, 2, 0)
         self._inner_lay.setSpacing(2)
         self._section_rows = {}   # cat -> {header, count_lbl, items: [row, ...]}
-        for cat, icon, count in TOOLBOX_CATEGORIES:
-            self._inner_lay.addWidget(self._build_section(cat, icon, count))
+        for cat, count in TOOLBOX_CATEGORIES:
+            self._inner_lay.addWidget(self._build_section(cat, count))
         self._inner_lay.addStretch(1)
         self._scroll.setWidget(inner)
         v.addWidget(self._scroll, 1)
 
-        foot = QHBoxLayout()
-        wand = QPushButton("🪄")
-        wand.setFixedSize(26, 24)
-        wand.setToolTip("算子收藏（示例占位）")
-        wand.setStyleSheet(
-            f"QPushButton{{background-color:{COLORS['bg_panel']}; color:{COLORS['text_primary']}; "
-            f"border:1px solid {COLORS['border']}; border-radius:4px;}}"
-            f"QPushButton:hover{{background-color:{COLORS['border']};}}")
-        foot.addWidget(wand)
-        foot.addStretch(1)
-        v.addLayout(foot)
-
-    def _build_section(self, cat, icon, count):
+    def _build_section(self, cat, count):
         head = QWidget()
         hl = QHBoxLayout(head)
         hl.setContentsMargins(2, 2, 2, 2)
@@ -565,14 +654,20 @@ class FlowToolBox(QWidget):
         arrow = QLabel("▶")
         arrow.setFixedWidth(10)
         arrow.setStyleSheet(f"color:{COLORS['text_secondary']}; font-size:9px;")
-        name = QLabel(f"{icon} {cat}")
+        # 分类色块（与画布节点圆标同色，纯色块不依赖字体字形）
+        swatch = QLabel()
+        swatch.setFixedSize(10, 10)
+        swatch.setStyleSheet(
+            f"background-color:{_cat_color(cat)}; border-radius:2px;")
+        name = QLabel(cat)
         name.setStyleSheet(f"color:{COLORS['text_primary']}; font-size:12px; font-weight:bold;")
         cnt = QLabel(f"{count} 项")
         cnt.setStyleSheet(f"color:{COLORS['text_secondary']}; font-size:10px;")
         # 子标签不拦截鼠标，点击整行都落在 head 上（由事件过滤器统一处理折叠）
-        for child in (arrow, name, cnt):
+        for child in (arrow, swatch, name, cnt):
             child.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         hl.addWidget(arrow)
+        hl.addWidget(swatch)
         hl.addWidget(name)
         hl.addStretch(1)
         hl.addWidget(cnt)
@@ -634,7 +729,7 @@ class FlowToolBox(QWidget):
                 info["open"] = True
 
     def categories(self):
-        return [(name, icon, count) for name, icon, count in TOOLBOX_CATEGORIES]
+        return [(name, count) for name, count in TOOLBOX_CATEGORIES]
 
 
 # ---------------------------------------------------------------------------
@@ -667,30 +762,33 @@ class FlowDesignPage(QWidget):
         bar.addWidget(hint)
         bar.addStretch(1)
 
-        def _tbtn(text, tip, cb):
-            b = QPushButton(text)
+        def _tbtn(kind, tip, cb, color="#4261FF"):
+            b = QPushButton()
             b.setFixedSize(26, 24)
+            b.setIcon(_make_icon(kind, color))
+            b.setIconSize(QSize(16, 16))
             b.setToolTip(tip)
             b.setCursor(Qt.CursorShape.PointingHandCursor)
             b.setStyleSheet(
                 f"QPushButton{{background-color:{COLORS['bg_panel']}; color:{COLORS['text_primary']}; "
-                f"border:1px solid {COLORS['border']}; border-radius:4px; font-size:12px;}}"
+                f"border:1px solid {COLORS['border']}; border-radius:4px;}}"
                 f"QPushButton:hover{{background-color:{COLORS['border']};}}")
             b.clicked.connect(cb)
             bar.addWidget(b)
             return b
 
-        self._btn_undo = _tbtn("↩", "撤销 (Ctrl+Z)", self.document.undo)
-        self._btn_redo = _tbtn("↪", "重做 (Ctrl+Y)", self.document.redo)
-        self._btn_zoom_out = _tbtn("−", "缩小", lambda: self.canvas.zoom_out())
-        self._btn_fit = _tbtn("⊡", "适应画布", lambda: self.canvas.fit())
-        self._btn_zoom_in = _tbtn("＋", "放大", lambda: self.canvas.zoom_in())
-        self._btn_layout = _tbtn("⇅", "自动布局", self._auto_layout)
+        self._btn_undo = _tbtn("undo", "撤销 (Ctrl+Z)", self.document.undo)
+        self._btn_redo = _tbtn("redo", "重做 (Ctrl+Y)", self.document.redo)
+        self._btn_zoom_out = _tbtn("zoom_out", "缩小", lambda: self.canvas.zoom_out())
+        self._btn_fit = _tbtn("fit", "适应画布", lambda: self.canvas.fit())
+        self._btn_zoom_in = _tbtn("zoom_in", "放大", lambda: self.canvas.zoom_in())
+        self._btn_layout = _tbtn("layout", "自动布局", self._auto_layout)
         if self._embedded:
-            self._btn_expand = _tbtn("⛶", "放大编辑（弹出大窗口）", self._open_dialog)
+            self._btn_expand = _tbtn("expand", "放大编辑（弹出大窗口）",
+                                     self._open_dialog, color="white")
             self._btn_expand.setStyleSheet(
                 f"QPushButton{{background-color:{COLORS['accent_blue']}; color:white; "
-                f"border:none; border-radius:4px; font-size:12px;}}"
+                f"border:none; border-radius:4px;}}"
                 f"QPushButton:hover{{background-color:#5570ff;}}")
         v.addLayout(bar)
 
