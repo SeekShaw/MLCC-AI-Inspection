@@ -26,10 +26,12 @@ from device_settings_dialog import (
 
 # 任务栏图标：Windows 需要显式 AppUserModelID 才会把窗口归入本程序并显示应用图标，
 # 否则部分环境下任务栏显示为空白/通用图标。
-APP_USER_MODEL_ID = "Teruo.ElectronicComponentVision.V3.0"
+# 软件版本 / 厂商信息：「关于」窗口展示；版本号唯一来源见 app_meta.APP_VERSION
+# （build_b.py 发布时自动递增第 3 位，exe 详细信息/启动画面/关于页保持一致）。
+from app_meta import APP_VERSION as _APP_VERSION_NUM  # noqa: E402
 
-# 软件版本 / 厂商信息：顶部信息栏展示，并在「关于」窗口中显示
-APP_VERSION = "Ver5.0.10.34"
+APP_USER_MODEL_ID = f"Teruo.EcompVisionInspector.{_APP_VERSION_NUM}"
+APP_VERSION = f"V{_APP_VERSION_NUM}"
 COMPANY_NAME = "ZiGAA ChuangYuan（智感科技）"
 COMPANY_COPYRIGHT = "Copyright (C) 2026 By: ZIGAA ChuangYuan"
 

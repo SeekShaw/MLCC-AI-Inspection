@@ -1,4 +1,4 @@
-# 电子元件视觉检测系统
+# EcompVision Inspector
 
 基于两张参考图（生产运行界面 / 调试界面）开发的 Windows 演示 exe 程序。
 
@@ -7,8 +7,13 @@
 直接双击运行：
 
 ```
-output/电子元件视觉检测系统_V3.0.exe
+output/EcompVision Inspector.exe
 ```
+
+演示程序包：`EcompVision Inspector Demo.zip`（仅含最新 exe）。
+
+版本号唯一来源为 `src/app_meta.py`；`python build_b.py` 每次发布**构建前**自动把
+第 3 位 +1（到 10 向第 2 位进位），exe 详细信息 / 启动画面 / 关于页三处同步。
 
 程序窗口按 1920×1080 显示器设计，默认大小 1920×1080，最小尺寸 1366×768，支持最大化。
 
@@ -59,7 +64,8 @@ src/
 ## 重新打包
 
 ```bash
-venv/Scripts/pyinstaller.exe --onefile --windowed --name 电子元件视觉检测系统_V3.0 --distpath dist src/main.py
+python build_b.py            # 构建并自动递增版本号（可用 --no-bump 保持当前版本）
+python make_demo_zip.py      # 生成 EcompVision Inspector Demo.zip
 ```
 
 ## 更新后发布到 GitHub

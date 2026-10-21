@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-把「电子元件视觉检测系统 V3.0」推送到 GitHub（SeekShaw/MLCC-AI-Inspection）。
+把「EcompVision Inspector」推送到 GitHub（SeekShaw/MLCC-AI-Inspection）。
 
 设计目标：
 - 更新程序后一条命令完成 暂存 -> 提交 -> 推送。

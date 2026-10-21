@@ -25,10 +25,13 @@ except Exception:
     pass
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
-DEMO_DIR = os.path.join(ROOT, "电子元件视觉检测系统_演示程序包")
-OUT_EXE = os.path.join(ROOT, "output", "电子元件视觉检测系统_V3.0.exe")
-DEMO_EXE = os.path.join(DEMO_DIR, "电子元件视觉检测系统_V3.0.exe")
-ZIP_PATH = os.path.join(ROOT, "电子元件视觉检测系统_演示程序包.zip")
+# 2026-10-21：演示包统一改名 EcompVision Inspector Demo；打包完成后删除
+# 解压用临时目录，目录里只保留 zip 一个发布文件。
+DEMO_DIR = os.path.join(ROOT, "EcompVision Inspector Demo")
+EXE_NAME = "EcompVision Inspector.exe"     # 2026-10-21：exe 更名（原 中文名_V3.0）
+OUT_EXE = os.path.join(ROOT, "output", EXE_NAME)
+DEMO_EXE = os.path.join(DEMO_DIR, EXE_NAME)
+ZIP_PATH = os.path.join(ROOT, "EcompVision Inspector Demo.zip")
 
 
 def _force_copy(src, dst):
@@ -61,6 +64,8 @@ def _force_copy(src, dst):
 def main():
     if not os.path.exists(OUT_EXE):
         raise SystemExit(f"!! 未找到最新 exe: {OUT_EXE}")
+    # 0) 确保演示根目录存在（演示目录在打包后会被删除，下次需重建）
+    os.makedirs(DEMO_DIR, exist_ok=True)
     # 1) 同步 exe 进演示目录
     _force_copy(OUT_EXE, DEMO_EXE)
     print("   同步 exe ->", DEMO_EXE)
@@ -81,6 +86,9 @@ def main():
                 z.write(full, rel)
     size = os.path.getsize(ZIP_PATH)
     print(f">> 完成 -> {ZIP_PATH} ({size:,} bytes)")
+    # 4) 只保留 zip：删除解压用临时演示目录（需要时由 zip 解压还原）
+    shutil.rmtree(DEMO_DIR, ignore_errors=False)
+    print("   已删除临时演示目录 ->", DEMO_DIR)
 
 
 if __name__ == "__main__":

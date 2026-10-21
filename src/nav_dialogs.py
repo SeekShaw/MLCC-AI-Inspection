@@ -1003,6 +1003,7 @@ class AboutDialog(QDialog):
             ("设备名称", dev.get("设备名称", "")),
             ("产线编号", dev.get("产线编号", "")),
             ("厂商名称", company),
+            ("设计开发", "ZY.Shaw"),
             ("版权信息", copyright_text),
         ]
         for r, (k, v) in enumerate(rows):

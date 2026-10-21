@@ -42,9 +42,11 @@ _shots/
 Thumbs.db
 
 # ===== Committed build artifacts (用户要求：源码 + 构建产物) =====
-# 仅放行以下两个发布文件；output/ 其余内容（日志、users.json 等）与解压后的演示目录仍排除
+# 仅放行以下两个发布文件；output/ 其余内容（日志、users.json 等）与打包用
+# 临时演示目录仍排除
 output/*
-!output/电子元件视觉检测系统_V3.0.exe
+!output/EcompVision Inspector.exe
 *.zip
-!电子元件视觉检测系统_演示程序包.zip
-电子元件视觉检测系统_演示程序包/
+!EcompVision Inspector Demo.zip
+EcompVision Inspector Demo/
+_exe_version.txt

@@ -1622,6 +1622,7 @@ class TargetParamDialog(QDialog):
         self._owner = parent     # DebugView 实例（提供生产运行状态与样本池）
         self._active_key = None
         self._dist_btns = {}
+        self._autotune_btns = {}   # 「自动调参」按钮：{key: QPushButton}
         self._live_drift = {}    # 演示数据缓慢游走偏移：{key: offset}
         self._custom_filter = False   # 是否处于手动时间检索（固定区间）状态
         self._filter_t0 = None        # 手动检索起始时间
@@ -1738,6 +1739,7 @@ class TargetParamDialog(QDialog):
             ("上限", Qt.AlignmentFlag.AlignCenter),
             ("下限", Qt.AlignmentFlag.AlignCenter),
             ("", Qt.AlignmentFlag.AlignCenter),
+            ("自动调参", Qt.AlignmentFlag.AlignCenter),
         ]
         for c, (text, align) in enumerate(headers):
             lab = QLabel(text)
@@ -1761,6 +1763,14 @@ class TargetParamDialog(QDialog):
         btn.clicked.connect(lambda _, k=key: self._on_dist(k))
         grid.addWidget(btn, r, 3)
         self._dist_btns[key] = btn
+        # 「自动调参」按钮：按样本分布自动计算并应用该参数的推荐上下限
+        btn_at = QPushButton("自动调参")
+        btn_at.setFixedSize(56, 24)
+        btn_at.setStyleSheet(self._dist_btn_style(False))
+        btn_at.setToolTip("按历史样本分布自动计算并应用该参数的推荐上限/下限")
+        btn_at.clicked.connect(lambda _, k=key: self._on_auto_tune(k))
+        grid.addWidget(btn_at, r, 4)
+        self._autotune_btns[key] = btn_at
 
     def _add_normal_row(self, grid, r, label, controls, key):
         """无上下限的普通行（如匹配极性）：标签 | 控件(跨列) | 分布按钮。"""
@@ -2181,6 +2191,67 @@ class TargetParamDialog(QDialog):
             print("[TargetParamDialog] 清零异常（已忽略）：", repr(e))
             traceback.print_exc()
 
+    # -- 自动调参 ------------------------------------------------------
+    def _on_auto_tune(self, key):
+        """算法阈值自动调参：按当前样本分布（99% 分位区间 + 两侧工艺余量）
+        计算该参数的推荐上限/下限并直接应用，随后刷新分布图。
+
+        - 样本来源与分布图一致：DebugView 样本池（生产运行时为真实实测值，
+          否则为演示基线）；处于手动时间检索时只统计检索区间内的样本。
+        - 推荐区间 = [P0.5, P99.5]（覆盖 99% 样本），两侧各外扩区间宽度的 10%
+          作为工艺余量，并夹取到该参数输入框允许的取值范围内。
+        """
+        meta = self._param_meta.get(key)
+        if meta is None or meta.get("categorical"):
+            return
+        try:
+            samples = []
+            if self._owner is not None:
+                try:
+                    samples = self._owner.get_param_samples(self._name, key)
+                except Exception:
+                    samples = []
+            if not samples:
+                samples = self._local_baseline(key)
+            if self._custom_filter and self._filter_t0 is not None:
+                samples = [(t, v) for t, v in samples
+                           if self._filter_t0 <= t <= self._filter_t1]
+            values = [float(v) for _, v in samples]
+            if not values:
+                QMessageBox.information(
+                    self, "自动调参", "当前时间范围内暂无样本数据，无法自动调参。")
+                return
+            lo_s = self._pct(values, 0.5)
+            hi_s = self._pct(values, 99.5)
+            margin = (hi_s - lo_s) * 0.10
+            spins = {"thresh": (self._thresh_lo, self._thresh_hi),
+                     "area": (self._area_lo, self._area_hi),
+                     "tol": (self._tol_lo, self._tol_hi)}
+            sp_lo, sp_hi = spins[key]
+            old_lo, old_hi = sp_lo.value(), sp_hi.value()
+            new_lo = int(round(max(sp_lo.minimum(), min(sp_lo.maximum(),
+                                                        lo_s - margin))))
+            new_hi = int(round(max(sp_hi.minimum(), min(sp_hi.maximum(),
+                                                        hi_s + margin))))
+            if new_hi < new_lo:
+                new_lo, new_hi = min(new_lo, new_hi), sp_hi.maximum()
+            sp_lo.setValue(new_lo)
+            sp_hi.setValue(new_hi)
+            # 分布面板未打开时 _on_value_changed 不会触发刷新，这里兜底刷一次
+            self._refresh_live()
+            unit = meta.get("unit", "")
+            QMessageBox.information(
+                self, f"自动调参 · {meta['label']}",
+                f"已按最近 {len(values)} 个样本自动完成调参：\n\n"
+                f"{meta['label']}：{old_lo}~{old_hi}{unit}  →  "
+                f"{new_lo}~{new_hi}{unit}\n\n"
+                f"（依据样本 99% 分位区间 P0.5~P99.5，两侧各留 10% 工艺余量）\n"
+                f"点击「确定」后生效；如需回退，请手动恢复原数值。")
+        except Exception as e:
+            import traceback
+            print("[TargetParamDialog] 自动调参异常（已忽略）：", repr(e))
+            traceback.print_exc()
+
     def _append_live_sample(self, now):
         """由 DebugView._accumulate_param_samples 在相机逐帧节拍中调用：
         向样本池追加一条当前参数的实时实测值（生产运行取真实值，否则取演示游走值）。"""
@@ -2366,6 +2437,246 @@ class UnitCell(QFrame):
 
     def current_unit(self):
         return self._lbl.text()
+
+
+class SpecAutoAdjustDialog(QDialog):
+    """检测项规格上下限自动调整窗口。
+
+    依据各检测项历史分布样本（DebugView.get_distribution_samples）按
+    99% 分位区间 P0.5~P99.5 加两侧 10% 工艺余量给出推荐规格；用户可勾选
+    需要调整的检测项并微调推荐值，点击「应用调整」写回检测项列表，
+    并按新规格重新判定『检测结果』。
+    """
+
+    def __init__(self, owner, parent=None):
+        super().__init__(parent)
+        self._owner = owner      # DebugView 实例（提供分布样本与写回接口）
+        self._rows = []          # [(row, chk, sp_lo, sp_hi), ...]
+        self.setWindowTitle("检测项规格上下限自动调整")
+        self.setStyleSheet(f"QDialog {{ background-color: {COLORS['bg_dark']}; }}")
+        self.resize(600, 500)
+        # 去掉 Windows 自带的「?」帮助按钮，并设为置顶显示
+        self.setWindowFlags(
+            (self.windowFlags() & ~Qt.WindowType.WindowContextHelpButtonHint)
+            | Qt.WindowType.WindowStaysOnTopHint)
+        self._build_ui()
+        self._collect_rows()
+
+    # -- UI 构建 ------------------------------------------------------
+    def _build_ui(self):
+        v = QVBoxLayout(self)
+        v.setContentsMargins(16, 14, 16, 14)
+        v.setSpacing(10)
+
+        title = QLabel("依据各检测项历史分布样本自动计算推荐规格上下限"
+                       "（勾选后应用，推荐值可直接微调）")
+        title.setStyleSheet(
+            f"color: {COLORS['text_primary']}; font-size: 13px; font-weight: bold;")
+        v.addWidget(title)
+
+        # 顶部：全选 + 算法说明
+        top = QHBoxLayout()
+        self._chk_all = QCheckBox("全选")
+        self._chk_all.setChecked(True)
+        self._chk_all.setStyleSheet(self._chk_style())
+        self._chk_all.toggled.connect(self._on_toggle_all)
+        top.addWidget(self._chk_all)
+        top.addStretch(1)
+        tip = QLabel("推荐规格 = P0.5~P99.5 分位区间，两侧各留 10% 工艺余量")
+        tip.setStyleSheet(f"color: {COLORS['text_secondary']}; font-size: 11px;")
+        top.addWidget(tip)
+        v.addLayout(top)
+
+        # 列头
+        hdr = QWidget()
+        hg = QHBoxLayout(hdr)
+        hg.setContentsMargins(8, 0, 8, 0)
+        hg.setSpacing(8)
+        for text, w in (("选择", 36), ("检测编号", 60), ("检测项目", 150),
+                        ("当前规格（下限 ~ 上限）", 170),
+                        ("推荐规格（下限 ~ 上限）", 190), ("样本", 70)):
+            lab = QLabel(text)
+            lab.setFixedWidth(w)
+            lab.setStyleSheet(
+                f"color: {COLORS['text_secondary']}; font-size: 11px; "
+                f"font-weight: bold;")
+            hg.addWidget(lab)
+        hg.addStretch(1)
+        v.addWidget(hdr)
+
+        # 可滚动行区
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setStyleSheet("QScrollArea { background: transparent; }")
+        body = QWidget()
+        body.setStyleSheet("background: transparent;")
+        self._body_lay = QVBoxLayout(body)
+        self._body_lay.setContentsMargins(0, 0, 0, 0)
+        self._body_lay.setSpacing(6)
+        scroll.setWidget(body)
+        v.addWidget(scroll, 1)
+
+        # 底部按钮
+        btns = QHBoxLayout()
+        btns.addStretch(1)
+        apply_btn = QPushButton("应用调整")
+        apply_btn.setStyleSheet(
+            f"background-color: {COLORS['accent_orange']}; color: white; "
+            f"border: none; border-radius: 4px; padding: 6px 18px; font-size: 13px;")
+        apply_btn.clicked.connect(self._on_apply)
+        cancel = QPushButton("取消")
+        cancel.setStyleSheet(
+            f"background-color: {COLORS['bg_panel']}; color: {COLORS['text_primary']}; "
+            f"border: 1px solid {COLORS['border']}; border-radius: 4px; "
+            f"padding: 6px 18px; font-size: 13px;")
+        cancel.clicked.connect(self.reject)
+        btns.addWidget(apply_btn)
+        btns.addWidget(cancel)
+        v.addLayout(btns)
+
+    def _collect_rows(self):
+        """扫描检测项列表，为每个数值型检测项生成一行（当前规格 + 推荐规格）。"""
+        owner = self._owner
+        table = getattr(owner, "_table", None)
+        if owner is None or table is None:
+            return
+        for r in range(table.rowCount()):
+            raw = owner._table_data[r] if r < len(owner._table_data) else None
+            if raw is None:
+                continue
+            name = str(raw[2] or "").strip()
+            cur_lo = _to_float(raw[6])
+            cur_hi = _to_float(raw[7])
+            val = _to_float(raw[4])
+            if not name or val is None or cur_lo is None or cur_hi is None:
+                continue
+            if cur_lo > cur_hi:
+                cur_lo, cur_hi = cur_hi, cur_lo
+            # 推荐规格：优先用分布样本分位数；样本不足时保持当前规格
+            note = ""
+            try:
+                samples = owner.get_distribution_samples(r)
+            except Exception:
+                samples = []
+            values = [float(v) for _, v in samples]
+            if len(values) >= 8:
+                p_lo = TargetParamDialog._pct(values, 0.5)
+                p_hi = TargetParamDialog._pct(values, 99.5)
+                margin = (p_hi - p_lo) * 0.10
+                sug_lo, sug_hi = p_lo - margin, p_hi + margin
+                note = f"{len(values)}"
+            else:
+                sug_lo, sug_hi = cur_lo, cur_hi
+                note = "不足"
+            # 小数位跟随当前规格字符串（最多 3 位），保证显示风格一致
+            s = str(raw[6])
+            dec = min(len(s.split(".")[-1]), 3) if "." in s else 0
+            sug_lo = round(sug_lo, dec)
+            sug_hi = round(sug_hi, dec)
+
+            row_w = QWidget()
+            row_w.setStyleSheet(
+                "QWidget { background-color: transparent; }")
+            rg = QHBoxLayout(row_w)
+            rg.setContentsMargins(8, 0, 8, 0)
+            rg.setSpacing(8)
+            chk = QCheckBox()
+            chk.setChecked(True)
+            chk.setStyleSheet(self._chk_style())
+            rg.addWidget(chk, 0)
+            lbl_code = self._fixed_label(str(raw[1]), 60)
+            lbl_name = self._fixed_label(name, 150)
+            lbl_cur = self._fixed_label(
+                f"{cur_lo:g} ~ {cur_hi:g} {raw[8]}", 170)
+            for w in (lbl_code, lbl_name, lbl_cur):
+                rg.addWidget(w, 0)
+            sp_lo = QDoubleSpinBox()
+            sp_hi = QDoubleSpinBox()
+            span = max(abs(cur_hi - cur_lo), 1.0)
+            for sp in (sp_lo, sp_hi):
+                sp.setDecimals(dec)
+                sp.setRange(-999999999.0, 999999999.0)
+                sp.setFixedHeight(24)
+                sp.setStyleSheet(self._spin_style())
+            sp_lo.setValue(sug_lo)
+            sp_hi.setValue(sug_hi)
+            sp_lo.setMinimumWidth(80)
+            sp_hi.setMinimumWidth(80)
+            rg.addWidget(sp_lo, 0)
+            rg.addWidget(QLabel("~"), 0)
+            rg.addWidget(sp_hi, 0)
+            lbl_note = self._fixed_label(note, 70)
+            lbl_note.setStyleSheet(
+                f"color: {COLORS['text_secondary']}; font-size: 11px;")
+            rg.addWidget(lbl_note, 0)
+            rg.addStretch(1)
+            self._body_lay.addWidget(row_w)
+            self._rows.append((r, chk, sp_lo, sp_hi))
+        if not self._rows:
+            empty = QLabel("当前没有可自动调整的数值型检测项")
+            empty.setStyleSheet(
+                f"color: {COLORS['text_secondary']}; font-size: 12px;")
+            empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            self._body_lay.addWidget(empty)
+        self._body_lay.addStretch(1)
+
+    @staticmethod
+    def _fixed_label(text, width):
+        lab = QLabel(str(text))
+        lab.setFixedWidth(width)
+        lab.setStyleSheet(f"color: {COLORS['text_primary']}; font-size: 11px;")
+        return lab
+
+    @staticmethod
+    def _chk_style():
+        return (
+            f"QCheckBox {{ color: {COLORS['text_primary']}; font-size: 11px; "
+            f"spacing: 4px; }}"
+            f"QCheckBox::indicator {{ width: 14px; height: 14px; "
+            f"border: 1px solid {COLORS['border']}; border-radius: 3px; "
+            f"background-color: {COLORS['bg_card']}; }}"
+            f"QCheckBox::indicator:checked {{ "
+            f"background-color: {COLORS['accent_orange']}; "
+            f"border-color: {COLORS['accent_orange']}; }}")
+
+    @staticmethod
+    def _spin_style():
+        return (
+            f"QDoubleSpinBox {{ color: {COLORS['text_primary']}; "
+            f"background-color: {COLORS['bg_card']}; "
+            f"border: 1px solid {COLORS['border']}; border-radius: 3px; "
+            f"padding: 2px 4px; font-size: 11px; }}"
+            f"QDoubleSpinBox:focus {{ border: 1px solid {COLORS['accent_blue']}; }}"
+            f"QDoubleSpinBox::up-button, QDoubleSpinBox::down-button {{ width: 14px; }}")
+
+    # -- 交互 ---------------------------------------------------------
+    def _on_toggle_all(self, on):
+        for _r, chk, _lo, _hi in self._rows:
+            chk.setChecked(on)
+
+    def _on_apply(self):
+        changes = []
+        for r, chk, sp_lo, sp_hi in self._rows:
+            if chk.isChecked():
+                lo, hi = sp_lo.value(), sp_hi.value()
+                if lo > hi:
+                    lo, hi = hi, lo
+                changes.append((r, lo, hi))
+        if not changes:
+            QMessageBox.information(self, "规格自动调整", "请先勾选需要调整的检测项。")
+            return
+        n = 0
+        try:
+            n = self._owner.apply_spec_adjust(changes)
+        except Exception as e:
+            import traceback
+            print("[SpecAutoAdjustDialog] 应用异常：", repr(e))
+            traceback.print_exc()
+        QMessageBox.information(
+            self, "规格自动调整",
+            f"已应用 {n} 个检测项的新规格上下限，并按新规格重新判定『检测结果』。")
+        self.accept()
 
 
 class DebugView(QWidget):
@@ -2669,7 +2980,7 @@ class DebugView(QWidget):
         # 「检测流程设计」子页面：与「产品目标搜索」同级、置于其左侧（第 0 个标签）。
         # 卡片内嵌区域宽高受限的拥挤问题由 flow_design 模块内解：
         # 工具箱可折叠 / 画布可缩放+自动布局 / 「⛶ 放大编辑」弹出大窗口（同一数据模型实时同步）。
-        from flow_design import FlowDesignPage
+        from flow_design import FlowDesignPage, _make_icon
         self._flow_page = FlowDesignPage(run_log=self._run_log)
 
         tabs = QTabWidget()
@@ -2935,6 +3246,7 @@ class DebugView(QWidget):
 
         # 检测项列表上方工具条（从左到右）：
         # 设置为默认 → 恢复至默认 → 恢复至出厂 → 单位设置 → 出料设置 → 全部同步
+        # → 规格自动调整（2026-10-20 新增：基于分布样本自动调整检测项规格上下限）
         # （「检测项全开/关」已移到「是否检测」列头右侧，与「良率预警设置」列头一致）
         self._detect_all_on = True    # 「检测项全开/关」初始为「全开」态
         self._yield_all_on = True     # 「预警全开/关」初始为「全开」态
@@ -2945,17 +3257,22 @@ class DebugView(QWidget):
             f"QPushButton {{ background-color: {COLORS['bg_card']}; color: {COLORS['text_primary']}; "
             f"border: 1px solid {COLORS['border']}; border-radius: 4px; padding: 2px 10px; font-size: 11px; }}"
             f"QPushButton:hover {{ background-color: {COLORS['bg_panel']}; }}")
+        # 2026-10-21 需求：本排按钮改为「图标 + 悬浮提示」显示，节省横向空间
         toolbar_defs = [
-            ("设置为默认", None),
-            ("恢复至默认", None),
-            ("恢复至出厂", None),
-            ("单位设置", None),
-            ("出料设置", None),
-            ("全部同步", None),
+            ("设置为默认", "default_set", None),
+            ("恢复至默认", "restore", None),
+            ("恢复至出厂", "factory", None),
+            ("单位设置", "unit", None),
+            ("出料设置", "output", None),
+            ("全部同步", "sync", None),
+            ("规格自动调整", "params", self._on_auto_spec_adjust),
         ]
-        for label, handler in toolbar_defs:
-            tb = QPushButton(label)
-            tb.setFixedHeight(28)
+        for label, icon_kind, handler in toolbar_defs:
+            tb = QPushButton()
+            tb.setIcon(_make_icon(icon_kind, COLORS['text_primary']))
+            tb.setIconSize(QSize(16, 16))
+            tb.setFixedSize(28, 28)
+            tb.setToolTip(label)
             tb.setStyleSheet(TOOLBAR_BTN)
             if handler is not None:
                 tb.clicked.connect(handler)
@@ -4009,6 +4326,48 @@ class DebugView(QWidget):
         self._yield_all_on = not self._yield_all_on
         self._set_toggle_btn(self._yield_all_btn, self._yield_all_on,
                              "全开", "全关")
+
+    # ---- 检测项规格上下限自动调整 -------------------------------------
+    def _on_auto_spec_adjust(self):
+        """「规格自动调整」按钮：打开规格上下限自动调整窗口。"""
+        dlg = SpecAutoAdjustDialog(self, self)
+        dlg.exec()
+
+    def apply_spec_adjust(self, changes):
+        """应用规格自动调整：把 [(row, new_lo, new_hi), ...] 写入『规格下限/上限』列
+        （同步底层数据与表格显示），并按新规格重新判定『检测结果』。返回成功条数。"""
+        table = getattr(self, "_table", None)
+        if table is None:
+            return 0
+        c_lo = self._col_by_header("规格下限")
+        c_hi = self._col_by_header("规格上限")
+        c_res = self._col_by_header("检测结果")
+        n = 0
+        for r, lo, hi in changes:
+            if not (0 <= r < len(self._table_data)):
+                continue
+            if lo is None or hi is None or lo > hi:
+                continue
+            # 同步底层数据（raw[6]=规格下限 raw[7]=规格上限）
+            self._table_data[r][6] = str(lo)
+            self._table_data[r][7] = str(hi)
+            for c, v in ((c_lo, lo), (c_hi, hi)):
+                if c >= 0:
+                    it = table.item(r, c)
+                    if it is not None:
+                        it.setText(str(v))
+            # 按新规格重新判定『检测结果』
+            chk = self._row_checks.get(r)
+            checked = bool(chk.is_on()) if chk else True
+            result = self._judge_result(
+                checked, self._table_data[r][4], lo, hi)
+            if c_res >= 0:
+                res_item = table.item(r, c_res)
+                if res_item is not None:
+                    res_item.setText(result)
+                    self._apply_result_color(res_item, result)
+            n += 1
+        return n
 
     def _judge_result(self, checked, new_val, lo, hi):
         """依据检测值相对规格上下限的实际结果判定 OK / NG / 待定。"""

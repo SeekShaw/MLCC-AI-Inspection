@@ -14,12 +14,14 @@ import math
 import uuid
 
 from PyQt6.QtCore import (
-    Qt, QPointF, QRectF, QObject, pyqtSignal, QEvent, QSize)
+    Qt, QPointF, QRectF, QObject, pyqtSignal, QEvent, QSize, QPoint, QTimer)
 from PyQt6.QtGui import (
-    QColor, QFont, QPainter, QPen, QPainterPath, QPolygonF, QIcon, QPixmap)
+    QColor, QFont, QPainter, QPen, QPainterPath, QPolygonF, QIcon, QPixmap,
+    QCursor)
 from PyQt6.QtWidgets import (
     QWidget, QLabel, QPushButton, QVBoxLayout, QHBoxLayout, QScrollArea,
-    QLineEdit, QDialog, QSizePolicy)
+    QLineEdit, QDialog, QSizePolicy, QDoubleSpinBox, QProgressBar, QFrame,
+    QCheckBox, QMenu, QLayout)
 
 from styles import COLORS
 
@@ -146,6 +148,54 @@ def _draw_glyph(p, kind, x, y, w, h):
         p.drawRect(QRectF(x + w * m, y + h * m, w * 0.56, h * 0.56))
         _L(x + w * 0.40, y + h * 0.60, x + w * 0.60, y + h * 0.40)
         _arrow_head(x + w * 0.60, y + h * 0.40, 0.7, -0.7)
+    elif kind == "params":                   # 调节滑杆（算法参数）
+        for i, fy in enumerate((0.28, 0.50, 0.72)):
+            yy = y + h * fy
+            _L(x + w * 0.14, yy, x + w * 0.86, yy)
+            kx = x + w * (0.62 if i != 1 else 0.34)
+            p.drawEllipse(QPointF(kx, yy), w * 0.09, h * 0.09)
+    elif kind == "timing":                   # 时钟（算法耗时）
+        cx, cy, r = x + w * 0.5, y + h * 0.5, w * 0.36
+        p.drawEllipse(QPointF(cx, cy), r, r)
+        _L(cx, cy, cx, cy - r * 0.62)
+        _L(cx, cy, cx + r * 0.48, cy + r * 0.28)
+    elif kind == "io":                       # 双向箭头（输入输出）
+        yy1, yy2 = y + h * 0.32, y + h * 0.68
+        _L(x + w * 0.12, yy1, x + w * 0.88, yy1)
+        _arrow_head(x + w * 0.88, yy1, 1, 0)
+        _L(x + w * 0.88, yy2, x + w * 0.12, yy2)
+        _arrow_head(x + w * 0.12, yy2, -1, 0)
+    elif kind == "default_set":              # 下箭头 + 底线（设为默认）
+        cx = x + w * 0.5
+        _L(cx, y + h * 0.18, cx, y + h * 0.60)
+        _arrow_head(cx, y + h * 0.60, 0, 1)
+        _L(x + w * 0.18, y + h * 0.82, x + w * 0.82, y + h * 0.82)
+    elif kind == "restore":                  # 逆时针回环箭头（恢复至默认）
+        cx, cy, r = x + w * 0.5, y + h * 0.5, w * 0.34
+        p.drawArc(QRectF(cx - r, cy - r, r * 2, r * 2), 90 * 16, 270 * 16)
+        _arrow_head(cx - r * 0.02, cy - r, -0.9, -0.4)
+    elif kind == "factory":                  # 方箱 + 内部下箭头（恢复至出厂）
+        p.drawRect(QRectF(x + w * 0.2, y + h * 0.2, w * 0.6, h * 0.6))
+        cx = x + w * 0.5
+        _L(cx, y + h * 0.32, cx, y + h * 0.62)
+        _arrow_head(cx, y + h * 0.62, 0, 1)
+    elif kind == "unit":                     # 直尺（单位设置）
+        p.drawRect(QRectF(x + w * 0.12, y + h * 0.3, w * 0.76, h * 0.4))
+        for fx in (0.3, 0.5, 0.7):
+            _L(x + w * fx, y + h * 0.3, x + w * fx, y + h * 0.46)
+    elif kind == "output":                   # 方箱 + 外向箭头（出料设置）
+        p.drawPolyline(QPointF(x + w * 0.55, y + h * 0.2),
+                       QPointF(x + w * 0.2, y + h * 0.2),
+                       QPointF(x + w * 0.2, y + h * 0.8),
+                       QPointF(x + w * 0.55, y + h * 0.8))
+        _L(x + w * 0.42, y + h * 0.5, x + w * 0.86, y + h * 0.5)
+        _arrow_head(x + w * 0.86, y + h * 0.5, 1, 0)
+    elif kind == "sync":                     # 双循环箭头（全部同步）
+        cx, cy, r = x + w * 0.5, y + h * 0.5, w * 0.34
+        p.drawArc(QRectF(cx - r, cy - r, r * 2, r * 2), 30 * 16, 140 * 16)
+        p.drawArc(QRectF(cx - r, cy - r, r * 2, r * 2), 210 * 16, 140 * 16)
+        _arrow_head(cx + r * 0.62, cy - r * 0.62, 0.8, 0.6)
+        _arrow_head(cx - r * 0.62, cy + r * 0.62, -0.8, -0.6)
 
 
 def _make_icon(kind, color="#4261FF"):
@@ -245,6 +295,24 @@ class FlowDocument(QObject):
                        if e["src"] != nid and e["dst"] != nid]
         self.changed.emit()
 
+    def remove_edges_around(self, nid, incoming=False, outgoing=False):
+        """删除与节点相连的连线：incoming=前置（上游→本节点），outgoing=后置。
+
+        返回删除的条数；无可删连线时不入撤销栈（右键菜单里对应项
+        已按有无连线禁用，这里兜底）。
+        """
+        if not nid:
+            return 0
+        hits = [e for e in self._edges
+                if (incoming and e["dst"] == nid)
+                or (outgoing and e["src"] == nid)]
+        if not hits:
+            return 0
+        self._push()
+        self._edges = [e for e in self._edges if e not in hits]
+        self.changed.emit()
+        return len(hits)
+
     def connect(self, src, dst):
         """从 src 输出端连到 dst 输入端；自连/重复连线被拒绝。"""
         if src == dst or self.node(src) is None or self.node(dst) is None:
@@ -289,6 +357,12 @@ class FlowCanvas(QWidget):
     """流程编辑画布（可缩放/平移，支持节点拖动、连线、Del 删除、Ctrl+Z 撤销）。"""
 
     NODE_W, NODE_H = 176, 62
+
+    # 选中节点变化：参数为节点 id（取消选中/点空白时为空串），供右侧
+    # 「算法参数 / 算法耗时」浮窗实时跟随当前选中算子刷新内容。
+    selection_changed = pyqtSignal(str)
+    # 画布尺寸变化（右侧浮窗需夹取回可视范围）
+    canvas_resized = pyqtSignal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -354,6 +428,15 @@ class FlowCanvas(QWidget):
         self._scale = max(0.4, min(2.5, s))
         self.update()
 
+    def _zoom_at(self, sx, sy, factor):
+        """以光标处为锚点缩放：锚点下的世界坐标保持不动（滚轮缩放用）。"""
+        wx, wy = self._to_world(sx, sy)
+        self._set_scale(self._scale * factor)
+        nx, ny = self._to_world(sx, sy)      # 新缩放下同一屏幕点的世界坐标
+        self._offset = QPointF(self._offset.x() + (nx - wx) * self._scale,
+                               self._offset.y() + (ny - wy) * self._scale)
+        self.update()
+
     def fit(self):
         """「适应」：把全部节点缩放居中到可视区。"""
         if self._doc is None or not self._doc.node_count():
@@ -388,36 +471,121 @@ class FlowCanvas(QWidget):
     def _hit_input(self, wx, wy):
         for n in reversed(self._doc.nodes() if self._doc else []):
             px, py = self._input_port_w(n)
-            if (px - wx) ** 2 + (py - wy) ** 2 <= 14 ** 2:
+            if (px - wx) ** 2 + (py - wy) ** 2 <= 18 ** 2:
                 return n
         return None
 
     def _at_output(self, n, wx, wy):
         px, py = self._output_port_w(n)
-        return (px - wx) ** 2 + (py - wy) ** 2 <= 10 ** 2
+        return (px - wx) ** 2 + (py - wy) ** 2 <= 16 ** 2
+
+    def _hit_output(self, wx, wy):
+        for n in reversed(self._doc.nodes() if self._doc else []):
+            if self._at_output(n, wx, wy):
+                return n
+        return None
 
     # ---- 鼠标 ----
     def mousePressEvent(self, event):
-        if self._doc is None or event.button() != Qt.MouseButton.LeftButton:
+        if self._doc is None:
             return
         sx, sy = event.position().x(), event.position().y()
         wx, wy = self._to_world(sx, sy)
-        n = self._hit_node(wx, wy)
-        if n is not None and self._at_output(n, wx, wy):
-            self._drag = ("link", n["id"])
+        # ⚠️ 2026-10-21 需求：左键=连线、右键=拖动算子（原先都用左键，
+        # 按输出/输入圆点经常变成拖走算子，连线难操作）。右键命中算子：
+        # 选中并开始拖动；松开时若几乎未移动则视为右键单击，弹算子菜单。
+        if event.button() == Qt.MouseButton.RightButton:
+            n = self._hit_node(wx, wy)
+            if n is not None:
+                self._select(n["id"])
+                self._drag = ("node", n["id"], wx - n["x"], wy - n["y"],
+                              False, True, wx, wy)
+                self.setFocus()
+            return
+        if event.button() != Qt.MouseButton.LeftButton:
+            return
+        # ⚠️ 端口判定必须先于节点体命中：端口圆心恰在节点矩形底/顶边上，
+        # QRectF.contains 不含边界，先查节点体会漏掉正点圆心的情形
+        # （实测正点圆心会掉进平移分支，连线无法起始）。
+        src = self._hit_output(wx, wy)
+        if src is not None:
+            self._drag = ("link", src["id"])        # 从输出端起线 → 目标
             self._link_cur = QPointF(wx, wy)
             self.setFocus()
             self.update()
             return
-        if n is not None:
-            self._selected = n["id"]
-            self._drag = ("node", n["id"], wx - n["x"], wy - n["y"], False)
+        dst = self._hit_input(wx, wy)
+        if dst is not None:
+            self._drag = ("link_rev", dst["id"])    # 从输入端反向起线 → 来源
+            self._link_cur = QPointF(wx, wy)
             self.setFocus()
             self.update()
             return
-        self._selected = None
+        n = self._hit_node(wx, wy)
+        if n is not None:
+            # 左键按在算子上：仅选中（位置拖动已让给右键），不启动平移
+            self._select(n["id"])
+            self.setFocus()
+            return
+        self._select(None)
         self._drag = ("pan", sx, sy, self._offset.x(), self._offset.y())
+
+    def _select(self, nid):
+        """设置当前选中算子（变化时发出 selection_changed，右侧浮窗随之刷新）。"""
+        prev = self._selected
+        self._selected = nid
         self.update()
+        if prev != nid:
+            self.selection_changed.emit(nid or "")
+
+    def _open_node_menu(self, gpos, nid):
+        """右键菜单：删除该算子 / 删除前置（入）连线 / 删除后置（出）连线。"""
+        menu = QMenu(self)
+        menu.setStyleSheet(
+            f"QMenu{{background-color:{COLORS['bg_panel']}; "
+            f"color:{COLORS['text_primary']}; border:1px solid {COLORS['border']}; "
+            f"padding:4px;}}"
+            f"QMenu::item{{padding:5px 18px; border-radius:3px;}}"
+            f"QMenu::item:selected{{background-color:{COLORS['accent_blue']}; color:white;}}")
+        edges = self._doc.edges() if self._doc is not None else []
+        has_in = any(e["dst"] == nid for e in edges)
+        has_out = any(e["src"] == nid for e in edges)
+        # 2026-10-21 需求：选中算子后右键可单独删除其前/后置连线
+        m_in = menu.addAction("删除前置节点连线")
+        m_in.setEnabled(has_in)
+        m_in.triggered.connect(
+            lambda: self._remove_edges(nid, incoming=True, outgoing=False))
+        m_out = menu.addAction("删除后置节点连线")
+        m_out.setEnabled(has_out)
+        m_out.triggered.connect(
+            lambda: self._remove_edges(nid, incoming=False, outgoing=True))
+        menu.addSeparator()
+        menu.addAction("删除").triggered.connect(lambda: self._remove_node(nid))
+        menu.exec(gpos)
+
+    def _remove_edges(self, nid, incoming=False, outgoing=False):
+        """删除算子的前/后置连线（右键菜单入口，文档层带撤销）。"""
+        if self._doc is None or not nid:
+            return
+        self._doc.remove_edges_around(nid, incoming=incoming, outgoing=outgoing)
+
+    def _remove_node(self, nid):
+        """删除算子及其连线，并清空选中（Delete 键复用同一入口）。"""
+        if self._doc is None or not nid:
+            return
+        self._doc.remove_node(nid)
+        if self._selected == nid:
+            self._select(None)
+
+    def selected_node(self):
+        """当前选中节点的数据 dict（含 name/cat/ms 等）；未选中返回 None。"""
+        if self._doc is None or not self._selected:
+            return None
+        return self._doc.node(self._selected)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self.canvas_resized.emit()
 
     def mouseMoveEvent(self, event):
         if self._drag is None or self._doc is None:
@@ -425,11 +593,11 @@ class FlowCanvas(QWidget):
         sx, sy = event.position().x(), event.position().y()
         kind = self._drag[0]
         if kind == "node":
-            _, nid, gx, gy, pushed = self._drag
+            _, nid, gx, gy, pushed, _from_right, _wx0, _wy0 = self._drag
             if not pushed:
                 self._doc.begin_move()          # 拖动开始压一次快照
                 pushed = True
-            self._drag = ("node", nid, gx, gy, pushed)
+            self._drag = ("node", nid, gx, gy, pushed, _from_right, _wx0, _wy0)
             wx, wy = self._to_world(sx, sy)
             self._doc.move_node(nid, wx - gx, wy - gy)
         elif kind == "pan":
@@ -444,33 +612,48 @@ class FlowCanvas(QWidget):
     def mouseReleaseEvent(self, event):
         if self._drag is None:
             return
-        if self._drag[0] == "link" and self._doc is not None:
-            sx, sy = event.position().x(), event.position().y()
-            wx, wy = self._to_world(sx, sy)
-            tgt = self._hit_input(wx, wy)
+        kind = self._drag[0]
+        sx, sy = event.position().x(), event.position().y()
+        wx, wy = self._to_world(sx, sy)
+        if kind == "node":
+            _, nid, _gx, _gy, _pushed, from_right, wx0, wy0 = self._drag
+            if from_right and abs(wx - wx0) + abs(wy - wy0) < 3:
+                # 右键几乎未拖动 → 视为单击：弹出算子菜单（删除算子/连线）
+                self._open_node_menu(event.globalPosition().toPoint(), nid)
+        elif kind == "link" and self._doc is not None:
+            # 落点放宽：命中输入圆点或目标算子任意位置均可建立连线
+            tgt = self._hit_input(wx, wy) or self._hit_node(wx, wy)
             if tgt is not None and tgt["id"] != self._drag[1]:
                 self._doc.connect(self._drag[1], tgt["id"])
+        elif kind == "link_rev" and self._doc is not None:
+            src = self._hit_output(wx, wy) or self._hit_node(wx, wy)
+            if src is not None and src["id"] != self._drag[1]:
+                self._doc.connect(src["id"], self._drag[1])
         self._drag = None
         self._link_cur = None
         self.update()
 
     def wheelEvent(self, event):
-        if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
-            self._set_scale(self._scale * (1.12 if event.angleDelta().y() > 0
-                                           else 1 / 1.12))
-        else:
-            d = event.angleDelta()
+        """滚轮：默认以光标为锚点缩放画布；Shift+滚轮保留平移。"""
+        d = event.angleDelta()
+        step = d.y() if d.y() != 0 else d.x()
+        if step == 0:
+            return
+        if event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
             self._offset = QPointF(self._offset.x() + d.x() / 2,
                                    self._offset.y() + d.y() / 2)
             self.update()
+        else:
+            self._zoom_at(event.position().x(), event.position().y(),
+                          1.12 if step > 0 else 1 / 1.12)
+        event.accept()
 
     def keyPressEvent(self, event):
         if self._doc is None:
             return
         k = event.key()
         if k in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace) and self._selected:
-            self._doc.remove_node(self._selected)
-            self._selected = None
+            self._remove_node(self._selected)
         elif k == Qt.Key.Key_Z and (event.modifiers() & Qt.KeyboardModifier.ControlModifier):
             if event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
                 self._doc.redo()
@@ -491,7 +674,7 @@ class FlowCanvas(QWidget):
             return
         for e in self._doc.edges():
             self._draw_edge(p, e)
-        if self._drag is not None and self._drag[0] == "link":
+        if self._drag is not None and self._drag[0] in ("link", "link_rev"):
             self._draw_temp_link(p)
         for n in self._doc.nodes():
             self._draw_node(p, n)
@@ -543,10 +726,13 @@ class FlowCanvas(QWidget):
         p.restore()
 
     def _draw_temp_link(self, p):
-        src = self._doc.node(self._drag[1])
-        if src is None:
+        node = self._doc.node(self._drag[1])
+        if node is None:
             return
-        s = self._to_screen(*self._output_port_w(src))
+        if self._drag[0] == "link":
+            s = self._to_screen(*self._output_port_w(node))
+        else:   # link_rev：从本算子输入端反向拉到来源
+            s = self._to_screen(*self._input_port_w(node))
         t = self._to_screen(self._link_cur.x(), self._link_cur.y())
         p.setPen(QPen(QColor("#4261FF"), 2, Qt.PenStyle.DashLine))
         p.drawLine(s, t)
@@ -612,9 +798,10 @@ class FlowCanvas(QWidget):
 # 工具箱：搜索框 + 可折叠分类（双击算子添加到画布）
 # ---------------------------------------------------------------------------
 class FlowToolBox(QWidget):
-    """流程算子工具箱：搜索过滤 + 分类折叠 + 双击添加。"""
+    """流程算子工具箱：搜索过滤 + 分类折叠 + 双击添加 + 整栏折叠。"""
 
     add_requested = pyqtSignal(str, str)   # (分类, 算子名)
+    collapsed_changed = pyqtSignal(bool)   # 整栏折叠状态变化（True=已折叠）
 
     ITEM_H = 22
 
@@ -624,12 +811,33 @@ class FlowToolBox(QWidget):
         v.setContentsMargins(0, 0, 0, 0)
         v.setSpacing(6)
 
+        # 搜索行：搜索框 + 折叠按钮（按钮在搜索框右侧，收起后仅留此按钮）
+        self._collapsed = False
+        search_row = QHBoxLayout()
+        search_row.setContentsMargins(0, 0, 0, 0)
+        search_row.setSpacing(4)
         self._search = QLineEdit()
         self._search.setPlaceholderText("搜索算子")
         self._search.setFixedHeight(26)
         self._search.setClearButtonEnabled(True)
         self._search.textChanged.connect(self._refilter)
-        v.addWidget(self._search)
+        search_row.addWidget(self._search, 1)
+        self._btn_fold = QPushButton("«")
+        self._btn_fold.setFixedSize(22, 26)
+        self._btn_fold.setToolTip("折叠算子工具箱")
+        self._btn_fold.setCursor(Qt.CursorShape.PointingHandCursor)
+        # ⚠️ 2026-10-21 需求：原样式（bg_card 底 + 次要文字色）对比度太低，
+        # 图标几乎看不见。改白字加粗 + 明显描边，悬停反蓝底。
+        self._btn_fold.setStyleSheet(
+            f"QPushButton{{background-color:{COLORS['bg_card']}; "
+            f"color:{COLORS['text_primary']}; "
+            f"border:1px solid {COLORS['text_secondary']}; "
+            f"border-radius:3px; font-size:14px; font-weight:bold;}}"
+            f"QPushButton:hover{{background-color:{COLORS['accent_blue']}; "
+            f"color:white; border-color:{COLORS['accent_blue']};}}")
+        self._btn_fold.clicked.connect(self._toggle_collapse)
+        search_row.addWidget(self._btn_fold)
+        v.addLayout(search_row)
 
         self._scroll = QScrollArea()
         self._scroll.setWidgetResizable(True)
@@ -646,7 +854,29 @@ class FlowToolBox(QWidget):
         self._scroll.setWidget(inner)
         v.addWidget(self._scroll, 1)
 
+    def _toggle_collapse(self):
+        """整栏折叠/展开：收起后仅留展开按钮窄条，画布吃满剩余宽度。
+
+        ⚠️ 2026-10-21 需求：恢复工具箱折叠能力，按钮固定在搜索框右侧；
+        收起时搜索框/分类列表一并隐藏，只保留 « / » 按钮本身。
+        """
+        self._collapsed = not self._collapsed
+        self._btn_fold.setText("»" if self._collapsed else "«")
+        self._btn_fold.setToolTip("展开算子工具箱" if self._collapsed
+                                  else "折叠算子工具箱")
+        self._search.setVisible(not self._collapsed)
+        self._scroll.setVisible(not self._collapsed)
+        self.collapsed_changed.emit(self._collapsed)
+
+    def is_collapsed(self):
+        return self._collapsed
+
     def _build_section(self, cat, count):
+        # 分类整体容器：头部行 + 子项容器（子项随分类在树内向下展开）
+        sec = QWidget()
+        sv = QVBoxLayout(sec)
+        sv.setContentsMargins(0, 0, 0, 0)
+        sv.setSpacing(2)
         head = QWidget()
         hl = QHBoxLayout(head)
         hl.setContentsMargins(2, 2, 2, 2)
@@ -673,6 +903,14 @@ class FlowToolBox(QWidget):
         hl.addWidget(cnt)
         head.setCursor(Qt.CursorShape.PointingHandCursor)
         head.installEventFilter(self)
+        sv.addWidget(head)
+        # 子项容器：⚠️ 2026-10-20 修复——此前子项行 QLabel 既没有 parent 也没有
+        # 加入任何布局，点击分类 setVisible(True) 后被 Qt 当作顶层窗口，弹成
+        # 一个个带系统标题栏的独立小窗。现统一放入随分类折叠的 body 容器。
+        body = QWidget()
+        bl = QVBoxLayout(body)
+        bl.setContentsMargins(0, 0, 0, 0)
+        bl.setSpacing(1)
         rows = []
         for item in toolbox_items(cat, count):
             row = QLabel(f"    {item}")
@@ -681,13 +919,15 @@ class FlowToolBox(QWidget):
             row.setStyleSheet(
                 f"color:{COLORS['text_secondary']}; font-size:11px;"
                 f"background-color:transparent; border-radius:3px; padding-left:6px;")
-            row.setVisible(False)
             row.installEventFilter(self)
+            bl.addWidget(row)
             rows.append(row)
-        self._section_rows[cat] = {"arrow": arrow, "rows": rows,
+        body.setVisible(False)
+        sv.addWidget(body)
+        self._section_rows[cat] = {"arrow": arrow, "rows": rows, "body": body,
                                    "count": count, "head": head,
                                    "open": False}
-        return head
+        return sec
 
     def eventFilter(self, obj, event):
         if event.type() == QEvent.Type.MouseButtonDblClick:
@@ -706,6 +946,7 @@ class FlowToolBox(QWidget):
         info = self._section_rows[cat]
         info["open"] = not info["open"]
         info["arrow"].setText("▼" if info["open"] else "▶")
+        info["body"].setVisible(info["open"])
         for r in info["rows"]:
             r.setVisible(info["open"] and self._match(r, self._search.text()))
 
@@ -718,12 +959,14 @@ class FlowToolBox(QWidget):
 
     def _refilter(self, text):
         for cat, info in self._section_rows.items():
+            open_now = info["open"] or bool(text)
             any_match = False
             for r in info["rows"]:
                 m = self._match(r, text)
-                r.setVisible(m and (info["open"] or bool(text)))
+                r.setVisible(m and open_now)
                 any_match = any_match or m
             info["head"].setVisible(any_match)
+            info["body"].setVisible(open_now and any_match)
             if text:
                 info["arrow"].setText("▼")
                 info["open"] = True
@@ -735,6 +978,112 @@ class FlowToolBox(QWidget):
 # ---------------------------------------------------------------------------
 # 子页面：工具箱 + 画布 + 工具栏（内嵌 / 大窗口两种宿主）
 # ---------------------------------------------------------------------------
+# 右侧「算法参数」子面板的示例参数模板：(名称, 默认值, 最小, 最大, 单位, 小数位)。
+# 真实引擎接入时，把模板替换为按算子实际算法的参数表即可（UI 无需改动）。
+SIDE_PARAM_TPL = {
+    "图像源": [("曝光时间", 5000, 100, 1000000, "μs", 0),
+               ("模拟增益", 6.0, 0.0, 24.0, "dB", 1)],
+    "图像预处理": [("二值化阈值", 128, 0, 255, "", 0),
+                  ("高斯核大小", 3, 1, 31, "px", 0)],
+    "图像分割": [("分割阈值", 60, 0, 255, "", 0),
+                ("最小面积", 200, 1, 100000, "px²", 0)],
+    "区域处理": [("腐蚀核大小", 3, 1, 31, "px", 0),
+                ("迭代次数", 1, 1, 20, "", 0)],
+    "几何生成": [("采样点数", 64, 2, 1024, "", 0)],
+    "模板匹配": [("匹配阈值", 70, 0, 100, "%", 0),
+                ("匹配数量", 1, 1, 32, "", 0),
+                ("搜索角度", 15.0, 0.0, 180.0, "°", 1)],
+    "测量": [("卡尺数量", 8, 1, 64, "", 0),
+             ("搜索长度", 40, 1, 500, "px", 0),
+             ("边缘极性", 0, 0, 2, "（0=任意）", 0)],
+    "灰度特征": [("ROI 缩放", 1.0, 0.1, 4.0, "x", 1)],
+    "形状特征": [("最小面积", 100, 1, 100000, "px²", 0),
+                ("最大面积", 50000, 1, 1000000, "px²", 0)],
+    "轮廓处理": [("轮廓逼近精度", 1.5, 0.1, 10.0, "px", 1)],
+    "结果输出": [("输出通道", 1, 1, 8, "", 0)],
+    "设备通讯": [("超时时间", 200, 10, 5000, "ms", 0),
+                ("重试次数", 3, 0, 20, "", 0)],
+    "流程逻辑": [("循环次数", 1, 1, 100, "", 0)],
+}
+SIDE_PARAM_DEFAULT = [("执行使能", 1, 0, 1, "", 0),
+                      ("超时时间", 200, 10, 5000, "ms", 0),
+                      ("匹配阈值", 70, 0, 100, "%", 0)]
+
+# 右侧「算法耗时」子面板的耗时分解模板：(阶段名, 占比)。总耗时取节点真实 ms 值。
+SIDE_TIME_STAGES = [("图像采集", 0.20), ("预处理", 0.15),
+                    ("核心计算", 0.50), ("结果输出", 0.15)]
+
+# 浮窗：宽度 280；高度默认 = 上限 FLOAT_MAX_H，且不超出所在画布；
+# 内容超出窗口高度时由滚动条翻页。
+FLOAT_W = 280
+FLOAT_MAX_H = 280      # 默认高度 = 上限（2026-10-21 需求：约 280px）
+FLOAT_MIN_H = 120
+# 浮窗内容区滚动条样式（两个浮窗共用）
+FLOAT_SCROLL_CSS = (
+    "QScrollArea{border:none; background:transparent;}"
+    "QScrollBar:vertical{background:transparent; width:6px; margin:0;}"
+    "QScrollBar::handle:vertical{background:%s; border-radius:3px; min-height:24px;}"
+    "QScrollBar::add-line:vertical,QScrollBar::sub-line:vertical{height:0;}"
+    "QScrollBar::add-page:vertical,QScrollBar::sub-page:vertical{background:transparent;}"
+    % COLORS['border'])
+
+
+def _float_y_range(panel):
+    """浮窗可停留的 y 区间：完整落在画布内即可（不按上/下半区限制）。
+
+    浮窗高度上限 FLOAT_MAX_H（280），在放大编辑窗口 / 内嵌卡片中都可能
+    超过画布半高，故不再按半区限制，改为保证窗口完整可见；上/下半区的
+    视觉分隔由分隔线与蓝窗底边对齐（_sync_divider）承担。
+    """
+    par = panel.parentWidget()
+    if par is None:
+        return 0, 0
+    return 0, max(0, par.height() - panel.height())
+
+
+class _FloatDragHandler(QObject):
+    """浮窗标题栏拖拽处理器（独立 QObject 事件过滤器，Qt 标准做法）。
+
+    ⚠️ 经验教训（2026-10-20）：事件过滤器内抛出任何异常（哪怕是枚举名
+    笔误的 AttributeError）都会让 PyQt 对整个进程 qFatal（退出码
+    0xC0000409、无 Python 回溯），表现为『构造界面时莫名硬崩溃』。
+    过滤器内务必只做安全操作，或用 try/except 兜底。
+    """
+
+    def __init__(self, panel, on_move=None):
+        super().__init__(panel)
+        self._panel = panel
+        self._on_move = on_move      # 拖动后的联动回调（如分隔线对齐）
+        self._off = None
+
+    def eventFilter(self, obj, event):
+        t = event.type()
+        if t == QEvent.Type.MouseButtonPress:
+            gp = QCursor.pos()
+            self._off = gp - self._panel.mapToGlobal(QPoint(0, 0))
+            self._panel.raise_()
+            return True
+        if t == QEvent.Type.MouseButtonRelease:
+            self._off = None
+            return True
+        if t == QEvent.Type.MouseMove and self._off is not None:
+            par = self._panel.parentWidget()
+            if par is not None:
+                gp = QCursor.pos() - self._off - par.mapToGlobal(QPoint(0, 0))
+                lo, hi = _float_y_range(self._panel)
+                self._panel.move(
+                    max(0, min(gp.x(), max(0, par.width() - self._panel.width()))),
+                    max(lo, min(gp.y(), hi)))
+                if self._on_move is not None:
+                    # ⚠️ 过滤器内严禁让异常逃逸（qFatal 硬崩溃，见类注释）
+                    try:
+                        self._on_move(self._panel)
+                    except Exception:
+                        pass
+            return True
+        return False
+
+
 class FlowDesignPage(QWidget):
     """检测流程设计页（内嵌于卡片标签页，或被「放大编辑」大窗口承载）。"""
 
@@ -743,10 +1092,22 @@ class FlowDesignPage(QWidget):
         self._run_log = run_log
         self._embedded = embedded
         self._dlg = None
+        self._side_mode = None    # 蓝窗当前模式：None / "params" / "timing"
         self.document = document or FlowDocument()
         self.document.changed.connect(self._on_doc_changed)
         self._build_ui()
         self._seed_demo()
+
+    def minimumSizeHint(self):
+        # 嵌入调试页 QTabWidget 时，不把自身最小尺寸传导给外层卡片：
+        # 实测会把标签卡最小宽从 564 撑到 908，进而挤压左侧相机卡片区、
+        # 改变整行卡片间距（用户反馈：卡片间隙不合理）。置 0 后卡片布局
+        # 与各卡尺寸恢复到加入「检测流程设计」之前的样式；本页在窄卡片中
+        # 的拥挤由可折叠工具箱 / 画布缩放 / 「放大编辑」大窗口消化。
+        return QSize(0, 0)
+
+    def sizeHint(self):
+        return QSize(0, 0)
 
     # ---- UI ----
     def _build_ui(self):
@@ -757,7 +1118,9 @@ class FlowDesignPage(QWidget):
         # 工具栏：提示语 + 视图操作
         bar = QHBoxLayout()
         bar.setSpacing(4)
-        hint = QLabel("插入算子：双击左侧工具箱项；拖动节点底部输出端到目标顶部输入端建立连线")
+        hint = QLabel("插入算子：双击左侧工具箱项；左键从算子输出/输入圆点拖出建立连线；"
+                      "右键拖动算子位置，右键单击弹菜单（删除算子 / 前-后置连线）；"
+                      "滚轮缩放画布（Shift+滚轮平移）")
         hint.setStyleSheet(f"color:{COLORS['text_secondary']}; font-size:11px;")
         bar.addWidget(hint)
         bar.addStretch(1)
@@ -797,29 +1160,73 @@ class FlowDesignPage(QWidget):
         body.setSpacing(6)
         self.toolbox = FlowToolBox()
         self.toolbox.add_requested.connect(self._on_tool_add)
+        # 折叠联动：收起时整栏缩成 30px 窄条（仅展开按钮），展开时恢复
+        self.toolbox.collapsed_changed.connect(self._on_toolbox_collapsed)
         self._toolbox_holder = QWidget()
         tv = QVBoxLayout(self._toolbox_holder)
         tv.setContentsMargins(0, 0, 0, 0)
         tv.addWidget(self.toolbox)
-        self._toolbox_holder.setFixedWidth(170)
+        # 2026-10-21 需求：工具箱整栏宽度自适应收窄一些（原 170 → 152，
+        # 搜索框占满减去右侧折叠按钮）
+        self._toolbox_holder.setFixedWidth(152)
         body.addWidget(self._toolbox_holder)
-
-        self._btn_collapse = QPushButton("«")
-        self._btn_collapse.setFixedSize(18, 44)
-        self._btn_collapse.setToolTip("折叠 / 展开工具箱")
-        self._btn_collapse.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._btn_collapse.setStyleSheet(
-            f"QPushButton{{background-color:{COLORS['bg_panel']}; color:{COLORS['text_secondary']}; "
-            f"border:1px solid {COLORS['border']}; border-radius:4px;}}"
-            f"QPushButton:hover{{color:{COLORS['text_primary']};}}")
-        self._btn_collapse.clicked.connect(self.toggle_toolbox)
-        body.addWidget(self._btn_collapse, 0, Qt.AlignmentFlag.AlignTop)
 
         self.canvas = FlowCanvas()
         self.canvas.set_document(self.document)
         body.addWidget(self.canvas, 1)
-        v.addLayout(body, 1)
+        # 选中节点变化时，若右侧浮窗已展开则实时刷新内容
+        self.canvas.selection_changed.connect(self._on_selection_changed)
+        # 画布尺寸变化时把浮窗夹取回可视范围
+        self.canvas.canvas_resized.connect(self._clamp_float_panels)
 
+        # 右侧浮窗（以画布为父控件，悬浮于画布之上，可并存）：
+        # - 蓝窗：算法参数 / 算法耗时（两模式共用一窗，随竖向按钮切换）
+        # - 黄窗：输入输出设置
+        # 内容区由 _refresh_* 动态重建；窗口高度默认/上限 FLOAT_MAX_H
+        # （不超出画布），内容超出时由滚动条翻页
+        self._float_algo = self._make_float_panel("算法参数", "#4261FF",
+                                                  self._close_side_panel,
+                                                  side="top")
+        self._side_body = self._make_float_body(self._float_algo)
+        self._float_algo.setFixedSize(FLOAT_W, FLOAT_MAX_H)
+
+        self._float_io = self._make_float_panel("输入输出设置", "#E8A33D",
+                                                self._toggle_io_panel,
+                                                side="bottom")
+        self._io_body = self._make_float_body(self._float_io)
+        self._float_io.setFixedSize(FLOAT_W, FLOAT_MAX_H)
+        self._float_algo.hide()
+        self._float_io.hide()
+
+        # 最右侧竖向工具条（自上而下）：算法参数 / 算法耗时 ‖（分隔线）‖ 输入输出
+        self._side_tools = QWidget()
+        self._side_tools.setFixedWidth(40)
+        self._st = QVBoxLayout(self._side_tools)
+        self._st.setContentsMargins(2, 6, 2, 6)
+        self._st.setSpacing(8)
+        self._btn_params = self._make_side_btn("算法参数", "params")
+        self._btn_params.clicked.connect(lambda: self._toggle_side_panel("params"))
+        self._btn_timing = self._make_side_btn("算法耗时", "timing")
+        self._btn_timing.clicked.connect(lambda: self._toggle_side_panel("timing"))
+        self._st.addWidget(self._btn_params)
+        self._st.addWidget(self._btn_timing)
+        # 可变占位：把分隔线顶到上半区浮窗底边（见 _sync_divider），
+        # 其后的按钮随之下移，故分割线以下工具位置自动跟随。
+        self._divider_spacer = QWidget()
+        self._divider_spacer.setFixedHeight(0)
+        self._st.addWidget(self._divider_spacer)
+        divider = QFrame()
+        divider.setFixedHeight(2)
+        divider.setStyleSheet(f"background-color:{COLORS['accent_orange']};")
+        self._st.addWidget(divider)
+        self._divider = divider
+        self._btn_io = self._make_side_btn("输入输出", "io",
+                                           checked_bg=COLORS['accent_orange'])
+        self._btn_io.clicked.connect(self._toggle_io_panel)
+        self._st.addWidget(self._btn_io)
+        self._st.addStretch(1)
+        body.addWidget(self._side_tools)
+        v.addLayout(body, 1)
         self._fitted = False
 
     def _seed_demo(self):
@@ -838,6 +1245,11 @@ class FlowDesignPage(QWidget):
                                      cy - FlowCanvas.NODE_H / 2 + k * 14)
         self._log(f"流程设计：插入算子「{item}」（{cat}）")
 
+    def _on_toolbox_collapsed(self, collapsed):
+        """工具箱整栏折叠联动：收起缩成窄条（仅留展开按钮），展开恢复宽度。"""
+        self._toolbox_holder.setFixedWidth(30 if collapsed else 152)
+
+
     def _auto_layout(self):
         self.document.auto_layout()
         self.canvas.fit()
@@ -847,10 +1259,438 @@ class FlowDesignPage(QWidget):
         self._btn_undo.setEnabled(self.document.can_undo())
         self._btn_redo.setEnabled(self.document.can_redo())
 
-    def toggle_toolbox(self):
-        vis = not self._toolbox_holder.isVisible()
-        self._toolbox_holder.setVisible(vis)
-        self._btn_collapse.setText("«" if vis else "»")
+    # ---- 右侧竖向工具条与浮窗 ----
+    def _make_side_btn(self, text, icon_kind, checked_bg=None):
+        """竖向工具条按钮：图标 + 悬浮提示，可勾选表示浮窗展开态。"""
+        cb = checked_bg or COLORS['accent_blue']
+        b = QPushButton()
+        b.setIcon(_make_icon(icon_kind, COLORS['text_secondary']))
+        b.setIconSize(QSize(18, 18))
+        b.setFixedSize(34, 34)
+        b.setCheckable(True)
+        b.setToolTip(f"{text}（点击在画布上展开 / 收起浮窗）")
+        b.setCursor(Qt.CursorShape.PointingHandCursor)
+        b.setStyleSheet(
+            f"QPushButton{{background-color:{COLORS['bg_panel']}; "
+            f"color:{COLORS['text_secondary']}; border:1px solid {COLORS['border']}; "
+            f"border-radius:4px;}}"
+            f"QPushButton:hover{{color:{COLORS['text_primary']};}}"
+            f"QPushButton:checked{{background-color:{cb}; "
+            f"color:white; border-color:{cb};}}")
+        return b
+
+    def _make_float_panel(self, title, border_color, on_close, side="top"):
+        """以画布为父控件的浮窗（悬浮于画布之上）：标题栏可拖动、右上可关闭。
+
+        side="top" 归属分割线以上（画布上半区），"bottom" 归属分割线以下（下半区）。
+        """
+        panel = QFrame(self.canvas)
+        panel.setObjectName("floatPanel")
+        panel.setStyleSheet(
+            f"QFrame#floatPanel{{background-color:{COLORS['bg_panel']}; "
+            f"border:1px solid {border_color}; border-radius:6px;}}")
+        v = QVBoxLayout(panel)
+        v.setContentsMargins(10, 8, 10, 10)
+        v.setSpacing(8)
+        # 默认约束会把布局的最小尺寸反向设给浮窗，使内容变高时 setFixedHeight
+        # 的上限失效（实测被撑回 200+）；这里解除该约束，超高内容交给滚动条。
+        v.setSizeConstraint(QLayout.SizeConstraint.SetNoConstraint)
+        head = QHBoxLayout()
+        head.setSpacing(6)
+        title_lbl = QLabel(title)
+        title_lbl.setStyleSheet(
+            f"color:{COLORS['text_primary']}; font-size:12px; font-weight:bold; border:none;")
+        title_lbl.setToolTip("按住标题可拖动浮窗")
+        # 标题栏拖拽：独立 QObject 过滤器（勿用页面实例，见 _FloatDragHandler 注释）
+        # 拖动全程联动：分隔线对齐蓝窗底边；蓝窗移动时黄窗跟随（见 _on_float_moved）
+        drag = _FloatDragHandler(panel, on_move=self._on_float_moved)
+        title_lbl.installEventFilter(drag)
+        panel._drag_handler = drag     # 持有引用，防止被 GC
+        close = QPushButton("×")
+        close.setFixedSize(20, 20)
+        close.setCursor(Qt.CursorShape.PointingHandCursor)
+        close.setToolTip("收起浮窗")
+        close.setStyleSheet(
+            f"QPushButton{{background-color:{COLORS['bg_card']}; color:{COLORS['text_secondary']}; "
+            f"border:1px solid {COLORS['border']}; border-radius:4px; font-size:12px;}}"
+            f"QPushButton:hover{{color:{COLORS['text_primary']};}}")
+        close.clicked.connect(on_close)
+        head.addWidget(title_lbl)
+        head.addStretch(1)
+        head.addWidget(close)
+        v.addLayout(head)
+        panel._title_lbl = title_lbl
+        panel._border_color = border_color
+        panel._side = side
+        return panel
+
+    def _make_float_body(self, panel):
+        """浮窗内容区：套一层可滚动容器，内容超高时由滚动条翻页。
+
+        返回内容布局（供 _refresh_* 动态重建内容）。
+        """
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setSizePolicy(QSizePolicy.Policy.Expanding,
+                             QSizePolicy.Policy.Expanding)
+        scroll.setStyleSheet(FLOAT_SCROLL_CSS)
+        holder = QWidget()
+        holder.setStyleSheet("background:transparent;")
+        lay = QVBoxLayout(holder)
+        lay.setContentsMargins(0, 0, 2, 0)
+        lay.setSpacing(6)
+        scroll.setWidget(holder)
+        panel.layout().addWidget(scroll, 1)
+        panel._scroll = scroll
+        panel._content_holder = holder
+        return lay
+
+    def _fit_float_height(self, panel):
+        """浮窗高度：默认 = 上限 FLOAT_MAX_H，且不超出所在画布。
+
+        内容不足时窗口保持该高度（内容顶对齐）；内容超出时由内容区
+        滚动条翻页（widgetResizable 的 QScrollArea 自动撑开 + 滚动）。
+        """
+        par = panel.parentWidget()
+        cap = FLOAT_MAX_H
+        if par is not None:
+            cap = min(cap, max(FLOAT_MIN_H, par.height() - 24))
+        panel.setFixedHeight(cap)
+
+    def _place_float(self, panel):
+        """蓝窗贴顶；黄窗默认贴底，蓝窗同开时紧挨其下方（留 8px 间隙）。
+
+        ⚠️ 2026-10-21 需求：两窗同开时间隙不能过大——黄窗顶边贴住分隔线
+        （= 蓝窗底边）下方 8px；画布剩余高度放不下黄窗时退回贴底。
+        """
+        par = panel.parentWidget()
+        m = 12
+        lo, hi = _float_y_range(panel)
+        x = max(0, par.width() - panel.width() - m)
+        if panel._side == "bottom":
+            y = max(lo, min(hi, par.height() - panel.height() - m))
+            # 黄窗始终紧挨「分隔线」下方：蓝窗展开时分隔线=蓝窗底+6，
+            # 仅黄窗展开时分隔线=基准位（顶部工具组下方）——两种情况下黄窗都
+            # 贴在分隔线下方 8px（而非贴画布底部）。画布放不下时回退贴底。
+            algo = getattr(self, "_float_algo", None)
+            if (algo is not None and algo is not panel and algo.isVisible()
+                    and par is algo.parentWidget()):
+                ref = algo.y() + algo.height()
+            else:
+                ref = self._divider_canvas_y()
+            below = ref + 8
+            if below + panel.height() <= par.height():
+                y = below
+        else:
+            y = lo + m
+        panel.move(x, max(lo, min(y, hi)))
+        panel.raise_()
+
+    def _divider_canvas_y(self):
+        """分隔线在画布坐标系中的 y（供黄窗紧贴其下方定位）。"""
+        st = self._st
+        base = (st.contentsMargins().top() + self._btn_params.height()
+                + self._btn_timing.height() + st.spacing() * 3)
+        local = base + self._divider_spacer.height()
+        page_y = self._side_tools.mapTo(self, QPoint(0, local)).y()
+        return page_y - self.canvas.mapTo(self, QPoint(0, 0)).y()
+
+    def _on_float_moved(self, panel):
+        """浮窗拖动/重定位联动：分隔线对齐蓝窗底边；蓝窗移动时黄窗跟随。
+
+        ⚠️ 只在蓝窗移动时吸附黄窗——用户拖黄窗本身时不打断（否则黄窗
+        无法被拖离蓝窗下方）。
+        """
+        self._sync_divider()
+        io = getattr(self, "_float_io", None)
+        if (panel is getattr(self, "_float_algo", None) and io is not None
+                and io.isVisible()):
+            self._place_float(io)
+
+    def _clamp_float_panels(self):
+        """画布尺寸变化：浮窗保留原位，但夹取回所属分区与画布范围内。"""
+        for p in (self._float_algo, self._float_io):
+            par = p.parentWidget()
+            if p.isVisible() and par is not None:
+                lo, hi = _float_y_range(p)
+                p.move(max(0, min(p.x(), max(0, par.width() - p.width()))),
+                       max(lo, min(p.y(), hi)))
+        self._sync_divider()
+
+    def _sync_divider(self):
+        """分隔线高度位置自适应：与上半区（算法类）浮窗底边对齐。
+
+        未展开算法类浮窗时回到默认位置；分隔线以下的工具按钮排在占位之后，
+        会随分隔线一起下移。下半区（输入输出）浮窗不参与分隔线定位。
+
+        ⚠️ 页面刚切显 / 弹窗首开时布局仍在收敛（工具栏高度未定），一次性
+        计算会把错位值写死（实测分隔线停在距窗底 40+px 处）。故这里幂等：
+        目标未变化直接返回；变化则写入并排一次事件循环后按最终几何复算，
+        直到收敛，保证分隔线真正贴住浮窗底边。
+        """
+        st = self._st
+        base = (st.contentsMargins().top() + self._btn_params.height()
+                + self._btn_timing.height() + st.spacing() * 3)
+        if self._float_algo.isVisible():
+            bottom = self._float_algo.y() + self._float_algo.height()
+            # ⚠️ QWidget.mapTo 的参数必须是本控件的「祖先」，传兄弟控件得到的是
+            # 未定义值（实测偏差 40+px，分隔线因此被夹在极限位）。这里把画布与
+            # 工具条各自映射到页面坐标系再作差，才是真正的相对偏移。
+            bottom_abs = self.canvas.mapTo(self, QPoint(0, bottom)).y()
+            tools_top = self._side_tools.mapTo(self, QPoint(0, 0)).y()
+            target = bottom_abs - tools_top + 6
+            # 保证下方按钮仍完整可见
+            limit = (self._side_tools.height() - self._btn_io.height()
+                     - st.spacing() * 2 - st.contentsMargins().bottom())
+            target = max(base, min(target, max(base, limit)))
+        else:
+            target = base
+        gap = max(0, target - base)
+        if self._divider_spacer.height() == gap:
+            return
+        self._divider_spacer.setFixedHeight(gap)
+        QTimer.singleShot(0, self._sync_divider)
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        QTimer.singleShot(0, self._sync_divider)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._sync_divider()
+
+    def _toggle_side_panel(self, mode):
+        """算法参数 / 算法耗时（蓝窗）：同模式再点收起，另一模式切换内容。"""
+        if self._side_mode == mode and self._float_algo.isVisible():
+            self._close_side_panel()
+            return
+        self._side_mode = mode
+        self._btn_params.setChecked(mode == "params")
+        self._btn_timing.setChecked(mode == "timing")
+        self._refresh_side_panel()
+        self._float_algo.show()
+        self._fit_float_height(self._float_algo)   # 高度 = FLOAT_MAX_H（不超画布）
+        self._place_float(self._float_algo)
+        self._sync_divider()
+        if self._float_io.isVisible():
+            self._place_float(self._float_io)      # 黄窗紧挨蓝窗下方
+
+    def _close_side_panel(self):
+        self._side_mode = None
+        self._btn_params.setChecked(False)
+        self._btn_timing.setChecked(False)
+        self._float_algo.hide()
+        self._sync_divider()
+        if self._float_io.isVisible():
+            # ⚠️ 2026-10-21 需求：收起蓝窗后黄窗要自适应回位（贴底），
+            # 否则停留在「紧挨蓝窗」的半空位置
+            self._place_float(self._float_io)
+
+    def _toggle_io_panel(self):
+        """输入输出设置（黄窗）：与蓝窗相互独立、可并存显示。"""
+        if self._float_io.isVisible():
+            self._btn_io.setChecked(False)
+            self._float_io.hide()
+            return
+        self._refresh_io_panel()
+        self._float_io.show()
+        self._btn_io.setChecked(True)
+        self._fit_float_height(self._float_io)     # 高度 = FLOAT_MAX_H（不超画布）
+        self._place_float(self._float_io)
+
+    def _on_selection_changed(self, _nid):
+        """画布选中节点变化：已展开的浮窗实时跟随刷新（高度同步自适应）。"""
+        if self._float_algo.isVisible():
+            self._refresh_side_panel()
+            self._fit_float_height(self._float_algo)
+            self._place_float(self._float_algo)
+            self._sync_divider()
+        if self._float_io.isVisible():
+            self._refresh_io_panel()
+            self._fit_float_height(self._float_io)
+            self._place_float(self._float_io)
+
+    def _clear_layout(self, lay):
+        """清空布局：递归处理子部件与子布局。
+
+        ⚠️ 2026-10-20 修复：参数/耗时行是以 QHBoxLayout（addLayout）加入的，
+        旧实现只 deleteLater 顶层 widget（其实一个都没有），子布局里的旧行
+        被移出布局后仍留在面板上、保持原几何位置可见 → 与新内容叠加显示
+        （即截图里『搜索长度』行插在耗时行中间的根因）。现递归清空并立即
+        隐藏所有旧部件。
+        """
+        while lay.count():
+            it = lay.takeAt(0)
+            w = it.widget()
+            if w is not None:
+                w.hide()
+                w.deleteLater()
+            sub = it.layout()
+            if sub is not None:
+                self._clear_layout(sub)
+
+    def _side_row_label(self, text, color=None, bold=False, size=11):
+        lab = QLabel(text)
+        lab.setWordWrap(True)
+        lab.setStyleSheet(
+            f"color:{color or COLORS['text_primary']}; font-size:{size}px; "
+            f"{'font-weight:bold;' if bold else ''} border:none;")
+        return lab
+
+    def _refresh_side_panel(self):
+        """按当前模式与画布选中节点重建蓝窗（算法参数/算法耗时）内容。"""
+        self._clear_layout(self._side_body)
+        node = self.canvas.selected_node()
+        is_params = (self._side_mode == "params")
+        mode_name = "算法参数" if is_params else "算法耗时"
+        if node is None:
+            self._float_algo._title_lbl.setText(mode_name)
+            self._side_body.addWidget(self._side_row_label(
+                "请先在画布中选中一个算子节点\n（单击节点边框，选中后呈蓝色描边）",
+                COLORS['text_secondary']))
+            self._side_body.addStretch(1)
+            return
+        self._float_algo._title_lbl.setText(f"{mode_name} · {node['name']}")
+        # 节点基本信息行
+        info = self._side_row_label(
+            f"算子：{node['name']}    分类：{node['cat']}",
+            COLORS['text_secondary'])
+        self._side_body.addWidget(info)
+        if is_params:
+            tpl = SIDE_PARAM_TPL.get(node["cat"], SIDE_PARAM_DEFAULT)
+            for (name, val, lo, hi, unit, dec) in tpl:
+                self._side_body.addLayout(self._make_param_row(
+                    name, val, lo, hi, unit, dec))
+            tip = self._side_row_label(
+                "以上为示例参数（演示）；接入真实算法后，此处展示并下发该算子的实际参数。",
+                COLORS['text_secondary'], size=10)
+            self._side_body.addWidget(tip)
+        else:
+            ms = float(node.get("ms", 0.0))
+            big = self._side_row_label(f"总耗时  {ms:.2f} ms",
+                                       "#22A94E", bold=True, size=14)
+            self._side_body.addWidget(big)
+            for (stage, ratio) in SIDE_TIME_STAGES:
+                self._side_body.addLayout(
+                    self._make_time_row(stage, ms * ratio, ratio))
+            tip = self._side_row_label(
+                "耗时为设备运行该算子的统计示例值；分解占比用于演示，"
+                "接入真实引擎后按实测分段耗时展示。",
+                COLORS['text_secondary'], size=10)
+            self._side_body.addWidget(tip)
+        self._side_body.addStretch(1)
+
+    def _make_param_row(self, name, val, lo, hi, unit, dec):
+        """参数行：名称 + 数值输入框（带单位），返回布局供加入面板。"""
+        h = QHBoxLayout()
+        h.setSpacing(6)
+        lab = self._side_row_label(name)
+        lab.setMinimumWidth(72)
+        h.addWidget(lab)
+        sp = QDoubleSpinBox()
+        sp.setDecimals(dec)
+        sp.setRange(float(lo), float(hi))
+        sp.setValue(float(val))
+        sp.setSuffix(f" {unit}" if unit else "")
+        sp.setFixedHeight(22)
+        sp.setStyleSheet(
+            f"QDoubleSpinBox{{background-color:{COLORS['bg_card']}; "
+            f"color:{COLORS['text_primary']}; border:1px solid {COLORS['border']}; "
+            f"border-radius:3px; font-size:11px; padding:0 4px;}}"
+            f"QDoubleSpinBox::up-button,QDoubleSpinBox::down-button{{width:14px;}}")
+        h.addWidget(sp, 1)
+        return h
+
+    def _make_time_row(self, stage, ms, ratio):
+        """耗时行：阶段名 + 耗时 + 占比进度条，返回布局供加入面板。"""
+        h = QHBoxLayout()
+        h.setSpacing(6)
+        lab = self._side_row_label(stage)
+        lab.setMinimumWidth(56)
+        h.addWidget(lab)
+        val = self._side_row_label(f"{ms:.2f} ms", "#22A94E")
+        val.setMinimumWidth(64)
+        h.addWidget(val)
+        bar = QProgressBar()
+        bar.setRange(0, 100)
+        bar.setValue(int(round(ratio * 100)))
+        bar.setFixedHeight(10)
+        bar.setTextVisible(False)
+        bar.setStyleSheet(
+            f"QProgressBar{{background-color:{COLORS['bg_card']}; "
+            f"border:1px solid {COLORS['border']}; border-radius:4px;}}"
+            f"QProgressBar::chunk{{background-color:{COLORS['accent_blue']}; "
+            f"border-radius:4px;}}")
+        h.addWidget(bar, 1)
+        return h
+
+    # ---- 黄窗：输入输出设置 ----
+    def _refresh_io_panel(self):
+        """重建黄窗内容：列出选中算子的输入（上游连线）与输出（下游连线）。"""
+        self._clear_layout(self._io_body)
+        node = self.canvas.selected_node()
+        if node is None:
+            self._io_body.addWidget(self._side_row_label(
+                "请先在画布中选中一个算子节点\n（单击节点边框，选中后呈蓝色描边）",
+                COLORS['text_secondary']))
+            self._io_body.addStretch(1)
+            return
+        doc = self.canvas.document()
+        name_of = {n["id"]: n["name"] for n in doc.nodes()}
+        ups = [e["src"] for e in doc.edges() if e["dst"] == node["id"]]
+        downs = [e["dst"] for e in doc.edges() if e["src"] == node["id"]]
+        self._io_body.addWidget(self._side_row_label(
+            f"算子：{node['name']}    分类：{node['cat']}",
+            COLORS['text_secondary']))
+        self._io_body.addWidget(self._side_row_label("输入", bold=True))
+        if ups:
+            for sid in ups:
+                self._io_body.addLayout(
+                    self._make_io_row("上游图像", name_of.get(sid, sid)))
+        else:
+            self._io_body.addWidget(self._side_row_label(
+                "（暂无输入连线，可拖动上游节点底部输出端到本节点顶部输入端）",
+                COLORS['text_secondary'], size=10))
+        self._io_body.addWidget(self._side_row_label("输出", bold=True))
+        if downs:
+            for did in downs:
+                self._io_body.addLayout(
+                    self._make_io_row("结果输出", name_of.get(did, did)))
+        else:
+            self._io_body.addWidget(self._side_row_label(
+                "（暂无输出连线，可拖动本节点底部输出端到下游节点顶部输入端）",
+                COLORS['text_secondary'], size=10))
+        tip = self._side_row_label(
+            "「启用」开关控制该输入 / 输出是否参与运行（示例演示）；"
+            "接入真实引擎后同步生效。",
+            COLORS['text_secondary'], size=10)
+        self._io_body.addWidget(tip)
+        self._io_body.addStretch(1)
+
+    def _make_io_row(self, role, peer):
+        """输入/输出行：角色 + 对端算子名 + 启用开关，返回布局供加入面板。"""
+        h = QHBoxLayout()
+        h.setSpacing(6)
+        lab = self._side_row_label(role)
+        lab.setMinimumWidth(60)
+        h.addWidget(lab)
+        peer_lab = self._side_row_label(peer)
+        h.addWidget(peer_lab, 1)
+        chk = QCheckBox("启用")
+        chk.setChecked(True)
+        chk.setStyleSheet(
+            f"QCheckBox{{color:{COLORS['text_primary']}; font-size:11px; spacing:4px; "
+            f"border:none;}}"
+            f"QCheckBox::indicator{{width:13px; height:13px; "
+            f"border:1px solid {COLORS['border']}; border-radius:3px; "
+            f"background-color:{COLORS['bg_card']};}}"
+            f"QCheckBox::indicator:checked{{background-color:{COLORS['accent_blue']}; "
+            f"border-color:{COLORS['accent_blue']};}}")
+        h.addWidget(chk)
+        return h
 
     def _open_dialog(self):
         """弹出「放大编辑」大窗口：共享同一数据模型，两边实时同步。"""
@@ -860,8 +1700,41 @@ class FlowDesignPage(QWidget):
             return
         self._dlg = FlowDesignDialog(self.document, self)
         self._dlg.show()
+        # ⚠️ show() 时 Qt 才按「父窗口居中」落位并按布局最小尺寸改大小，
+        # 会覆盖 show 前设置的几何——因此几何必须在 show 之后再应用
+        self._apply_dialog_default_geo()
         self._dlg.raise_()
         self._dlg.activateWindow()
+
+    def _apply_dialog_default_geo(self):
+        """放大编辑窗默认大小与位置：覆盖内嵌页画布区域。
+
+        ⚠️ 2026-10-21 需求：左缘对齐画布左缘、**顶缘对齐内嵌页顶**（页头/
+        提示行上方——此前用画布顶导致整体偏低）、右缘贴主窗右侧、底缘在
+        状态栏上方。画布过小（页面未布局完）时按主窗比例右对齐兜底；
+        均夹取回屏幕可用区域。
+        """
+        top = self.window()
+        if top is None or not top.isVisible():
+            return
+        c_g = self.canvas.mapToGlobal(self.canvas.rect().topLeft())
+        p_g = self.mapToGlobal(self.rect().topLeft())
+        g = QPoint(c_g.x(), p_g.y())     # 顶部对齐页顶，横向仍用画布左缘
+        w = self.canvas.width()
+        h = self.canvas.height() + max(0, c_g.y() - p_g.y())
+        if w < 700 or h < 500:
+            w = max(900, int(top.width() * 0.58))
+            h = max(600, int(top.height() * 0.86))
+            g = top.mapToGlobal(QPoint(max(0, top.width() - w - 16),
+                                       int(top.height() * 0.10)))
+        scr = self.screen()
+        if scr is not None:
+            av = scr.availableGeometry()
+            w, h = min(w, av.width() - 24), min(h, av.height() - 24)
+            g.setX(max(av.left(), min(g.x(), av.right() - w + 1)))
+            g.setY(max(av.top(), min(g.y(), av.bottom() - h + 1)))
+        self._dlg.resize(w, h)
+        self._dlg.move(g)
 
     def _log(self, msg):
         if self._run_log is None:

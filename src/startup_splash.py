@@ -21,8 +21,11 @@ from PyQt6.QtWidgets import (
 )
 
 SOFTWARE_NAME = "电子元件视觉检测系统"
-# 与 output/ 下 exe 名后缀（_V3.0）保持一致；软件构建号见 app.APP_VERSION
-VERSION = "V3.0"
+# 版本号唯一来源 app_meta.APP_VERSION（与 exe 详细信息 / 关于页一致）；
+# exe 文件名已改为 EcompVision Inspector（不含版本后缀）
+from app_meta import APP_VERSION as _APP_VERSION_NUM  # noqa: E402
+
+VERSION = f"V{_APP_VERSION_NUM}"
 
 # 与 styles.py 暗色主题一致的取色（启动早于主题加载，故内联一份）
 C_BG = "#23252B"
@@ -118,17 +121,20 @@ class StartupSplash(QWidget):
                                    Qt.TransformationMode.SmoothTransformation))
         top.addWidget(icon_lbl)
         name_box = QVBoxLayout()
-        name_box.setSpacing(9)  # 标题与版本行上下间隙拉宽
-        name_lbl = QLabel(title)
-        name_lbl.setStyleSheet(f"color: {C_TEXT}; font-size: 17px; font-weight: bold;")
-        # 版本行：纯文字（去掉灰色底框），与标题/开发行同左缘对齐
-        ver_lbl = QLabel(f"版本：{version}")
-        ver_lbl.setStyleSheet(f"color: {C_TEXT2}; font-size: 11px;")
+        name_box.setSpacing(6)  # 主名与副标题/开发行上下间隙
+        # 主名：更大更粗（含版本号，与 exe / 关于页一致）
+        name_lbl = QLabel(f"EcompVision Inspector {version}")
+        name_lbl.setStyleSheet(f"color: {C_TEXT}; font-size: 19px; font-weight: bold;")
+        # 副标题：英文全称（次要色，较小，可换行）
+        sub_lbl = QLabel(
+            f"Electronic Component Visual Inspection Software {version}")
+        sub_lbl.setWordWrap(True)
+        sub_lbl.setStyleSheet(f"color: {C_TEXT2}; font-size: 12px;")
+        # 开发行
         dev_lbl = QLabel("开发：ZY.SHAW")
-        # 与版本行同字号/同颜色、同左对齐
         dev_lbl.setStyleSheet(f"color: {C_TEXT2}; font-size: 11px;")
         name_box.addWidget(name_lbl)
-        name_box.addWidget(ver_lbl)
+        name_box.addWidget(sub_lbl)
         name_box.addWidget(dev_lbl)
         name_box.addStretch(1)
         top.addLayout(name_box, 1)
