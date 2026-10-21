@@ -12,4 +12,4 @@
 - exe 文件名：EcompVision Inspector（不含版本号）。
 """
 APP_NAME_EN = "EcompVision Inspector"
-APP_VERSION = "3.0.2.0"
+APP_VERSION = "3.0.3.0"

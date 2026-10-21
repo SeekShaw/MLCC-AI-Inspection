@@ -21,7 +21,7 @@ from PyQt6.QtGui import (
 from PyQt6.QtWidgets import (
     QWidget, QLabel, QPushButton, QVBoxLayout, QHBoxLayout, QScrollArea,
     QLineEdit, QDialog, QSizePolicy, QDoubleSpinBox, QProgressBar, QFrame,
-    QCheckBox, QMenu, QLayout)
+    QCheckBox, QMenu, QLayout, QTabWidget)
 
 from styles import COLORS
 
@@ -826,15 +826,14 @@ class FlowToolBox(QWidget):
         self._btn_fold.setFixedSize(22, 26)
         self._btn_fold.setToolTip("折叠算子工具箱")
         self._btn_fold.setCursor(Qt.CursorShape.PointingHandCursor)
-        # ⚠️ 2026-10-21 需求：原样式（bg_card 底 + 次要文字色）对比度太低，
-        # 图标几乎看不见。改白字加粗 + 明显描边，悬停反蓝底。
+        # ⚠️ 2026-10-21 需求（第二次反馈）：深灰底 + 灰边框在小工具箱里仍然不显眼，
+        # 直接给蓝底白字实底按钮，与搜索框拉开明显对比。
         self._btn_fold.setStyleSheet(
-            f"QPushButton{{background-color:{COLORS['bg_card']}; "
-            f"color:{COLORS['text_primary']}; "
-            f"border:1px solid {COLORS['text_secondary']}; "
+            f"QPushButton{{background-color:{COLORS['accent_blue']}; "
+            f"color:white; border:1px solid {COLORS['accent_blue']}; "
             f"border-radius:3px; font-size:14px; font-weight:bold;}}"
-            f"QPushButton:hover{{background-color:{COLORS['accent_blue']}; "
-            f"color:white; border-color:{COLORS['accent_blue']};}}")
+            f"QPushButton:hover{{background-color:#6B85FF; "
+            f"border-color:#6B85FF;}}")
         self._btn_fold.clicked.connect(self._toggle_collapse)
         search_row.addWidget(self._btn_fold)
         v.addLayout(search_row)
@@ -1709,19 +1708,26 @@ class FlowDesignPage(QWidget):
     def _apply_dialog_default_geo(self):
         """放大编辑窗默认大小与位置：覆盖内嵌页画布区域。
 
-        ⚠️ 2026-10-21 需求：左缘对齐画布左缘、**顶缘对齐内嵌页顶**（页头/
-        提示行上方——此前用画布顶导致整体偏低）、右缘贴主窗右侧、底缘在
-        状态栏上方。画布过小（页面未布局完）时按主窗比例右对齐兜底；
-        均夹取回屏幕可用区域。
+        ⚠️ 2026-10-21 需求：**顶缘对齐 Tab 栏顶**（父级 QTabWidget 顶，含
+        标签栏那一行——首次只对齐了页面内容顶，还差一条 Tab 栏高度）、左缘
+        对齐画布左缘、底缘 = 页面底缘。画布过小（页面未布局完）时按主窗
+        比例右对齐兜底；均夹取回屏幕可用区域。
         """
         top = self.window()
         if top is None or not top.isVisible():
             return
+        # 往上找承载本页的 QTabWidget（内嵌在调试页 Tab 里），没有就退到本页
+        ref = self.parentWidget()
+        while ref is not None and not isinstance(ref, QTabWidget):
+            ref = ref.parentWidget()
+        if ref is None:
+            ref = self
+        p_g = ref.mapToGlobal(ref.rect().topLeft())
+        b_g = self.mapToGlobal(self.rect().bottomLeft()).y()
         c_g = self.canvas.mapToGlobal(self.canvas.rect().topLeft())
-        p_g = self.mapToGlobal(self.rect().topLeft())
-        g = QPoint(c_g.x(), p_g.y())     # 顶部对齐页顶，横向仍用画布左缘
+        g = QPoint(c_g.x(), p_g.y())     # 顶部对齐 Tab 栏顶，横向用画布左缘
         w = self.canvas.width()
-        h = self.canvas.height() + max(0, c_g.y() - p_g.y())
+        h = b_g - p_g.y()               # 底缘保持页面底缘
         if w < 700 or h < 500:
             w = max(900, int(top.width() * 0.58))
             h = max(600, int(top.height() * 0.86))
