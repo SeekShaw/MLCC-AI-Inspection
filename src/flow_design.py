@@ -17,7 +17,7 @@ from PyQt6.QtCore import (
     Qt, QPointF, QRectF, QObject, pyqtSignal, QEvent, QSize, QPoint, QTimer)
 from PyQt6.QtGui import (
     QColor, QFont, QPainter, QPen, QPainterPath, QPolygonF, QIcon, QPixmap,
-    QCursor)
+    QCursor, QFontMetrics)
 from PyQt6.QtWidgets import (
     QWidget, QLabel, QPushButton, QVBoxLayout, QHBoxLayout, QScrollArea,
     QLineEdit, QDialog, QSizePolicy, QDoubleSpinBox, QProgressBar, QFrame,
@@ -85,10 +85,6 @@ def toolbox_items(cat, count):
         real.append(f"{cat}算子{i:02d}")
         i += 1
     return real
-
-
-def _elide(text, limit=13):
-    return text if len(text) <= limit else text[:limit] + "…"
 
 
 # ---------------------------------------------------------------------------
@@ -815,10 +811,17 @@ class FlowCanvas(QWidget):
         p.drawEllipse(t, 4, 4)
 
     def _draw_node(self, p, n):
-        s = self._scale
-        tl = self._to_screen(n["x"], n["y"])
-        w, h = self.NODE_W * s, self.NODE_H * s
-        rect = QRectF(tl.x(), tl.y(), w, h)
+        """按世界坐标绘制算子卡片（painter 统一 translate+scale）。
+
+        ⚠️ 2026-10-21 需求：卡片内文字须随滚轮缩放自适应——此前几何按 s
+        缩放而字体取 int(…*max(0.7, s)) 且钳 0.7 下限，缩小后字体不再变
+        小、卡片继续变小，文字溢出重叠。改为在世界坐标系下绘制，文字与
+        卡片等比连续缩放，任意缩放级别均贴合卡片。
+        """
+        p.save()
+        p.translate(self._offset)
+        p.scale(self._scale, self._scale)
+        rect = QRectF(n["x"], n["y"], self.NODE_W, self.NODE_H)
         sel = self._selected == n["id"]
         # 卡片
         p.setPen(QPen(QColor("#4261FF" if sel else COLORS["border"]),
@@ -827,45 +830,61 @@ class FlowCanvas(QWidget):
         p.drawRoundedRect(rect, 8, 8)
         # 类别图标圆
         cc = QColor(self._cat_color(n["cat"]))
-        d = 26 * s
+        d = 26.0
         p.setBrush(cc)
         p.setPen(Qt.PenStyle.NoPen)
-        p.drawEllipse(QRectF(rect.left() + 10 * s, rect.center().y() - d / 2, d, d))
+        p.drawEllipse(QRectF(rect.left() + 10, rect.center().y() - d / 2, d, d))
         p.setPen(QColor("#FFFFFF"))
-        p.setFont(QFont("Microsoft YaHei", int(11 * max(0.7, s)), QFont.Weight.Bold))
-        p.drawText(QRectF(rect.left() + 10 * s, rect.center().y() - d / 2, d, d),
+        f = QFont("Microsoft YaHei")
+        f.setPixelSize(15)
+        f.setBold(True)
+        p.setFont(f)
+        p.drawText(QRectF(rect.left() + 10, rect.center().y() - d / 2, d, d),
                    Qt.AlignmentFlag.AlignCenter, _cat_badge(n["cat"]))
-        # 标题 / 副标题
-        tx = rect.left() + (10 + d + 8) * s
+        # 标题 / 副标题：按可用像素宽省略号截断（替代固定字符数截断）
+        tx = rect.left() + 10 + d + 8
+        tw = rect.right() - tx - 8
+        ft = QFont("Microsoft YaHei")
+        ft.setPixelSize(16)
+        ft.setBold(True)
+        fmt = QFontMetrics(ft)
         p.setPen(QColor(COLORS["text_primary"]))
-        p.setFont(QFont("Microsoft YaHei", int(12 * max(0.7, s)), QFont.Weight.Bold))
-        p.drawText(QRectF(tx, rect.top() + 8 * s, rect.right() - tx - 8 * s, 18 * s),
-                   Qt.AlignmentFlag.AlignVCenter, _elide(n["name"]))
+        p.setFont(ft)
+        p.drawText(QRectF(tx, rect.top() + 8, tw, 18),
+                   Qt.AlignmentFlag.AlignVCenter,
+                   fmt.elidedText(n["name"], Qt.TextElideMode.ElideRight, int(tw)))
+        fs = QFont("Microsoft YaHei")
+        fs.setPixelSize(13)
+        fms = QFontMetrics(fs)
         p.setPen(QColor(COLORS["text_secondary"]))
-        p.setFont(QFont("Microsoft YaHei", int(10 * max(0.7, s))))
-        p.drawText(QRectF(tx, rect.top() + 30 * s, rect.right() - tx - 8 * s, 16 * s),
-                   Qt.AlignmentFlag.AlignVCenter, n["cat"])
+        p.setFont(fs)
+        p.drawText(QRectF(tx, rect.top() + 30, tw, 16),
+                   Qt.AlignmentFlag.AlignVCenter,
+                   fms.elidedText(n["cat"], Qt.TextElideMode.ElideRight, int(tw)))
         # 耗时徽标（右上，示例）：绿色对勾（矢量绘制，不依赖字体）+ 数值
         p.setPen(QPen(QColor("#0D822B"), 1.6))
         p.setBrush(Qt.BrushStyle.NoBrush)
-        cxp = rect.right() - 66 * s
-        cyp = rect.top() - 9 * s
-        p.drawLine(QPointF(cxp, cyp + 3 * s), QPointF(cxp + 3 * s, cyp + 6 * s))
-        p.drawLine(QPointF(cxp + 3 * s, cyp + 6 * s), QPointF(cxp + 8 * s, cyp))
+        cxp = rect.right() - 66
+        cyp = rect.top() - 9
+        p.drawLine(QPointF(cxp, cyp + 3), QPointF(cxp + 3, cyp + 6))
+        p.drawLine(QPointF(cxp + 3, cyp + 6), QPointF(cxp + 8, cyp))
+        fmz = QFont("Microsoft YaHei")
+        fmz.setPixelSize(13)
         p.setPen(QColor("#0D822B"))
-        p.setFont(QFont("Microsoft YaHei", int(10 * max(0.7, s))))
-        p.drawText(QRectF(rect.right() - 54 * s, rect.top() - 16 * s, 54 * s, 14 * s),
+        p.setFont(fmz)
+        p.drawText(QRectF(rect.right() - 54, rect.top() - 16, 54, 14),
                    Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
                    f"{n['ms']:.2f} ms")
-        # 输入端（顶部圆环）/ 输出端（底部蓝点）
-        ip = self._to_screen(*self._input_port_w(n))
+        # 输入端（顶部圆环）/ 输出端（底部蓝点）——世界坐标，随卡片缩放
+        ip = self._input_port_w(n)
         p.setPen(QPen(QColor("#8A9099"), 1.5))
         p.setBrush(QColor(COLORS["bg_panel"]))
-        p.drawEllipse(ip, 4.5, 4.5)
-        op = self._to_screen(*self._output_port_w(n))
+        p.drawEllipse(QPointF(ip[0], ip[1]), 4.5, 4.5)
+        op = self._output_port_w(n)
         p.setPen(Qt.PenStyle.NoPen)
         p.setBrush(QColor("#4261FF"))
-        p.drawEllipse(op, 5.5, 5.5)
+        p.drawEllipse(QPointF(op[0], op[1]), 5.5, 5.5)
+        p.restore()
 
 
 # ---------------------------------------------------------------------------
