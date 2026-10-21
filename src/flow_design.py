@@ -1740,8 +1740,11 @@ class FlowDesignPage(QWidget):
         self._dlg = FlowDesignDialog(self.document, self)
         self._dlg.show()
         # ⚠️ show() 时 Qt 才按「父窗口居中」落位并按布局最小尺寸改大小，
-        # 会覆盖 show 前设置的几何——因此几何必须在 show 之后再应用
+        # 会覆盖 show 前设置的几何——因此几何必须在 show 之后再应用；
+        # 另排一次延迟应用：内页布局/画布 fit 可能在事件循环里迟到激活，
+        # 把窗口尺寸又改掉（位置看似“没生效”的玄学来源）。
         self._apply_dialog_default_geo()
+        QTimer.singleShot(60, self._apply_dialog_default_geo)
         self._dlg.raise_()
         self._dlg.activateWindow()
 
@@ -1793,6 +1796,9 @@ class FlowDesignPage(QWidget):
             g.setY(max(av.top(), min(g.y(), av.bottom() - h + 1)))
         self._dlg.resize(w, h)
         self._dlg.move(g)
+        # 定位诊断日志（写运行日志，便于远程确认新代码是否生效）
+        self._log(f"放大编辑窗定位: 左上=({g.x()},{g.y()}) 尺寸={w}x{h}"
+                  f" 基准缘y={p_g_y} (header下缘/Tab/Card/页)")
 
     def _log(self, msg):
         if self._run_log is None:
