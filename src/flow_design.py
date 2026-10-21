@@ -1757,21 +1757,29 @@ class FlowDesignPage(QWidget):
         name_ed.setToolTip("可自定义修改工具名称（回车或点击别处生效），改名后所有显示处同步更新")
 
         def _on_name_edited():
+            # ⚠️ 改名后“就地更新”标题/页签即可，禁止整窗重建——否则会
+            # deleteLater 掉正在发 editingFinished 的 name_ed 自身，延迟销毁时
+            # 该控件可能再发一次信号、读到旧文本把名字改回去（现象：没生效 /
+            # 画布不更新 / 重新打开变回初始名）。
+            sel = self.canvas.selected_node()
+            if sel is None:
+                return
             new = name_ed.text().strip()
-            old = node["name"]
+            old = sel["name"]
             if not new or new == old:
                 name_ed.setText(old)      # 空名/未变：回显原名
                 return
-            if self.document.rename_node(node["id"], new):
-                # node 即文档里的同一 dict，rename 后引用处取到的已是新名
-                if self._float_algo.isVisible():
-                    self._refresh_side_panel()   # 重建：标题/信息行/页签名
+            if self.document.rename_node(sel["id"], new):
+                # 画布卡片 / 其它算子下拉随 changed 信号自动刷新
+                self.canvas.update()
+                # 蓝窗标题 + 第 1 页页签名就地更新（无需重建面板）
+                self._float_algo._title_lbl.setText(f"算法参数 · {new}")
+                tabs.setTabText(0, new)
                 if self._float_io.isVisible():
-                    self._refresh_io_panel()     # 黄窗里引用的旧名同步
-            else:
-                name_ed.setText(self.document.node(node["id"])["name"])
+                    self._refresh_io_panel()   # 黄窗引用的旧名同步
 
         name_ed.editingFinished.connect(_on_name_edited)
+        name_ed.returnPressed.connect(_on_name_edited)
         f1.addLayout(self._params_form_row("工具名称", name_ed))
         for label, first, suffix in (("定位器", "未指定", "坐标系"),
                                      ("图片输入", "未指定", "图像"),

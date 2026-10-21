@@ -4648,7 +4648,7 @@ class DebugView(QWidget):
         ⚠️ 2026-10-21 需求：此窗口内容改为检测表收料位置列的批量设置，
         不再打开「剔除设定」（设备剔除口硬件配置）窗口。
         """
-        _PORT_OPTIONS = ["RST", "NG1", "NG2", "NG3"]
+        _PORT_OPTIONS = ["OK", "NG1", "NG2", "RST"]
         # 常用口 + 表内已出现的自定义口合并为候选（去重保序）
         options = list(_PORT_OPTIONS)
         for row in self._table_data:
