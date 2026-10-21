@@ -1621,10 +1621,13 @@ class FlowDesignPage(QWidget):
         if img_path:
             self._log(f"执行流程：{os.path.basename(img_path)}"
                       + (f"（运行到：{doc.node(stop)['name']}）" if stop in order else ""))
+        # ⚠️ 2026-10-21 需求：示例耗时随图片变化——以图片文件名为种子，
+        # 切换图片（上1张/下1张/执行所有）后各算子耗时与流程总耗时随之变化。
+        seed = sum(map(ord, os.path.basename(img_path or "")))
         for i, nid in enumerate(order):
             nd = doc.node(nid)
-            ms = round(1.5 + (sum(map(ord, nd["name"])) % 130) / 9.0
-                       + len(order) * 0.37, 2)   # 示例耗时（随图片轮换变化）
+            ms = round(1.5 + ((sum(map(ord, nd["name"])) + seed * (i + 3)) % 130)
+                       / 9.0 + len(order) * 0.37, 2)
             doc.set_ms(nid, ms)
             self._log(f"  {i + 1}. {nd['name']}：{ms:.2f} ms")
         # 图片同步到调试界面相机画布
@@ -1993,9 +1996,10 @@ class FlowDesignPage(QWidget):
         self._side_body.addStretch(1)
 
     def _make_node_time_row(self, node, highlight):
-        """算法耗时浮窗中的单个算子耗时行（带整行高亮容器）。
+        """算法耗时浮窗中的单个算子耗时行。
 
-        highlight=True（当前选中算子）：整行浅蓝底色 + 名称/数值高亮色。"""
+        ⚠️ 2026-10-21 需求：选中行高亮**只改文字颜色**（名称蓝色/数值
+        绿色加粗），不加底色、不加边框。"""
         w = QWidget()
         h = QHBoxLayout(w)
         h.setContentsMargins(6, 4, 6, 4)
@@ -2011,10 +2015,6 @@ class FlowDesignPage(QWidget):
             size=11, bold=highlight)
         h.addWidget(name, 1)
         h.addWidget(val)
-        if highlight:
-            w.setStyleSheet(
-                f"background-color:{COLORS['accent_blue']}22; "
-                f"border-radius:3px; border:1px solid {COLORS['accent_blue']}55;")
         return w
 
     def _make_param_row(self, name, val, lo, hi, unit, dec):
