@@ -1660,6 +1660,9 @@ class FlowDesignPage(QWidget):
     def _on_doc_changed(self):
         self._btn_undo.setEnabled(self.document.can_undo())
         self._btn_redo.setEnabled(self.document.can_redo())
+        # 算法耗时浮窗开启时，各算子 ms 变化（执行流程）需实时刷新列表
+        if self._side_mode == "timing" and self._float_algo.isVisible():
+            self._refresh_side_panel()
 
     # ---- 右侧竖向工具条与浮窗 ----
     def _make_side_btn(self, text, icon_kind, checked_bg=None):
@@ -1944,43 +1947,75 @@ class FlowDesignPage(QWidget):
         return lab
 
     def _refresh_side_panel(self):
-        """按当前模式与画布选中节点重建蓝窗（算法参数/算法耗时）内容。"""
+        """按当前模式重建蓝窗（算法参数/算法耗时）内容。
+
+        ⚠️ 2026-10-21 需求：算法耗时浮窗展示流程中**全部算子**的耗时，
+        不依赖当前选中算子；选中某算子时其所在行高亮（不同底色/文字色）。
+        仅「算法参数」模式需要选中算子（否则提示先选中）。"""
         self._clear_layout(self._side_body)
-        node = self.canvas.selected_node()
         is_params = (self._side_mode == "params")
         mode_name = "算法参数" if is_params else "算法耗时"
-        if node is None:
-            self._float_algo._title_lbl.setText(mode_name)
-            self._side_body.addWidget(self._side_row_label(
-                "请先在画布中选中一个算子节点\n（单击节点边框，选中后呈蓝色描边）",
-                COLORS['text_secondary']))
-            self._side_body.addStretch(1)
-            return
-        self._float_algo._title_lbl.setText(f"{mode_name} · {node['name']}")
-        # 节点基本信息行
-        info = self._side_row_label(
-            f"算子：{node['name']}    分类：{node['cat']}",
-            COLORS['text_secondary'])
-        self._side_body.addWidget(info)
         if is_params:
-            # ⚠️ 2026-10-21 需求：改为分页 table——第 1 页基础设置（工具名称/
-            # 定位器/图片输入/执行条件 + 底部图标行），第 2 页为该算子的
-            # 具体算法参数（每个算子不同，取自 SIDE_PARAM_TPL）
+            node = self.canvas.selected_node()
+            if node is None:
+                self._float_algo._title_lbl.setText(mode_name)
+                self._side_body.addWidget(self._side_row_label(
+                    "请先在画布中选中一个算子节点\n（单击节点边框，选中后呈蓝色描边）",
+                    COLORS['text_secondary']))
+                self._side_body.addStretch(1)
+                return
+            self._float_algo._title_lbl.setText(f"{mode_name} · {node['name']}")
+            # 节点基本信息行
+            info = self._side_row_label(
+                f"算子：{node['name']}    分类：{node['cat']}",
+                COLORS['text_secondary'])
+            self._side_body.addWidget(info)
+            # 分页 table：第 1 页基础设置，第 2 页该算子的具体算法参数
             self._side_body.addWidget(self._build_params_tabs(node), 1)
         else:
-            ms = float(node.get("ms", 0.0))
-            big = self._side_row_label(f"总耗时  {ms:.2f} ms",
+            # 算法耗时：流程中所有算子的耗时列表（不依赖选中）；选中行高亮
+            self._float_algo._title_lbl.setText(mode_name)
+            nodes = self.document.nodes()
+            total = sum(float(n.get("ms", 0.0)) for n in nodes)
+            big = self._side_row_label(f"流程总耗时  {total:.2f} ms",
                                        "#22A94E", bold=True, size=14)
             self._side_body.addWidget(big)
-            for (stage, ratio) in SIDE_TIME_STAGES:
-                self._side_body.addLayout(
-                    self._make_time_row(stage, ms * ratio, ratio))
+            self._side_body.addWidget(self._side_row_label(
+                "各算子耗时（选中算子高亮）：", COLORS['text_secondary'], size=11))
+            sel = getattr(self.document, "sel_nid", None)
+            for n in nodes:
+                self._side_body.addWidget(
+                    self._make_node_time_row(n, n.get("id") == sel))
             tip = self._side_row_label(
-                "耗时为设备运行该算子的统计示例值；分解占比用于演示，"
-                "接入真实引擎后按实测分段耗时展示。",
+                "耗时为设备运行该算子的统计示例值；接入真实引擎后按实测耗时展示。",
                 COLORS['text_secondary'], size=10)
             self._side_body.addWidget(tip)
         self._side_body.addStretch(1)
+
+    def _make_node_time_row(self, node, highlight):
+        """算法耗时浮窗中的单个算子耗时行（带整行高亮容器）。
+
+        highlight=True（当前选中算子）：整行浅蓝底色 + 名称/数值高亮色。"""
+        w = QWidget()
+        h = QHBoxLayout(w)
+        h.setContentsMargins(6, 4, 6, 4)
+        h.setSpacing(6)
+        name = self._side_row_label(
+            node["name"],
+            COLORS['accent_blue'] if highlight else COLORS['text_primary'],
+            size=11)
+        ms = float(node.get("ms", 0.0))
+        val = self._side_row_label(
+            f"{ms:.2f} ms",
+            "#22A94E" if highlight else COLORS['text_secondary'],
+            size=11, bold=highlight)
+        h.addWidget(name, 1)
+        h.addWidget(val)
+        if highlight:
+            w.setStyleSheet(
+                f"background-color:{COLORS['accent_blue']}22; "
+                f"border-radius:3px; border:1px solid {COLORS['accent_blue']}55;")
+        return w
 
     def _make_param_row(self, name, val, lo, hi, unit, dec):
         """参数行：名称 + 数值输入框（带单位），返回布局供加入面板。"""
