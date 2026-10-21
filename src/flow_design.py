@@ -1785,11 +1785,13 @@ class FlowDesignPage(QWidget):
         g = QPoint(c_g.x(), p_g_y)   # 横向用画布左缘，顶缘按上方基准
         w = self.canvas.width()
         h = b_g - p_g_y              # 底缘保持页面底缘
-        if w < 700 or h < 500:
-            w = max(900, int(top.width() * 0.58))
-            h = max(600, int(top.height() * 0.86))
-            g = top.mapToGlobal(QPoint(max(0, top.width() - w - 16),
-                                       int(top.height() * 0.10)))
+        fallback = w < 700 or h < 500
+        if fallback:
+            # 画布过小（未布局完/嵌入区窄）：仍锚定同一顶缘与左缘（基准容器
+            # 左缘=内容区左缘），尺寸按主窗比例，不再用「与任何边缘无关」的位置
+            w = max(900, int(top.width() * 0.72))
+            h = max(600, int(top.height() * 0.80))
+            g = QPoint(top_ref.mapToGlobal(top_ref.rect().topLeft()).x(), p_g_y)
         scr = self.screen()
         if scr is not None:
             av = scr.availableGeometry()
@@ -1798,9 +1800,26 @@ class FlowDesignPage(QWidget):
             g.setY(max(av.top(), min(g.y(), av.bottom() - h + 1)))
         self._dlg.resize(w, h)
         self._dlg.move(g)
-        # 定位诊断日志（写运行日志，便于远程确认新代码是否生效）
-        self._log(f"放大编辑窗定位: 左上=({g.x()},{g.y()}) 尺寸={w}x{h}"
-                  f" 基准缘y={p_g_y} (header下缘/Tab/Card/页)")
+        dbg = (f"放大编辑窗定位: 左上=({g.x()},{g.y()}) 尺寸={w}x{h} "
+               f"顶缘基准y={p_g_y} 基准={('header下缘' if use_bottom else '回退容器顶')} "
+               f"画布={self.canvas.width()}x{self.canvas.height()} "
+               f"窗口={top.width()}x{top.height()} 兜底={fallback} "
+               f"实际=({self._dlg.x()},{self._dlg.y()})")
+        self._log(dbg)
+        # 诊断落盘：%TEMP%\flow_align_diag.log（排查「改了不生效」类问题）
+        try:
+            import datetime
+            import tempfile
+            with open(os.path.join(tempfile.gettempdir(),
+                                   "flow_align_diag.log"), "a",
+                      encoding="utf-8") as f:
+                f.write(datetime.datetime.now().strftime("%H:%M:%S ")
+                        + dbg + "\n")
+        except Exception:
+            pass
+        # 临时：把定位值显示到标题，截图即可见（排查后移除）
+        self._dlg.setWindowTitle(
+            f"检测流程设计 - 流程编辑器（放大编辑） [top={g.y()}/基准{p_g_y}]")
 
     def _log(self, msg):
         if self._run_log is None:
