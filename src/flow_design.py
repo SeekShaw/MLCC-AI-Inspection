@@ -1748,30 +1748,38 @@ class FlowDesignPage(QWidget):
     def _apply_dialog_default_geo(self):
         """放大编辑窗默认大小与位置：覆盖内嵌页画布区域。
 
-        ⚠️ 2026-10-21 需求（第三次反馈）：**顶缘对齐流程设计区最外层容器的顶**
-        （承载 Tab 的 Card——此前只对齐 Tab 栏顶/页面内容顶，都仍差一截）。
-        左缘对齐画布左缘、底缘 = 页面底缘。画布过小（页面未布局完）时按主窗
-        比例右对齐兜底；均夹取回屏幕可用区域。
+        ⚠️ 2026-10-21 需求（第四次反馈）：**顶缘对齐主窗顶部工具栏的下边缘**
+        （MainWindow._header_frame 底缘——历经「画布顶/页面顶/Tab栏顶/
+        Card顶」四轮微调后确认的最终基准：工具栏下边缘即内容区最顶端）。
+        左缘对齐画布左缘、底缘 = 页面底缘。逐级回退：header → Card → Tab → 页。
+        画布过小（页面未布局完）时按主窗比例右对齐兜底；均夹取回屏幕可用区域。
         """
         top = self.window()
         if top is None or not top.isVisible():
             return
-        # 往上找承载本页的 QTabWidget，再取其父容器（Card）作为顶部基准；
-        # 找不到 Card 时退回 Tab 栏顶，再找不到退回本页顶
-        ref = self.parentWidget()
-        while ref is not None and not isinstance(ref, QTabWidget):
-            ref = ref.parentWidget()
-        if ref is not None:
-            card = ref.parentWidget()
-            ref = card if card is not None else ref
-        if ref is None:
-            ref = self
-        p_g = ref.mapToGlobal(ref.rect().topLeft())
+        # 1) 首选：主窗顶部工具栏（header）下边缘
+        hdr = getattr(top, "_header_frame", None)
+        if hdr is not None and hdr.isVisible():
+            top_ref, use_bottom = hdr, True
+        else:
+            # 2) 回退：承载本页的 QTabWidget 的父容器（Card）→ Tab → 本页
+            ref = self.parentWidget()
+            while ref is not None and not isinstance(ref, QTabWidget):
+                ref = ref.parentWidget()
+            if ref is not None:
+                card = ref.parentWidget()
+                ref = card if card is not None else ref
+            top_ref = ref if ref is not None else self
+            use_bottom = False
+        if use_bottom:
+            p_g_y = top_ref.mapToGlobal(top_ref.rect().bottomLeft()).y()
+        else:
+            p_g_y = top_ref.mapToGlobal(top_ref.rect().topLeft()).y()
         b_g = self.mapToGlobal(self.rect().bottomLeft()).y()
         c_g = self.canvas.mapToGlobal(self.canvas.rect().topLeft())
-        g = QPoint(c_g.x(), p_g.y())     # 顶部对齐 Tab 栏顶，横向用画布左缘
+        g = QPoint(c_g.x(), p_g_y)   # 横向用画布左缘，顶缘按上方基准
         w = self.canvas.width()
-        h = b_g - p_g.y()               # 底缘保持页面底缘
+        h = b_g - p_g_y              # 底缘保持页面底缘
         if w < 700 or h < 500:
             w = max(900, int(top.width() * 0.58))
             h = max(600, int(top.height() * 0.86))
