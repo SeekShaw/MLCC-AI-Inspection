@@ -795,6 +795,48 @@ class FlowCanvas(QWidget):
 
 
 # ---------------------------------------------------------------------------
+class _FoldArrowButton(QPushButton):
+    """工具箱折叠/展开按钮：蓝底 + 白色方向箭头。
+
+    ⚠️ 2026-10-21 需求：不用 «/» 字符（离屏/字体缺失时不可见，且方向感
+    不强），改用 QPainter 现绘矢量箭头——左箭头=折叠，右箭头=展开。
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._dir = "left"
+        self.setFixedSize(22, 26)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+
+    def set_direction(self, d):
+        self._dir = "right" if d == "right" else "left"
+        self.update()
+
+    def direction(self):
+        return self._dir
+
+    def paintEvent(self, event):
+        super().paintEvent(event)      # 先画 QSS 背景（蓝底），再画箭头
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        w, h = self.width(), self.height()
+        y = h / 2.0
+        x1, x2 = w * 0.30, w * 0.72
+        pen = QPen(QColor("#FFFFFF"))
+        pen.setWidthF(1.8)
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        p.setPen(pen)
+        if self._dir == "left":        # 向左：←
+            p.drawLine(QPointF(x2, y), QPointF(x1, y))
+            p.drawLine(QPointF(x1 + 3.4, y - 3.4), QPointF(x1, y))
+            p.drawLine(QPointF(x1 + 3.4, y + 3.4), QPointF(x1, y))
+        else:                          # 向右：→
+            p.drawLine(QPointF(x1, y), QPointF(x2, y))
+            p.drawLine(QPointF(x2 - 3.4, y - 3.4), QPointF(x2, y))
+            p.drawLine(QPointF(x2 - 3.4, y + 3.4), QPointF(x2, y))
+        p.end()
+
+
 # 工具箱：搜索框 + 可折叠分类（双击算子添加到画布）
 # ---------------------------------------------------------------------------
 class FlowToolBox(QWidget):
@@ -822,16 +864,14 @@ class FlowToolBox(QWidget):
         self._search.setClearButtonEnabled(True)
         self._search.textChanged.connect(self._refilter)
         search_row.addWidget(self._search, 1)
-        self._btn_fold = QPushButton("«")
-        self._btn_fold.setFixedSize(22, 26)
+        # ⚠️ 2026-10-21 需求（第三次反馈）：«/» 字符方向感不强且部分环境字形
+        # 缺失，改为蓝底白色矢量箭头按钮（左=折叠，右=展开）
+        self._btn_fold = _FoldArrowButton()
         self._btn_fold.setToolTip("折叠算子工具箱")
-        self._btn_fold.setCursor(Qt.CursorShape.PointingHandCursor)
-        # ⚠️ 2026-10-21 需求（第二次反馈）：深灰底 + 灰边框在小工具箱里仍然不显眼，
-        # 直接给蓝底白字实底按钮，与搜索框拉开明显对比。
         self._btn_fold.setStyleSheet(
             f"QPushButton{{background-color:{COLORS['accent_blue']}; "
-            f"color:white; border:1px solid {COLORS['accent_blue']}; "
-            f"border-radius:3px; font-size:14px; font-weight:bold;}}"
+            f"border:1px solid {COLORS['accent_blue']}; "
+            f"border-radius:3px;}}"
             f"QPushButton:hover{{background-color:#6B85FF; "
             f"border-color:#6B85FF;}}")
         self._btn_fold.clicked.connect(self._toggle_collapse)
@@ -860,7 +900,7 @@ class FlowToolBox(QWidget):
         收起时搜索框/分类列表一并隐藏，只保留 « / » 按钮本身。
         """
         self._collapsed = not self._collapsed
-        self._btn_fold.setText("»" if self._collapsed else "«")
+        self._btn_fold.set_direction("right" if self._collapsed else "left")
         self._btn_fold.setToolTip("展开算子工具箱" if self._collapsed
                                   else "折叠算子工具箱")
         self._search.setVisible(not self._collapsed)
@@ -1708,18 +1748,22 @@ class FlowDesignPage(QWidget):
     def _apply_dialog_default_geo(self):
         """放大编辑窗默认大小与位置：覆盖内嵌页画布区域。
 
-        ⚠️ 2026-10-21 需求：**顶缘对齐 Tab 栏顶**（父级 QTabWidget 顶，含
-        标签栏那一行——首次只对齐了页面内容顶，还差一条 Tab 栏高度）、左缘
-        对齐画布左缘、底缘 = 页面底缘。画布过小（页面未布局完）时按主窗
+        ⚠️ 2026-10-21 需求（第三次反馈）：**顶缘对齐流程设计区最外层容器的顶**
+        （承载 Tab 的 Card——此前只对齐 Tab 栏顶/页面内容顶，都仍差一截）。
+        左缘对齐画布左缘、底缘 = 页面底缘。画布过小（页面未布局完）时按主窗
         比例右对齐兜底；均夹取回屏幕可用区域。
         """
         top = self.window()
         if top is None or not top.isVisible():
             return
-        # 往上找承载本页的 QTabWidget（内嵌在调试页 Tab 里），没有就退到本页
+        # 往上找承载本页的 QTabWidget，再取其父容器（Card）作为顶部基准；
+        # 找不到 Card 时退回 Tab 栏顶，再找不到退回本页顶
         ref = self.parentWidget()
         while ref is not None and not isinstance(ref, QTabWidget):
             ref = ref.parentWidget()
+        if ref is not None:
+            card = ref.parentWidget()
+            ref = card if card is not None else ref
         if ref is None:
             ref = self
         p_g = ref.mapToGlobal(ref.rect().topLeft())

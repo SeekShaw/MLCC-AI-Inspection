@@ -27,6 +27,11 @@ from app_meta import APP_VERSION as _APP_VERSION_NUM  # noqa: E402
 
 VERSION = f"V{_APP_VERSION_NUM}"
 
+
+def _ver_text():
+    """启动画面版本行文案：版本：Ver 3.0.x.0（原始号，不带 V 前缀）。"""
+    return f"版本：Ver {_APP_VERSION_NUM}"
+
 # 与 styles.py 暗色主题一致的取色（启动早于主题加载，故内联一份）
 C_BG = "#23252B"
 C_CARD = "#2A2D35"
@@ -122,20 +127,25 @@ class StartupSplash(QWidget):
         top.addWidget(icon_lbl)
         name_box = QVBoxLayout()
         name_box.setSpacing(6)  # 主名与副标题/开发行上下间隙
-        # 主名：更大更粗（含版本号，与 exe / 关于页一致）
-        name_lbl = QLabel(f"EcompVision Inspector {version}")
+        # ⚠️ 2026-10-21 需求（第三次反馈）：主名/副标题不再带版本号，
+        # 版本改为独立一行放在「开发」下一行，左对齐同款次级样式。
+        # 主名：更大更粗
+        name_lbl = QLabel("EcompVision Inspector")
         name_lbl.setStyleSheet(f"color: {C_TEXT}; font-size: 19px; font-weight: bold;")
         # 副标题：英文全称（次要色，较小，可换行）
-        sub_lbl = QLabel(
-            f"Electronic Component Visual Inspection Software {version}")
+        sub_lbl = QLabel("Electronic Component Visual Inspection Software")
         sub_lbl.setWordWrap(True)
         sub_lbl.setStyleSheet(f"color: {C_TEXT2}; font-size: 12px;")
         # 开发行
         dev_lbl = QLabel("开发：ZY.SHAW")
         dev_lbl.setStyleSheet(f"color: {C_TEXT2}; font-size: 11px;")
+        # 版本行：与开发行同左缘、同字号（取 app_meta 未加 V 前缀的原始版本号）
+        ver_lbl = QLabel(_ver_text())
+        ver_lbl.setStyleSheet(f"color: {C_TEXT2}; font-size: 11px;")
         name_box.addWidget(name_lbl)
         name_box.addWidget(sub_lbl)
         name_box.addWidget(dev_lbl)
+        name_box.addWidget(ver_lbl)
         name_box.addStretch(1)
         top.addLayout(name_box, 1)
         root.addLayout(top)
