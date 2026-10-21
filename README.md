@@ -1,6 +1,7 @@
 # EcompVision Inspector
 
-基于两张参考图（生产运行界面 / 调试界面）开发的 Windows 演示 exe 程序。
+用于构建机器视觉检测应用的 Windows 演示运行程序
+#适合产品的六面外观检测方案构建
 
 ## 运行方式
 
