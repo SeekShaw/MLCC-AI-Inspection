@@ -3051,7 +3051,8 @@ class DebugView(QWidget):
         from flow_design import FlowDesignPage, _make_icon
         self._flow_page = FlowDesignPage(run_log=self._run_log,
                                          camera_names=CAMERA_NAMES,
-                                         current_camera=self.camera_name)
+                                         current_camera=self.camera_name,
+                                         image_display_cb=self.show_flow_image)
 
         tabs = QTabWidget()
         self._target_tabs = tabs
@@ -3526,6 +3527,17 @@ class DebugView(QWidget):
         for cam in self._cams:
             cam.set_frames([pixmap])
             cam.set_frame_index(0)
+
+    def show_flow_image(self, path):
+        """⚠️ 2026-10-21 需求：流程设计（虚拟相机）执行算法时，把当前
+        运行的图片同步刷新到调试界面相机画布——运行一张刷新一张
+        （执行所有则从第1张到最后一张逐张刷新）。"""
+        if not path or not os.path.exists(path):
+            return
+        pm = QPixmap(path)
+        if pm.isNull():
+            return
+        self._sync_local_image(pm)
 
     def _place_floating(self, win, anchor, align="left"):
         """将一个浮动窗口（相机标定 / 本地图像）的初始位置设定为「浮于 anchor

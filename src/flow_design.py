@@ -253,6 +253,9 @@ class FlowDocument(QObject):
     """
 
     changed = pyqtSignal()
+    # ⚠️ 2026-10-21 需求：全局选中变化（内嵌页/放大编辑窗任一处选中算子时
+    # 发出）——缩略图条等「跟随当前选中算子」的 UI 据此在两个窗口同步显隐。
+    sel_changed = pyqtSignal(str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -260,6 +263,28 @@ class FlowDocument(QObject):
         self._edges = []
         self._undo_stack = []
         self._redo_stack = []
+        # ⚠️ 2026-10-21 需求：选中算子记录在共享文档上——内嵌页与「放大编辑」
+        # 窗共用同一实例，缩略图条等跟随同一「当前选中算子」，避免另一窗口残留。
+        self.sel_nid = None
+        # ⚠️ 2026-10-21 需求：「运行到当前节点」限制（算子右键菜单设置）。
+        # 设置后，上1张/下1张等执行算法流程时只运行到此算子（含）即结束。
+        self._run_until = None
+
+    def set_ms(self, nid, ms):
+        """更新算子示例耗时并刷新画布（流程执行时的性能展示位：✔ ms 徽标）。"""
+        n = self.node(nid)
+        if n is None:
+            return
+        n["ms"] = round(float(ms), 2)
+        self.changed.emit()
+
+    def set_run_until(self, nid):
+        """设置/清除「运行到当前节点」限制（传 None 清除）。"""
+        self._run_until = nid
+        self.changed.emit()
+
+    def run_until(self):
+        return self._run_until
 
     # ---- 快照 ----
     def _snapshot(self):
@@ -580,6 +605,10 @@ class FlowCanvas(QWidget):
         """设置当前选中算子（变化时发出 selection_changed，右侧浮窗随之刷新）。"""
         prev = self._selected
         self._selected = nid
+        # 同步到共享文档（内嵌页 / 放大编辑窗共用），供缩略图条显隐等使用
+        if self._doc is not None:
+            self._doc.sel_nid = nid
+            self._doc.sel_changed.emit(nid or "")
         self.update()
         if prev != nid:
             self.selection_changed.emit(nid or "")
@@ -606,6 +635,14 @@ class FlowCanvas(QWidget):
         m_out.triggered.connect(
             lambda: self._remove_edges(nid, incoming=False, outgoing=True))
         menu.addSeparator()
+        # ⚠️ 2026-10-21 需求：「运行到当前节点」——设置后，上1张/下1张等
+        # 执行算法流程时只运行到此算子（含）即结束；已设置时可取消。
+        if self._doc is not None and self._doc.run_until() == nid:
+            menu.addAction("取消运行到当前节点").triggered.connect(
+                lambda: self._doc.set_run_until(None))
+        else:
+            menu.addAction("运行到当前节点").triggered.connect(
+                lambda: self._doc.set_run_until(nid))
         menu.addAction("删除").triggered.connect(lambda: self._remove_node(nid))
         menu.exec(gpos)
 
@@ -1236,18 +1273,22 @@ class FlowDesignPage(QWidget):
     """检测流程设计页（内嵌于卡片标签页，或被「放大编辑」大窗口承载）。"""
 
     def __init__(self, parent=None, document=None, run_log=None, embedded=True,
-                 camera_names=None, current_camera=None):
+                 camera_names=None, current_camera=None, image_display_cb=None):
         super().__init__(parent)
         self._run_log = run_log
         # 物理相机列表（用于图像源算子的「相机列表」候选）与当前调试界面相机
         # （自动关联/绑定）。由宿主调试界面传入；独立运行时为空。
         self._camera_names = list(camera_names or [])
         self._current_camera = current_camera
+        # ⚠️ 2026-10-21 需求：流程执行时把当前图片同步到调试界面相机画布的回调
+        self._image_display_cb = image_display_cb
         self._embedded = embedded
         self._dlg = None
         self._side_mode = None    # 蓝窗当前模式：None / "params" / "timing"
         self.document = document or FlowDocument()
         self.document.changed.connect(self._on_doc_changed)
+        # 全局选中变化 → 缩略图条显隐（内嵌页与放大编辑窗同步跟随）
+        self.document.sel_changed.connect(self._on_global_sel_changed)
         self._build_ui()
         self._seed_demo()
 
@@ -1443,9 +1484,18 @@ class FlowDesignPage(QWidget):
         h.addWidget(self._thumb_scroll)
         return w
 
+    def _on_global_sel_changed(self, _nid):
+        """全局选中变化（任一窗口选中算子）：本页缩略图条同步显隐。"""
+        if getattr(self, "_img_strip", None) is not None:
+            self._refresh_img_strip()
+
     def _refresh_img_strip(self):
-        """按「选中图像源节点 + 图像源=虚拟相机 + 已加载图片」决定显隐。"""
-        n = self.canvas.selected_node()
+        """仅当「当前选中的是读取图像（图像源）算子 + 图像源=虚拟相机 +
+        已加载图片」时显示；选中其它算子/取消选中即隐藏（全局选中）。"""
+        if getattr(self, "_img_strip", None) is None:
+            return
+        sel_nid = getattr(self.document, "sel_nid", None)
+        n = self.document.node(sel_nid) if sel_nid else None
         files = []
         if n is not None and n.get("cat") == "图像源":
             st = n.get("img_src") or {}
@@ -1499,13 +1549,66 @@ class FlowDesignPage(QWidget):
         elif mode == "next":
             self._img_cur = (self._img_cur + 1) % n
         self._highlight_thumbs()
-        self._log(f"图像源：第 {self._img_cur + 1}/{n} 张 - "
-                  f"{os.path.basename(self._img_files[self._img_cur])}")
+        # ⚠️ 2026-10-21 需求：上1张/下1张（含第1张/最后1张）切换即执行
+        # 算法流程（从图像源起，受「运行到当前节点」限制），并同步相机画布
+        self._exec_pipeline(self._img_files[self._img_cur])
 
     def _img_run_all(self):
+        """执行所有：从缩略图第1张到最后一张逐张执行（每张刷新一次相机画布）。"""
         if not self._img_files:
             return
-        self._log(f"图像源：执行所有（共 {len(self._img_files)} 张图片）")
+        self._run_all_idx = 0
+        if getattr(self, "_run_all_timer", None) is None:
+            self._run_all_timer = QTimer(self)
+            self._run_all_timer.timeout.connect(self._run_all_step)
+        self._run_all_timer.start(350)
+        self._run_all_step()
+
+    def _run_all_step(self):
+        if getattr(self, "_run_all_idx", 0) >= len(self._img_files):
+            self._run_all_timer.stop()
+            self._log(f"图像源：执行所有完成（共 {len(self._img_files)} 张）")
+            return
+        i = self._run_all_idx
+        self._img_cur = i
+        self._highlight_thumbs()
+        self._exec_pipeline(self._img_files[i])
+        self._run_all_idx += 1
+
+    def _exec_pipeline(self, img_path):
+        """执行算法流程：从图像源算子起沿连线向下游依次执行；
+        设了「运行到当前节点」则只运行到该算子（含）即结束。
+
+        每个算子刷新示例耗时 → 画布 ✔ ms 徽标（性能展示位）实时更新；
+        图片同步刷新到调试界面相机画布（主画布 + R/G/B 通道）。"""
+        doc = self.document
+        sel_nid = getattr(doc, "sel_nid", None)
+        src = doc.node(sel_nid) if sel_nid else None
+        if src is None or src.get("cat") != "图像源":
+            return
+        # 沿连线收集下游执行序列（按连线顺序，防环）
+        order = [src["id"]]
+        while True:
+            nxts = [e["dst"] for e in doc.edges() if e["src"] == order[-1]
+                    and e["dst"] not in order]
+            if not nxts:
+                break
+            order.append(nxts[0])
+        stop = doc.run_until()
+        if stop in order:
+            order = order[:order.index(stop) + 1]
+        if img_path:
+            self._log(f"执行流程：{os.path.basename(img_path)}"
+                      + (f"（运行到：{doc.node(stop)['name']}）" if stop in order else ""))
+        for i, nid in enumerate(order):
+            nd = doc.node(nid)
+            ms = round(1.5 + (sum(map(ord, nd["name"])) % 130) / 9.0
+                       + len(order) * 0.37, 2)   # 示例耗时（随图片轮换变化）
+            doc.set_ms(nid, ms)
+            self._log(f"  {i + 1}. {nd['name']}：{ms:.2f} ms")
+        # 图片同步到调试界面相机画布
+        if self._image_display_cb is not None and img_path:
+            self._image_display_cb(img_path)
 
     def _seed_demo(self):
         """首次创建时给一组示例流程（读取图像 → 二值化），与参考图一致。"""
@@ -2222,7 +2325,8 @@ class FlowDesignPage(QWidget):
             return
         self._dlg = FlowDesignDialog(self.document, self,
                                      camera_names=self._camera_names,
-                                     current_camera=self._current_camera)
+                                     current_camera=self._current_camera,
+                                     image_display_cb=self._image_display_cb)
         self._dlg.show()
         # ⚠️ show() 时 Qt 才按「父窗口居中」落位并按布局最小尺寸改大小，
         # 会覆盖 show 前设置的几何——因此几何必须在 show 之后再应用；
@@ -2280,6 +2384,10 @@ class FlowDesignPage(QWidget):
             h = max(600, int(top.height() * 0.86))
             tr = top_ref.mapToGlobal(top_ref.rect().topRight()).x()
             g = QPoint(tr - w - 8, p_g_y)
+        # ⚠️ 2026-10-21 需求：放大编辑卡片高度顶部/底部分别向内收缩 10px
+        # （顶缘下移 10、底缘上移 10，即总高收 20、上下各让出 10px）
+        g.setY(g.y() + 10)
+        h = max(1, h - 20)
         scr = self.screen()
         if scr is not None:
             av = scr.availableGeometry()
@@ -2328,7 +2436,8 @@ class FlowDesignPage(QWidget):
 class FlowDesignDialog(QDialog):
     """「放大编辑」非模态大窗口：与内嵌页共享 FlowDocument，实时同步。"""
 
-    def __init__(self, document, parent=None, camera_names=None, current_camera=None):
+    def __init__(self, document, parent=None, camera_names=None, current_camera=None,
+                 image_display_cb=None):
         super().__init__(parent)
         self.setWindowTitle("检测流程设计 - 流程编辑器（放大编辑）")
         self.resize(1100, 720)
@@ -2339,4 +2448,5 @@ class FlowDesignDialog(QDialog):
         lay.setContentsMargins(0, 0, 0, 0)
         lay.addWidget(FlowDesignPage(document=document, embedded=False,
                                      camera_names=camera_names,
-                                     current_camera=current_camera))
+                                     current_camera=current_camera,
+                                     image_display_cb=image_display_cb))
