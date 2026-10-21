@@ -1287,7 +1287,10 @@ class FlowDesignPage(QWidget):
         self._side_mode = None    # 蓝窗当前模式：None / "params" / "timing"
         self.document = document or FlowDocument()
         self.document.changed.connect(self._on_doc_changed)
-        # 全局选中变化 → 缩略图条显隐（内嵌页与放大编辑窗同步跟随）
+        # 文档变更 → 重新评估缩略图条（内嵌页与放大编辑窗同步跟随：
+        # 虚拟相机+已加载图片即显示，与是否选中该算子无关）
+        self.document.changed.connect(self._refresh_img_strip)
+        # 全局选中变化 → 触发一次评估（同上）
         self.document.sel_changed.connect(self._on_global_sel_changed)
         self._build_ui()
         self._seed_demo()
@@ -1429,6 +1432,9 @@ class FlowDesignPage(QWidget):
         self._img_strip = self._make_img_strip()
         v.addWidget(self._img_strip)
         self._img_strip.hide()
+        # 按当前文档状态初始化缩略图条（避免后开「放大编辑」窗时遗漏已有
+        # 的虚拟相机+已加载图片状态）：虚拟相机且已加载即显示，与选中无关。
+        self._refresh_img_strip()
         self._fitted = False
 
     # ---- 图像源缩略图条（虚拟相机加载图片后出现在画布底部） ----
@@ -1485,25 +1491,33 @@ class FlowDesignPage(QWidget):
         return w
 
     def _on_global_sel_changed(self, _nid):
-        """全局选中变化（任一窗口选中算子）：本页缩略图条同步显隐。"""
+        """全局选中变化（任一窗口选中算子）：触发一次缩略图条评估。"""
         if getattr(self, "_img_strip", None) is not None:
             self._refresh_img_strip()
 
     def _refresh_img_strip(self):
-        """仅当「当前选中的是读取图像（图像源）算子 + 图像源=虚拟相机 +
-        已加载图片」时显示；选中其它算子/取消选中即隐藏（全局选中）。"""
+        """⚠️ 2026-10-21 需求：缩略图条跟随文档中**图像源算子**的状态——
+        只要该算子是「虚拟相机」且已加载图片，就一直显示；与当前是否选中
+        该算子无关（切到其它算子/取消选中也不隐藏）。多图像源时取第一个
+        虚拟相机且已加载的节点。
+
+        通过文档 changed 信号驱动（加载图片/切换物理-虚拟均会走到），
+        内嵌页与放大编辑窗保持同步；用文件集合签名避免执行流程时反复重建。"""
         if getattr(self, "_img_strip", None) is None:
             return
-        sel_nid = getattr(self.document, "sel_nid", None)
-        n = self.document.node(sel_nid) if sel_nid else None
         files = []
-        if n is not None and n.get("cat") == "图像源":
-            st = n.get("img_src") or {}
-            if st.get("type") == "虚拟相机":
-                files = list(st.get("files") or [])
-        self._img_files = files
-        self._img_cur = 0 if not files else min(self._img_cur, len(files) - 1)
-        self._rebuild_img_thumbs()
+        for n in self.document.nodes():
+            if n.get("cat") == "图像源":
+                st = n.get("img_src") or {}
+                if st.get("type") == "虚拟相机":
+                    files = list(st.get("files") or [])
+                    if files:
+                        break
+        if files != self._img_files:
+            self._img_files = files
+            self._img_cur = 0 if not files else min(
+                self._img_cur, len(files) - 1)
+            self._rebuild_img_thumbs()
         self._img_strip.setVisible(bool(files))
 
     def _rebuild_img_thumbs(self):
@@ -1582,9 +1596,16 @@ class FlowDesignPage(QWidget):
         每个算子刷新示例耗时 → 画布 ✔ ms 徽标（性能展示位）实时更新；
         图片同步刷新到调试界面相机画布（主画布 + R/G/B 通道）。"""
         doc = self.document
-        sel_nid = getattr(doc, "sel_nid", None)
-        src = doc.node(sel_nid) if sel_nid else None
-        if src is None or src.get("cat") != "图像源":
+        # ⚠️ 2026-10-21 需求：执行流程不依赖当前选中算子——找文档中
+        # 「虚拟相机 + 已加载图片」的图像源节点作为流程起点。
+        src = None
+        for n in doc.nodes():
+            if n.get("cat") == "图像源":
+                st = n.get("img_src") or {}
+                if st.get("type") == "虚拟相机" and st.get("files"):
+                    src = n
+                    break
+        if src is None:
             return
         # 沿连线收集下游执行序列（按连线顺序，防环）
         order = [src["id"]]
@@ -2119,7 +2140,9 @@ class FlowDesignPage(QWidget):
                     # 已加载图片必须保留（切到物理相机再切回不清空）
                     "files": st.get("files") or [],
                 }
-                self._refresh_img_strip()
+                # 发出 changed：内嵌页与放大编辑窗的缩略图条同步评估
+                # （虚拟相机+已加载图片即显示，与是否选中该算子无关）
+                self.document.changed.emit()
 
             def _pick_camera():
                 # 自动选中当前工位绑定好的相机；未绑定为空（索引 -1 显示空）
@@ -2138,7 +2161,9 @@ class FlowDesignPage(QWidget):
                 st = node.get("img_src") or {}
                 node["img_src"] = {**st, "type": src_cb.currentText(),
                                    "camera": "", "files": list(files)}
-                self._refresh_img_strip()
+                # 发出 changed：内嵌页与放大编辑窗的缩略图条同步评估
+                # （虚拟相机+已加载图片即显示，与是否选中该算子无关）
+                self.document.changed.emit()
                 self._log(f"图像源：已加载 {len(files)} 张图片")
 
             def _load_dir():
@@ -2154,7 +2179,9 @@ class FlowDesignPage(QWidget):
                 st = node.get("img_src") or {}
                 node["img_src"] = {**st, "type": src_cb.currentText(),
                                    "camera": "", "files": files}
-                self._refresh_img_strip()
+                # 发出 changed：内嵌页与放大编辑窗的缩略图条同步评估
+                # （虚拟相机+已加载图片即显示，与是否选中该算子无关）
+                self.document.changed.emit()
                 self._log(f"图像源：已从文件夹加载 {len(files)} 张图片")
 
             def _refresh_dyn():
