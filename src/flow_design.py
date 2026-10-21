@@ -1787,11 +1787,14 @@ class FlowDesignPage(QWidget):
         h = b_g - p_g_y              # 底缘保持页面底缘
         fallback = w < 700 or h < 500
         if fallback:
-            # 画布过小（未布局完/嵌入区窄）：仍锚定同一顶缘与左缘（基准容器
-            # 左缘=内容区左缘），尺寸按主窗比例，不再用「与任何边缘无关」的位置
-            w = max(900, int(top.width() * 0.72))
-            h = max(600, int(top.height() * 0.80))
-            g = QPoint(top_ref.mapToGlobal(top_ref.rect().topLeft()).x(), p_g_y)
+            # ⚠️ 2026-10-21 需求（第七次反馈）：画布嵌入区窄（<700）走兜底时——
+            # 恢复「原来的宽度/高度」（0.58 / 0.86 主窗比例），并改为
+            # **右上对齐**：右缘贴内容区右缘（基准容器右缘）、顶缘贴工具栏
+            # 下缘。不再是左对齐，也不再无故变宽。
+            w = max(900, int(top.width() * 0.58))
+            h = max(600, int(top.height() * 0.86))
+            tr = top_ref.mapToGlobal(top_ref.rect().topRight()).x()
+            g = QPoint(tr - w - 8, p_g_y)
         scr = self.screen()
         if scr is not None:
             av = scr.availableGeometry()
