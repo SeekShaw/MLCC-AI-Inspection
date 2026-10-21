@@ -522,7 +522,10 @@ class FlowCanvas(QWidget):
         sw = max(1.0, self.width() - pad * 2)
         sh = max(1.0, self.height() - pad * 2)
         s = min(sw / (x1 - x0), sh / (y1 - y0), 1.6)
-        self._scale = max(0.4, s)
+        # ⚠️ 2026-10-21 需求：「适应画布」必须把全部节点完整显示在窗口内、
+        # 不被遮挡——下限不再沿用滚轮缩放的 0.4（节点多/窗口小时 0.4 会
+        # 截断底部节点），适应时允许更小缩放（下限 0.08）。
+        self._scale = max(0.08, s)
         self._offset = QPointF(
             (self.width() - (x1 - x0) * self._scale) / 2 - x0 * self._scale,
             (self.height() - (y1 - y0) * self._scale) / 2 - y0 * self._scale)
@@ -2236,11 +2239,21 @@ class FlowDesignPage(QWidget):
                     hh.setContentsMargins(0, 0, 0, 0)
                     hh.setSpacing(4)
 
+                    # ⚠️ 2026-10-21 需求：加载图片/加载文件夹按钮字号与页内
+                    # 一致（11px）并加底色——之前误用 _combo_ss（QComboBox
+                    # 选择器），QPushButton 不匹配导致默认样式（大字/无底色）。
+                    _btn_ss = (
+                        f"QPushButton{{background-color:{COLORS['bg_card']}; "
+                        f"color:{COLORS['text_primary']}; "
+                        f"border:1px solid {COLORS['border']}; "
+                        f"border-radius:3px; font-size:11px; padding:0 10px;}}"
+                        f"QPushButton:hover{{background-color:{COLORS['border']};}}")
+
                     def _btn(txt, cb):
                         b = QPushButton(txt)
                         b.setFixedHeight(24)
                         b.setCursor(Qt.CursorShape.PointingHandCursor)
-                        b.setStyleSheet(_combo_ss)
+                        b.setStyleSheet(_btn_ss)
                         b.clicked.connect(cb)
                         hh.addWidget(b)
                     _btn("加载图片", _load_pics)
