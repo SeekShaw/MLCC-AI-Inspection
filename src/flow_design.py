@@ -11,6 +11,7 @@
 """
 import json
 import math
+import os
 import uuid
 
 from PyQt6.QtCore import (
@@ -21,7 +22,7 @@ from PyQt6.QtGui import (
 from PyQt6.QtWidgets import (
     QWidget, QLabel, QPushButton, QVBoxLayout, QHBoxLayout, QScrollArea,
     QLineEdit, QDialog, QSizePolicy, QDoubleSpinBox, QProgressBar, QFrame,
-    QCheckBox, QMenu, QLayout, QTabWidget, QComboBox)
+    QCheckBox, QMenu, QLayout, QTabWidget, QComboBox, QFileDialog)
 
 from styles import COLORS
 
@@ -1216,6 +1217,21 @@ class _FloatDragHandler(QObject):
         return False
 
 
+class _ThumbLabel(QLabel):
+    """图像源缩略图：可点选，点击回调 on_pick(idx)。"""
+
+    def __init__(self, idx, on_pick):
+        super().__init__()
+        self._idx = idx
+        self._on_pick = on_pick
+        self.setFixedSize(96, 72)
+        self.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+
+    def mousePressEvent(self, ev):
+        self._on_pick(self._idx)
+
+
 class FlowDesignPage(QWidget):
     """检测流程设计页（内嵌于卡片标签页，或被「放大编辑」大窗口承载）。"""
 
@@ -1364,7 +1380,132 @@ class FlowDesignPage(QWidget):
         self._st.addStretch(1)
         body.addWidget(self._side_tools)
         v.addLayout(body, 1)
+
+        # ⚠️ 2026-10-21 需求：图像源（虚拟相机）加载图片后的缩略图条——
+        # 位于画布底部整行，仅当「选中图像源算子 + 图像源=虚拟相机 + 已加载
+        # 图片」时出现；上方为 第1张/上1张/下1张/最后1张/执行所有 按钮，
+        # 下方为图片缩略图（横向滚动，可点选当前图）。
+        self._img_strip = self._make_img_strip()
+        v.addWidget(self._img_strip)
+        self._img_strip.hide()
         self._fitted = False
+
+    # ---- 图像源缩略图条（虚拟相机加载图片后出现在画布底部） ----
+    def _make_img_strip(self):
+        w = QWidget()
+        w.setStyleSheet(
+            f"QWidget{{background-color:{COLORS['bg_panel']}; "
+            f"border-top:1px solid {COLORS['border']};}}")
+        h = QVBoxLayout(w)
+        h.setContentsMargins(6, 4, 6, 4)
+        h.setSpacing(4)
+        self._img_files = []   # 当前缩略图文件列表（同步自选中图像源节点）
+        self._img_cur = 0      # 当前选中索引
+        btns = QHBoxLayout()
+        btns.setSpacing(4)
+
+        def _btn(txt, cb):
+            b = QPushButton(txt)
+            b.setFixedHeight(22)
+            b.setCursor(Qt.CursorShape.PointingHandCursor)
+            b.setStyleSheet(
+                f"QPushButton{{background-color:{COLORS['bg_card']}; "
+                f"color:{COLORS['text_primary']}; border:1px solid {COLORS['border']}; "
+                f"border-radius:3px; font-size:11px; padding:0 8px;}}"
+                f"QPushButton:hover{{background-color:{COLORS['border']};}}")
+            b.clicked.connect(cb)
+            btns.addWidget(b)
+
+        _btn("第1张", lambda: self._img_nav("first"))
+        _btn("上1张", lambda: self._img_nav("prev"))
+        _btn("下1张", lambda: self._img_nav("next"))
+        _btn("最后1张", lambda: self._img_nav("last"))
+        _btn("执行所有", self._img_run_all)
+        btns.addStretch(1)
+        h.addLayout(btns)
+
+        self._thumb_scroll = QScrollArea()
+        self._thumb_scroll.setWidgetResizable(True)
+        self._thumb_scroll.setFixedHeight(84)
+        self._thumb_scroll.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self._thumb_scroll.setVerticalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self._thumb_scroll.setStyleSheet(
+            f"QScrollArea{{border:1px solid {COLORS['border']}; "
+            f"border-radius:4px; background-color:{COLORS['bg_dark']};}}")
+        holder = QWidget()
+        holder.setStyleSheet("background-color:transparent;")
+        self._thumb_lay = QHBoxLayout(holder)
+        self._thumb_lay.setContentsMargins(2, 2, 2, 2)
+        self._thumb_lay.setSpacing(4)
+        self._thumb_scroll.setWidget(holder)
+        h.addWidget(self._thumb_scroll)
+        return w
+
+    def _refresh_img_strip(self):
+        """按「选中图像源节点 + 图像源=虚拟相机 + 已加载图片」决定显隐。"""
+        n = self.canvas.selected_node()
+        files = []
+        if n is not None and n.get("cat") == "图像源":
+            st = n.get("img_src") or {}
+            if st.get("type") == "虚拟相机":
+                files = list(st.get("files") or [])
+        self._img_files = files
+        self._img_cur = 0 if not files else min(self._img_cur, len(files) - 1)
+        self._rebuild_img_thumbs()
+        self._img_strip.setVisible(bool(files))
+
+    def _rebuild_img_thumbs(self):
+        self._clear_layout(self._thumb_lay)
+        for i, f in enumerate(self._img_files):
+            lab = _ThumbLabel(i, self._img_pick)
+            pm = QPixmap(f)
+            if not pm.isNull():
+                lab.setPixmap(pm.scaledToHeight(
+                    72, Qt.TransformationMode.SmoothTransformation))
+            else:
+                lab.setText(os.path.basename(f))
+            self._thumb_lay.addWidget(lab)
+        self._thumb_lay.addStretch(1)
+        self._highlight_thumbs()
+
+    def _highlight_thumbs(self):
+        for i in range(self._thumb_lay.count()):
+            wdg = self._thumb_lay.itemAt(i).widget()
+            if isinstance(wdg, _ThumbLabel):
+                cur = (i == self._img_cur)
+                wdg.setStyleSheet(
+                    f"QLabel{{background-color:{COLORS['bg_card']}; "
+                    f"border:{'2px solid #4261FF' if cur else '1px solid ' + COLORS['border']}; "
+                    f"border-radius:3px; color:{COLORS['text_secondary']}; font-size:10px;}}")
+
+    def _img_pick(self, idx):
+        self._img_cur = idx
+        self._highlight_thumbs()
+        self._log(f"图像源：选中第 {idx + 1}/{len(self._img_files)} 张 - "
+                  f"{os.path.basename(self._img_files[idx])}")
+
+    def _img_nav(self, mode):
+        if not self._img_files:
+            return
+        n = len(self._img_files)
+        if mode == "first":
+            self._img_cur = 0
+        elif mode == "last":
+            self._img_cur = n - 1
+        elif mode == "prev":
+            self._img_cur = (self._img_cur - 1) % n
+        elif mode == "next":
+            self._img_cur = (self._img_cur + 1) % n
+        self._highlight_thumbs()
+        self._log(f"图像源：第 {self._img_cur + 1}/{n} 张 - "
+                  f"{os.path.basename(self._img_files[self._img_cur])}")
+
+    def _img_run_all(self):
+        if not self._img_files:
+            return
+        self._log(f"图像源：执行所有（共 {len(self._img_files)} 张图片）")
 
     def _seed_demo(self):
         """首次创建时给一组示例流程（读取图像 → 二值化），与参考图一致。"""
@@ -1640,6 +1781,7 @@ class FlowDesignPage(QWidget):
 
     def _on_selection_changed(self, _nid):
         """画布选中节点变化：已展开的浮窗实时跟随刷新（高度同步自适应）。"""
+        self._refresh_img_strip()   # 缩略图条跟随选中图像源节点显隐
         if self._float_algo.isVisible():
             self._refresh_side_panel()
             self._fit_float_height(self._float_algo)
@@ -1842,20 +1984,18 @@ class FlowDesignPage(QWidget):
         f2.setSpacing(7)
 
         def _add_image_source_rows():
-            # ⚠️ 2026-10-21 需求：图像源算子参数放「参数」页——图像源选择
-            # （物理相机 / 虚拟相机）。选物理相机 → 「相机列表」（默认自动关联
-            # 绑定当前调试界面相机）；选虚拟相机 → 「图片来源」（加载图片 /
-            # 加载文件夹）。配置持久化到节点，重开面板/来回切换不丢用户选择。
-            default_cam = (self._current_camera
-                           if self._current_camera in self._camera_names
-                           else (self._camera_names[0] if self._camera_names else ""))
-
+            # ⚠️ 2026-10-21 需求：图像源算子参数放「参数」页——
+            # 1) 「图像源」下拉只有 物理相机 / 虚拟相机 两项；
+            # 2) 选物理相机 → 「相机」行：自动选中当前工位绑定好的相机，
+            #    未绑定则为空（不显示任何相机名）；
+            # 3) 选虚拟相机 → 「图片源」行：旁边两个按钮 加载图片 / 加载文件夹，
+            #    加载后缩略图出现在流程画布底部（仅虚拟相机+已加载时出现）。
+            # 配置持久化到节点 img_src。
             src_cb = QComboBox()
             src_cb.setFixedHeight(24)
             src_cb.setStyleSheet(_combo_ss)
-            src_cb.addItems(self._camera_names + ["虚拟相机"])
-            src_cb.setCurrentText((node.get("img_src") or {}).get(
-                "type", default_cam or "虚拟相机"))
+            src_cb.addItems(["物理相机", "虚拟相机"])
+            src_cb.setCurrentText((node.get("img_src") or {}).get("type", "物理相机"))
             f2.addLayout(self._params_form_row("图像源", src_cb))
 
             dyn = QWidget()
@@ -1865,37 +2005,83 @@ class FlowDesignPage(QWidget):
             f2.addWidget(dyn)
 
             cam_cb = None
-            pic_cb = None
 
             def _write():
+                st = node.get("img_src") or {}
                 node["img_src"] = {
                     "type": src_cb.currentText(),
-                    "camera": cam_cb.currentText() if src_cb.currentText() != "虚拟相机" else "",
-                    "pic_src": pic_cb.currentText() if src_cb.currentText() == "虚拟相机" else "",
+                    "camera": cam_cb.currentText()
+                              if (cam_cb is not None
+                                  and src_cb.currentText() == "物理相机") else "",
+                    # 已加载图片必须保留（切到物理相机再切回不清空）
+                    "files": st.get("files") or [],
                 }
+                self._refresh_img_strip()
+
+            def _pick_camera():
+                # 自动选中当前工位绑定好的相机；未绑定为空（索引 -1 显示空）
+                bound = (node.get("img_src") or {}).get("camera", "")
+                if bound:
+                    cam_cb.setCurrentText(bound)
+                else:
+                    cam_cb.setCurrentIndex(-1)
+
+            def _load_pics():
+                files, _ = QFileDialog.getOpenFileNames(
+                    self, "选择图片", "",
+                    "图片文件 (*.png *.jpg *.jpeg *.bmp *.tif *.tiff)")
+                if not files:
+                    return
+                st = node.get("img_src") or {}
+                node["img_src"] = {**st, "type": src_cb.currentText(),
+                                   "camera": "", "files": list(files)}
+                self._refresh_img_strip()
+                self._log(f"图像源：已加载 {len(files)} 张图片")
+
+            def _load_dir():
+                d = QFileDialog.getExistingDirectory(self, "选择图片文件夹", "")
+                if not d:
+                    return
+                exts = {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff"}
+                files = sorted(os.path.join(d, f) for f in os.listdir(d)
+                               if os.path.splitext(f)[1].lower() in exts)
+                if not files:
+                    self._log("图像源：该文件夹中没有图片文件")
+                    return
+                st = node.get("img_src") or {}
+                node["img_src"] = {**st, "type": src_cb.currentText(),
+                                   "camera": "", "files": files}
+                self._refresh_img_strip()
+                self._log(f"图像源：已从文件夹加载 {len(files)} 张图片")
 
             def _refresh_dyn():
-                nonlocal cam_cb, pic_cb
+                nonlocal cam_cb
                 self._clear_layout(dyn_lay)
-                # 读节点实时 img_src（_write 会替换该 dict，不能用入口捕获的 st）
-                live = node.get("img_src") or {}
                 if src_cb.currentText() == "虚拟相机":
-                    pic_cb = QComboBox()
-                    pic_cb.setFixedHeight(24)
-                    pic_cb.setStyleSheet(_combo_ss)
-                    pic_cb.addItems(["加载图片", "加载文件夹"])
-                    pic_cb.setCurrentText(live.get("pic_src", "加载图片"))
-                    pic_cb.currentIndexChanged.connect(_write)
-                    dyn_lay.addLayout(self._params_form_row("图片来源", pic_cb))
+                    holder = QWidget()
+                    hh = QHBoxLayout(holder)
+                    hh.setContentsMargins(0, 0, 0, 0)
+                    hh.setSpacing(4)
+
+                    def _btn(txt, cb):
+                        b = QPushButton(txt)
+                        b.setFixedHeight(24)
+                        b.setCursor(Qt.CursorShape.PointingHandCursor)
+                        b.setStyleSheet(_combo_ss)
+                        b.clicked.connect(cb)
+                        hh.addWidget(b)
+                    _btn("加载图片", _load_pics)
+                    _btn("加载文件夹", _load_dir)
+                    hh.addStretch(1)
+                    dyn_lay.addLayout(self._params_form_row("图片源", holder))
                 else:
                     cam_cb = QComboBox()
                     cam_cb.setFixedHeight(24)
                     cam_cb.setStyleSheet(_combo_ss)
                     cam_cb.addItems(self._camera_names)
-                    # 自动关联绑定当前调试界面相机（无手动选择时）
-                    cam_cb.setCurrentText(live.get("camera", default_cam))
+                    _pick_camera()
                     cam_cb.currentIndexChanged.connect(_write)
-                    dyn_lay.addLayout(self._params_form_row("相机列表", cam_cb))
+                    dyn_lay.addLayout(self._params_form_row("相机", cam_cb))
                 _write()
 
             src_cb.currentIndexChanged.connect(_refresh_dyn)
