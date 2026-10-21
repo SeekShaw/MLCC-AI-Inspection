@@ -33,7 +33,7 @@ from app_meta import APP_VERSION as _APP_VERSION_NUM  # noqa: E402
 APP_USER_MODEL_ID = f"Teruo.EcompVisionInspector.{_APP_VERSION_NUM}"
 APP_VERSION = f"V{_APP_VERSION_NUM}"
 COMPANY_NAME = "ZiGAA ChuangYuan（智感科技）"
-COMPANY_COPYRIGHT = "Copyright (C) 2026 By: ZIGAA ChuangYuan"
+COMPANY_COPYRIGHT = "By：ZY.SHAW"          # 2026-10-21：版权信息统一改为 ZY.SHAW
 
 # Windows 开机自启动：注册表 HKCU\...\Run 下的项名
 _AUTOSTART_REG_PATH = r"Software\Microsoft\Windows\CurrentVersion\Run"
@@ -678,7 +678,7 @@ class MainWindow(QMainWindow):
         self._runtime_timer.setInterval(1000)
         self._runtime_timer.timeout.connect(self._refresh_runtime_footer)
         # Copyright：置于「运行时间」右侧（二者位置互换）
-        self.lbl_copyright = QLabel("Copyright (C) 2026 By: ZIGAA ChuangYuan")
+        self.lbl_copyright = QLabel(COMPANY_COPYRIGHT)
         self.lbl_copyright.setStyleSheet(
             f"color: {COLORS['text_secondary']}; font-size: 11px;")
         footer_layout.addWidget(self.lbl_copyright)

@@ -66,7 +66,7 @@ VSVersionInfo(
         StringStruct('FileDescription', '{name}'),
         StringStruct('FileVersion', '{ver}'),
         StringStruct('InternalName', '{name}'),
-        StringStruct('LegalCopyright', 'Copyright (C) 2026 By: ZIGAA ChuangYuan'),
+        StringStruct('LegalCopyright', 'By：ZY.SHAW'),
         StringStruct('OriginalFilename', '{name}.exe'),
         StringStruct('ProductName', '{name}'),
         StringStruct('ProductVersion', '{ver}')]),
@@ -189,6 +189,13 @@ def main():
     if os.path.exists("app_icon.ico"):
         shutil.copy2("app_icon.ico", os.path.join("output", "app_icon.ico"))
         print("   同步 app_icon.ico ->", os.path.join("output", "app_icon.ico"))
+
+    # 3.2) 同步发布说明：仓库根 README.release.md -> output/README.md
+    # （2026-10-21：output/README.md 内容陈旧仍写着旧版本号与旧 exe 名，
+    #  改为每次构建自动同步，README 只需维护根目录下的规范版本）
+    if os.path.exists("README.release.md"):
+        shutil.copy2("README.release.md", os.path.join("output", "README.md"))
+        print("   同步发布说明 ->", os.path.join("output", "README.md"))
 
     # 4) build_backup_* 中的旧 exe 一并移走
     for d in os.listdir("."):

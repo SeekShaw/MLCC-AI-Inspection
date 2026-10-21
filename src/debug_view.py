@@ -4641,16 +4641,101 @@ class DebugView(QWidget):
             QMessageBox.information(self, "单位设置", f"已更新 {n} 项单位。")
 
     def _on_output_settings(self):
-        """出料设置：打开剔除设定（各剔除口顺序/启用/位置/吹气/优先级）。"""
-        mw = self.main_window
-        if mw is None:
-            QMessageBox.information(self, "出料设置", "请在主程序中使用「出料设置」。")
+        """出料设置：对应检测表「收料位置」列——列出检测表中的所有检测项，
+
+        逐项设置收料位置（可下拉选择 / 直接输入自定义口名），确定后写回
+        表格数据并刷新「收料位置」列显示。
+        ⚠️ 2026-10-21 需求：此窗口内容改为检测表收料位置列的批量设置，
+        不再打开「剔除设定」（设备剔除口硬件配置）窗口。
+        """
+        _PORT_OPTIONS = ["RST", "NG1", "NG2", "NG3"]
+        # 常用口 + 表内已出现的自定义口合并为候选（去重保序）
+        options = list(_PORT_OPTIONS)
+        for row in self._table_data:
+            cur = str(row[9] or "").strip()
+            if cur and cur not in options:
+                options.append(cur)
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle("出料设置")
+        dlg.setWindowFlags(dlg.windowFlags() | Qt.WindowType.WindowStaysOnTopHint)
+        dlg.setStyleSheet(f"QDialog {{ background-color: {COLORS['bg_panel']}; }}")
+        dlg.resize(440, 540)
+        v = QVBoxLayout(dlg)
+        v.setContentsMargins(14, 12, 14, 12)
+        v.setSpacing(8)
+        tip = QLabel("对应检测表「收料位置」列：为每个检测项选择 / 输入收料位置")
+        tip.setStyleSheet(f"color:{COLORS['text_secondary']}; font-size:11px;")
+        tip.setWordWrap(True)
+        v.addWidget(tip)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setStyleSheet("QScrollArea { background: transparent; }")
+        body = QWidget()
+        body.setStyleSheet("background: transparent;")
+        bl = QVBoxLayout(body)
+        bl.setContentsMargins(0, 0, 0, 0)
+        bl.setSpacing(6)
+        _f = QFont("Microsoft YaHei")
+        _f.setPixelSize(10)
+        combos = []   # [(row, combo), ...]
+        for r, row in enumerate(self._table_data):
+            if not str(row[2] or "").strip():   # 空检测项行跳过（同单位设置）
+                continue
+            rw = QWidget()
+            rw.setStyleSheet("background: transparent;")
+            hl = QHBoxLayout(rw)
+            hl.setContentsMargins(0, 0, 0, 0)
+            hl.setSpacing(8)
+            name = QLabel(f"{row[1]}  {row[2]}")
+            name.setFont(_f)
+            name.setStyleSheet(
+                f"color:{COLORS['text_primary']}; font-size:10px;")
+            hl.addWidget(name, 1)
+            cb = QComboBox()
+            cb.setFont(_f)
+            cb.setEditable(True)
+            cb.addItems(options)
+            cb.setCurrentText(str(row[9]))
+            cb.setFixedHeight(24)
+            cb.setFixedWidth(110)
+            hl.addWidget(cb, 0)
+            bl.addWidget(rw)
+            combos.append((r, cb))
+        bl.addStretch(1)
+        scroll.setWidget(body)
+        v.addWidget(scroll, 1)
+        btns = QHBoxLayout()
+        btns.addStretch(1)
+        ok_btn = QPushButton("确定")
+        ok_btn.setStyleSheet(
+            f"background-color:{COLORS['accent_blue']}; color:white; border:none; "
+            f"border-radius:4px; padding:6px 18px; font-size:12px;")
+        cancel_btn = QPushButton("取消")
+        cancel_btn.setStyleSheet(
+            f"background-color:{COLORS['bg_card']}; color:{COLORS['text_primary']}; "
+            f"border:1px solid {COLORS['border']}; border-radius:4px; "
+            f"padding:6px 18px; font-size:12px;")
+        ok_btn.clicked.connect(dlg.accept)
+        cancel_btn.clicked.connect(dlg.reject)
+        btns.addWidget(ok_btn)
+        btns.addWidget(cancel_btn)
+        v.addLayout(btns)
+        if dlg.exec() != QDialog.DialogCode.Accepted:
             return
-        try:
-            from device_settings_dialog import RejectSettingsDialog
-            RejectSettingsDialog(mw).exec()
-        except Exception as e:
-            QMessageBox.warning(self, "出料设置", f"打开剔除设定失败：{e!r}")
+        n = 0
+        for r, cb in combos:
+            port = cb.currentText().strip()
+            if 0 <= r < len(self._table_data) \
+                    and str(self._table_data[r][9]) != port:
+                self._table_data[r][9] = port
+                self._refresh_row_display(r)     # 同步「收料位置」列显示
+                n += 1
+        self._dv_log(f"检测项设置：出料设置已更新（{n} 项收料位置）")
+        if n:
+            QMessageBox.information(self, "出料设置",
+                                    f"已更新 {n} 项收料位置。")
 
     def _on_sync_all(self):
         """全部同步：把本相机检测项设置同步到其它所有相机调试页。"""

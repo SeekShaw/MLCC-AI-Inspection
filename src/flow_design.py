@@ -327,6 +327,23 @@ class FlowDocument(QObject):
                        if e["src"] != nid and e["dst"] != nid]
         self.changed.emit()
 
+    def rename_node(self, nid, name):
+        """重命名算子（入撤销栈；改名后画布/各浮窗随 changed 信号刷新）。
+
+        ⚠️ 2026-10-21 需求：算法参数首页「工具名称」可自定义修改，
+        改完所有显示旧名的地方一起同步。空名 / 同名直接忽略（返回 False）。
+        """
+        n = self.node(nid)
+        if n is None:
+            return False
+        name = str(name).strip()
+        if not name or name == n["name"]:
+            return False
+        self._push()
+        n["name"] = name[:30]      # 与画布卡片省略上限同量级，防止超长
+        self.changed.emit()
+        return True
+
     def remove_edges_around(self, nid, incoming=False, outgoing=False):
         """删除与节点相连的连线：incoming=前置（上游→本节点），outgoing=后置。
 
@@ -1733,9 +1750,28 @@ class FlowDesignPage(QWidget):
         f1.setContentsMargins(8, 8, 8, 8)
         f1.setSpacing(7)
         name_ed = QLineEdit(node["name"])
-        name_ed.setReadOnly(True)
+        # ⚠️ 2026-10-21 需求：工具名称可自定义修改，改完画布卡片、蓝窗标题/
+        # 信息行、页签名、黄窗及其它算子的选择项等所有显示旧名处一起同步
         name_ed.setFixedHeight(24)
         name_ed.setStyleSheet(_edit_ss)
+        name_ed.setToolTip("可自定义修改工具名称（回车或点击别处生效），改名后所有显示处同步更新")
+
+        def _on_name_edited():
+            new = name_ed.text().strip()
+            old = node["name"]
+            if not new or new == old:
+                name_ed.setText(old)      # 空名/未变：回显原名
+                return
+            if self.document.rename_node(node["id"], new):
+                # node 即文档里的同一 dict，rename 后引用处取到的已是新名
+                if self._float_algo.isVisible():
+                    self._refresh_side_panel()   # 重建：标题/信息行/页签名
+                if self._float_io.isVisible():
+                    self._refresh_io_panel()     # 黄窗里引用的旧名同步
+            else:
+                name_ed.setText(self.document.node(node["id"])["name"])
+
+        name_ed.editingFinished.connect(_on_name_edited)
         f1.addLayout(self._params_form_row("工具名称", name_ed))
         for label, first, suffix in (("定位器", "未指定", "坐标系"),
                                      ("图片输入", "未指定", "图像"),
