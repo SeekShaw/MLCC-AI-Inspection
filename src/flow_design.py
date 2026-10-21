@@ -21,7 +21,7 @@ from PyQt6.QtGui import (
 from PyQt6.QtWidgets import (
     QWidget, QLabel, QPushButton, QVBoxLayout, QHBoxLayout, QScrollArea,
     QLineEdit, QDialog, QSizePolicy, QDoubleSpinBox, QProgressBar, QFrame,
-    QCheckBox, QMenu, QLayout, QTabWidget)
+    QCheckBox, QMenu, QLayout, QTabWidget, QComboBox)
 
 from styles import COLORS
 
@@ -196,6 +196,38 @@ def _draw_glyph(p, kind, x, y, w, h):
         p.drawArc(QRectF(cx - r, cy - r, r * 2, r * 2), 210 * 16, 140 * 16)
         _arrow_head(cx + r * 0.62, cy - r * 0.62, 0.8, 0.6)
         _arrow_head(cx - r * 0.62, cy + r * 0.62, -0.8, -0.6)
+    # ---- 算法参数首页底部图标行（2026-10-21 需求） ----
+    elif kind == "eye":                      # 眼睛（ROI / 结果 显示切换）
+        cx, cy = x + w * 0.5, y + h * 0.5
+        p.drawArc(QRectF(x + w * 0.08, y + h * 0.24, w * 0.84, h * 0.52),
+                  0 * 16, 360 * 16)
+        p.setBrush(Qt.BrushStyle.SolidPattern)
+        p.drawEllipse(QPointF(cx, cy), w * 0.14, h * 0.14)
+        p.setBrush(Qt.BrushStyle.NoBrush)
+    elif kind == "chart":                    # 柱状图（结果显示切换）
+        for i, (fx, fh) in enumerate(((0.24, 0.42), (0.5, 0.66),
+                                      (0.76, 0.3))):
+            _L(x + w * fx, y + h * 0.84, x + w * fx, y + h * (0.84 - fh))
+    elif kind == "full_roi":                 # 虚线大框 + 内实线小框（使用全图）
+        pen = p.pen()
+        pen.setStyle(Qt.PenStyle.DashLine)
+        p.setPen(pen)
+        p.drawRect(QRectF(x + w * 0.1, y + h * 0.1, w * 0.8, h * 0.8))
+        pen.setStyle(Qt.PenStyle.SolidLine)
+        p.setPen(pen)
+        p.drawRect(QRectF(x + w * 0.34, y + h * 0.34, w * 0.32, h * 0.32))
+    elif kind == "roi_edit":                 # 框 + 笔（ROI 编辑）
+        p.drawRect(QRectF(x + w * 0.12, y + h * 0.16, w * 0.6, h * 0.56))
+        _L(x + w * 0.42, y + h * 0.82, x + w * 0.86, y + h * 0.28)
+        _L(x + w * 0.42, y + h * 0.82, x + w * 0.48, y + h * 0.76)
+    elif kind == "list_cfg":                 # 列表（算法输出配置）
+        for fy in (0.22, 0.5, 0.78):
+            p.drawEllipse(QPointF(x + w * 0.16, y + h * fy), 1.2, 1.2)
+            _L(x + w * 0.34, y + h * fy, x + w * 0.88, y + h * fy)
+    elif kind == "palette_cfg":              # 调色板（显示配置）
+        p.drawEllipse(QRectF(x + w * 0.1, y + h * 0.1, w * 0.8, h * 0.8))
+        for fx, fy in ((0.34, 0.36), (0.62, 0.3), (0.68, 0.6)):
+            p.drawEllipse(QPointF(x + w * fx, y + h * fy), 1.3, 1.3)
 
 
 def _make_icon(kind, color="#4261FF"):
@@ -670,6 +702,7 @@ class FlowCanvas(QWidget):
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         p.fillRect(self.rect(), QColor(COLORS["bg_card"]))
         self._draw_grid(p)
+        self._draw_hints(p)     # 左下角半透明操作说明（不随世界坐标缩放）
         if self._doc is None:
             return
         for e in self._doc.edges():
@@ -678,6 +711,30 @@ class FlowCanvas(QWidget):
             self._draw_temp_link(p)
         for n in self._doc.nodes():
             self._draw_node(p, n)
+
+    # ⚠️ 2026-10-21 需求：左下角常驻操作说明，浅色 + 透明度（不喧宾夺主）
+    HINT_LINES = (
+        "画布流程放大：          鼠标滚轮向上",
+        "画布流程缩小：          鼠标滚轮向下",
+        "绘制节点连线：          鼠标左键单击选中起点，拖动且不松开至终点",
+        "添加算子至画布流程：    选中算子并鼠标左键双击",
+        "流程图拖拽调整位置：    画布中空白位置鼠标左键单击，拖动且不松开",
+        "画布中算子位置调整：    点击选中该算子并按住鼠标右键，拖动且不松开",
+    )
+
+    def _draw_hints(self, p):
+        """画布左下角绘制半透明浅色操作提示（设备坐标，不随缩放/平移变化）。"""
+        f = QFont("Microsoft YaHei")
+        f.setPixelSize(11)
+        p.setFont(f)
+        # 浅灰白 + 低 alpha（≈22%），叠在深底上即「隐约可见」
+        p.setPen(QPen(QColor(208, 214, 226, 56)))
+        lh = 16
+        x = 10
+        y = self.height() - len(self.HINT_LINES) * lh - 6
+        for s in self.HINT_LINES:
+            p.drawText(QPointF(x, y), s)
+            y += lh
 
     def _draw_grid(self, p):
         """点阵背景（世界坐标 24px 间距，随缩放/平移移动）。"""
@@ -1599,14 +1656,10 @@ class FlowDesignPage(QWidget):
             COLORS['text_secondary'])
         self._side_body.addWidget(info)
         if is_params:
-            tpl = SIDE_PARAM_TPL.get(node["cat"], SIDE_PARAM_DEFAULT)
-            for (name, val, lo, hi, unit, dec) in tpl:
-                self._side_body.addLayout(self._make_param_row(
-                    name, val, lo, hi, unit, dec))
-            tip = self._side_row_label(
-                "以上为示例参数（演示）；接入真实算法后，此处展示并下发该算子的实际参数。",
-                COLORS['text_secondary'], size=10)
-            self._side_body.addWidget(tip)
+            # ⚠️ 2026-10-21 需求：改为分页 table——第 1 页基础设置（工具名称/
+            # 定位器/图片输入/执行条件 + 底部图标行），第 2 页为该算子的
+            # 具体算法参数（每个算子不同，取自 SIDE_PARAM_TPL）
+            self._side_body.addWidget(self._build_params_tabs(node), 1)
         else:
             ms = float(node.get("ms", 0.0))
             big = self._side_row_label(f"总耗时  {ms:.2f} ms",
@@ -1642,6 +1695,113 @@ class FlowDesignPage(QWidget):
             f"QDoubleSpinBox::up-button,QDoubleSpinBox::down-button{{width:14px;}}")
         h.addWidget(sp, 1)
         return h
+
+    def _build_params_tabs(self, node):
+        """算法参数（蓝窗）分页内容：第 1 页基础设置，第 2 页算法参数。
+
+        ⚠️ 2026-10-21 需求：参考视觉工具窗——首页从上到下为「工具名称 /
+        定位器 / 图片输入 / 执行条件」，选择项为流程中其它算子的输出
+        （图像 / 坐标系 / 结论 OK-NG）；最底一行图标依次为：ROI 显示/隐藏、
+        结果显示/隐藏、使用全图 ROI、ROI 编辑、算法输出配置、显示配置。
+        每个算子首页结构一致；第 2 页为该算子的具体算法参数。
+        """
+        _combo_ss = (
+            f"QComboBox{{background-color:{COLORS['bg_card']}; "
+            f"color:{COLORS['text_primary']}; border:1px solid {COLORS['border']}; "
+            f"border-radius:3px; font-size:11px; padding:0 4px;}}"
+            f"QComboBox::drop-down{{border:none; width:16px;}}"
+            f"QComboBox QAbstractItemView{{background-color:{COLORS['bg_card']}; "
+            f"color:{COLORS['text_primary']}; selection-background-color:"
+            f"{COLORS['accent_blue']};}}")
+        _edit_ss = (
+            f"QLineEdit{{background-color:{COLORS['bg_card']}; "
+            f"color:{COLORS['text_primary']}; border:1px solid {COLORS['border']}; "
+            f"border-radius:3px; font-size:11px; padding:0 4px;}}")
+        tabs = QTabWidget()
+        tabs.setStyleSheet(
+            f"QTabWidget::pane{{border:1px solid {COLORS['border']}; "
+            f"border-radius:4px; top:-1px;}}"
+            f"QTabBar::tab{{background:transparent; "
+            f"color:{COLORS['text_secondary']}; padding:5px 14px; font-size:12px;}}"
+            f"QTabBar::tab:selected{{color:{COLORS['text_primary']}; "
+            f"border-bottom:2px solid {COLORS['accent_blue']};}}")
+        others = [n for n in self.document.nodes() if n["id"] != node["id"]]
+
+        # ---- 第 1 页：基础设置（每个算子一致） ----
+        pg1 = QWidget()
+        f1 = QVBoxLayout(pg1)
+        f1.setContentsMargins(8, 8, 8, 8)
+        f1.setSpacing(7)
+        name_ed = QLineEdit(node["name"])
+        name_ed.setReadOnly(True)
+        name_ed.setFixedHeight(24)
+        name_ed.setStyleSheet(_edit_ss)
+        f1.addLayout(self._params_form_row("工具名称", name_ed))
+        for label, first, suffix in (("定位器", "未指定", "坐标系"),
+                                     ("图片输入", "未指定", "图像"),
+                                     ("执行条件", "无条件", "结论")):
+            cb = QComboBox()
+            cb.setFixedHeight(24)
+            cb.setStyleSheet(_combo_ss)
+            cb.addItem(first)
+            cb.addItems(f"{n['name']}：{suffix}" for n in others)
+            f1.addLayout(self._params_form_row(label, cb))
+        f1.addSpacing(4)
+        row = QHBoxLayout()
+        row.setSpacing(4)
+        for kind, tip, checkable in (
+                ("eye", "显示/隐藏算法 ROI 框", True),
+                ("chart", "显示/隐藏算法结果", True),
+                ("full_roi", "使用全图 ROI", True),
+                ("roi_edit", "编辑 ROI", False),
+                ("list_cfg", "算法输出配置（选择算法输出内容）", False),
+                ("palette_cfg", "显示配置（结果颜色/线宽）", False)):
+            row.addWidget(self._params_icon_btn(kind, tip, checkable))
+        row.addStretch(1)
+        f1.addLayout(row)
+        f1.addStretch(1)
+        tabs.addTab(pg1, node["name"])
+
+        # ---- 第 2 页：算法参数（每个算子不同） ----
+        pg2 = QWidget()
+        f2 = QVBoxLayout(pg2)
+        f2.setContentsMargins(8, 8, 8, 8)
+        f2.setSpacing(7)
+        tpl = SIDE_PARAM_TPL.get(node["cat"], SIDE_PARAM_DEFAULT)
+        for (name, val, lo, hi, unit, dec) in tpl:
+            f2.addLayout(self._make_param_row(name, val, lo, hi, unit, dec))
+        f2.addStretch(1)
+        f2.addWidget(self._side_row_label(
+            "以上为示例参数（演示）；接入真实算法后按该算子的实际参数展示。",
+            COLORS['text_secondary'], size=10))
+        tabs.addTab(pg2, "参数")
+        return tabs
+
+    def _params_form_row(self, label, w):
+        """首页表单行：名称 + 输入控件，返回布局供加入面板。"""
+        h = QHBoxLayout()
+        h.setSpacing(6)
+        lab = self._side_row_label(label)
+        lab.setMinimumWidth(60)
+        h.addWidget(lab)
+        h.addWidget(w, 1)
+        return h
+
+    def _params_icon_btn(self, kind, tip, checkable):
+        """首页底部小图标按钮（矢量图标，不依赖字体）。"""
+        b = QPushButton()
+        b.setIcon(_make_icon(kind, COLORS['text_secondary']))
+        b.setIconSize(QSize(15, 15))
+        b.setFixedSize(26, 24)
+        b.setToolTip(tip)
+        b.setCheckable(checkable)
+        b.setCursor(Qt.CursorShape.PointingHandCursor)
+        b.setStyleSheet(
+            f"QPushButton{{background-color:{COLORS['bg_card']}; "
+            f"border:1px solid {COLORS['border']}; border-radius:3px;}}"
+            f"QPushButton:hover{{border-color:{COLORS['accent_blue']};}}"
+            f"QPushButton:checked{{background-color:{COLORS['accent_blue']};}}")
+        return b
 
     def _make_time_row(self, stage, ms, ratio):
         """耗时行：阶段名 + 耗时 + 占比进度条，返回布局供加入面板。"""
