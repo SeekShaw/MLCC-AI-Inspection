@@ -1806,72 +1806,7 @@ class FlowDesignPage(QWidget):
         name_ed.returnPressed.connect(_on_name_edited)
         f1.addLayout(self._params_form_row("工具名称", name_ed))
 
-        # ⚠️ 2026-10-21 需求：图像源算子——「图像源」选择（物理相机 / 虚拟相机）。
-        # 选物理相机 → 下一行出现「相机列表」（自动关联/绑定当前调试界面相机）；
-        # 选虚拟相机 → 下一行出现「图片来源」（加载图片 / 加载文件夹）。
         is_image_src = (node["cat"] == "图像源")
-
-        def _add_image_source_rows():
-            # 图像源配置持久化到节点（img_src），避免重开面板 / 切换物理-虚拟
-            # 时丢失用户选择；无配置时默认绑定当前调试界面相机。
-            default_cam = (self._current_camera
-                           if self._current_camera in self._camera_names
-                           else (self._camera_names[0] if self._camera_names else ""))
-
-            src_cb = QComboBox()
-            src_cb.setFixedHeight(24)
-            src_cb.setStyleSheet(_combo_ss)
-            # 选项 = 实际物理相机 + 「虚拟相机」
-            src_cb.addItems(self._camera_names + ["虚拟相机"])
-            src_cb.setCurrentText((node.get("img_src") or {}).get(
-                "type", default_cam or "虚拟相机"))
-            f1.addLayout(self._params_form_row("图像源", src_cb))
-
-            dyn = QWidget()
-            dyn_lay = QVBoxLayout(dyn)
-            dyn_lay.setContentsMargins(0, 0, 0, 0)
-            dyn_lay.setSpacing(7)
-            f1.addWidget(dyn)
-
-            def _write():
-                node["img_src"] = {
-                    "type": src_cb.currentText(),
-                    "camera": cam_cb.currentText() if src_cb.currentText() != "虚拟相机" else "",
-                    "pic_src": pic_cb.currentText() if src_cb.currentText() == "虚拟相机" else "",
-                }
-
-            cam_cb = None
-            pic_cb = None
-
-            def _refresh_dyn():
-                nonlocal cam_cb, pic_cb
-                self._clear_layout(dyn_lay)
-                # 读节点实时 img_src（_write 会替换该 dict，不能用入口捕获的 st）
-                live = node.get("img_src") or {}
-                if src_cb.currentText() == "虚拟相机":
-                    pic_cb = QComboBox()
-                    pic_cb.setFixedHeight(24)
-                    pic_cb.setStyleSheet(_combo_ss)
-                    pic_cb.addItems(["加载图片", "加载文件夹"])
-                    pic_cb.setCurrentText(live.get("pic_src", "加载图片"))
-                    pic_cb.currentIndexChanged.connect(_write)
-                    dyn_lay.addLayout(self._params_form_row("图片来源", pic_cb))
-                else:
-                    cam_cb = QComboBox()
-                    cam_cb.setFixedHeight(24)
-                    cam_cb.setStyleSheet(_combo_ss)
-                    cam_cb.addItems(self._camera_names)
-                    # 自动关联绑定当前调试界面相机（无手动选择时）
-                    cam_cb.setCurrentText(live.get("camera", default_cam))
-                    cam_cb.currentIndexChanged.connect(_write)
-                    dyn_lay.addLayout(self._params_form_row("相机列表", cam_cb))
-                _write()
-
-            src_cb.currentIndexChanged.connect(_refresh_dyn)
-            _refresh_dyn()
-
-        if is_image_src:
-            _add_image_source_rows()
 
         for label, first, suffix in (("定位器", "未指定", "坐标系"),
                                      ("图片输入", "未指定", "图像"),
@@ -1905,13 +1840,77 @@ class FlowDesignPage(QWidget):
         f2 = QVBoxLayout(pg2)
         f2.setContentsMargins(8, 8, 8, 8)
         f2.setSpacing(7)
-        tpl = SIDE_PARAM_TPL.get(node["cat"], SIDE_PARAM_DEFAULT)
-        for (name, val, lo, hi, unit, dec) in tpl:
-            f2.addLayout(self._make_param_row(name, val, lo, hi, unit, dec))
+
+        def _add_image_source_rows():
+            # ⚠️ 2026-10-21 需求：图像源算子参数放「参数」页——图像源选择
+            # （物理相机 / 虚拟相机）。选物理相机 → 「相机列表」（默认自动关联
+            # 绑定当前调试界面相机）；选虚拟相机 → 「图片来源」（加载图片 /
+            # 加载文件夹）。配置持久化到节点，重开面板/来回切换不丢用户选择。
+            default_cam = (self._current_camera
+                           if self._current_camera in self._camera_names
+                           else (self._camera_names[0] if self._camera_names else ""))
+
+            src_cb = QComboBox()
+            src_cb.setFixedHeight(24)
+            src_cb.setStyleSheet(_combo_ss)
+            src_cb.addItems(self._camera_names + ["虚拟相机"])
+            src_cb.setCurrentText((node.get("img_src") or {}).get(
+                "type", default_cam or "虚拟相机"))
+            f2.addLayout(self._params_form_row("图像源", src_cb))
+
+            dyn = QWidget()
+            dyn_lay = QVBoxLayout(dyn)
+            dyn_lay.setContentsMargins(0, 0, 0, 0)
+            dyn_lay.setSpacing(7)
+            f2.addWidget(dyn)
+
+            cam_cb = None
+            pic_cb = None
+
+            def _write():
+                node["img_src"] = {
+                    "type": src_cb.currentText(),
+                    "camera": cam_cb.currentText() if src_cb.currentText() != "虚拟相机" else "",
+                    "pic_src": pic_cb.currentText() if src_cb.currentText() == "虚拟相机" else "",
+                }
+
+            def _refresh_dyn():
+                nonlocal cam_cb, pic_cb
+                self._clear_layout(dyn_lay)
+                # 读节点实时 img_src（_write 会替换该 dict，不能用入口捕获的 st）
+                live = node.get("img_src") or {}
+                if src_cb.currentText() == "虚拟相机":
+                    pic_cb = QComboBox()
+                    pic_cb.setFixedHeight(24)
+                    pic_cb.setStyleSheet(_combo_ss)
+                    pic_cb.addItems(["加载图片", "加载文件夹"])
+                    pic_cb.setCurrentText(live.get("pic_src", "加载图片"))
+                    pic_cb.currentIndexChanged.connect(_write)
+                    dyn_lay.addLayout(self._params_form_row("图片来源", pic_cb))
+                else:
+                    cam_cb = QComboBox()
+                    cam_cb.setFixedHeight(24)
+                    cam_cb.setStyleSheet(_combo_ss)
+                    cam_cb.addItems(self._camera_names)
+                    # 自动关联绑定当前调试界面相机（无手动选择时）
+                    cam_cb.setCurrentText(live.get("camera", default_cam))
+                    cam_cb.currentIndexChanged.connect(_write)
+                    dyn_lay.addLayout(self._params_form_row("相机列表", cam_cb))
+                _write()
+
+            src_cb.currentIndexChanged.connect(_refresh_dyn)
+            _refresh_dyn()
+
+        if node["cat"] == "图像源":
+            _add_image_source_rows()
+        else:
+            tpl = SIDE_PARAM_TPL.get(node["cat"], SIDE_PARAM_DEFAULT)
+            for (name, val, lo, hi, unit, dec) in tpl:
+                f2.addLayout(self._make_param_row(name, val, lo, hi, unit, dec))
+            f2.addWidget(self._side_row_label(
+                "以上为示例参数（演示）；接入真实算法后按该算子的实际参数展示。",
+                COLORS['text_secondary'], size=10))
         f2.addStretch(1)
-        f2.addWidget(self._side_row_label(
-            "以上为示例参数（演示）；接入真实算法后按该算子的实际参数展示。",
-            COLORS['text_secondary'], size=10))
         tabs.addTab(pg2, "参数")
         return tabs
 
