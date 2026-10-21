@@ -1219,9 +1219,14 @@ class _FloatDragHandler(QObject):
 class FlowDesignPage(QWidget):
     """检测流程设计页（内嵌于卡片标签页，或被「放大编辑」大窗口承载）。"""
 
-    def __init__(self, parent=None, document=None, run_log=None, embedded=True):
+    def __init__(self, parent=None, document=None, run_log=None, embedded=True,
+                 camera_names=None, current_camera=None):
         super().__init__(parent)
         self._run_log = run_log
+        # 物理相机列表（用于图像源算子的「相机列表」候选）与当前调试界面相机
+        # （自动关联/绑定）。由宿主调试界面传入；独立运行时为空。
+        self._camera_names = list(camera_names or [])
+        self._current_camera = current_camera
         self._embedded = embedded
         self._dlg = None
         self._side_mode = None    # 蓝窗当前模式：None / "params" / "timing"
@@ -1800,9 +1805,79 @@ class FlowDesignPage(QWidget):
         name_ed.editingFinished.connect(_on_name_edited)
         name_ed.returnPressed.connect(_on_name_edited)
         f1.addLayout(self._params_form_row("工具名称", name_ed))
+
+        # ⚠️ 2026-10-21 需求：图像源算子——「图像源」选择（物理相机 / 虚拟相机）。
+        # 选物理相机 → 下一行出现「相机列表」（自动关联/绑定当前调试界面相机）；
+        # 选虚拟相机 → 下一行出现「图片来源」（加载图片 / 加载文件夹）。
+        is_image_src = (node["cat"] == "图像源")
+
+        def _add_image_source_rows():
+            # 图像源配置持久化到节点（img_src），避免重开面板 / 切换物理-虚拟
+            # 时丢失用户选择；无配置时默认绑定当前调试界面相机。
+            default_cam = (self._current_camera
+                           if self._current_camera in self._camera_names
+                           else (self._camera_names[0] if self._camera_names else ""))
+
+            src_cb = QComboBox()
+            src_cb.setFixedHeight(24)
+            src_cb.setStyleSheet(_combo_ss)
+            # 选项 = 实际物理相机 + 「虚拟相机」
+            src_cb.addItems(self._camera_names + ["虚拟相机"])
+            src_cb.setCurrentText((node.get("img_src") or {}).get(
+                "type", default_cam or "虚拟相机"))
+            f1.addLayout(self._params_form_row("图像源", src_cb))
+
+            dyn = QWidget()
+            dyn_lay = QVBoxLayout(dyn)
+            dyn_lay.setContentsMargins(0, 0, 0, 0)
+            dyn_lay.setSpacing(7)
+            f1.addWidget(dyn)
+
+            def _write():
+                node["img_src"] = {
+                    "type": src_cb.currentText(),
+                    "camera": cam_cb.currentText() if src_cb.currentText() != "虚拟相机" else "",
+                    "pic_src": pic_cb.currentText() if src_cb.currentText() == "虚拟相机" else "",
+                }
+
+            cam_cb = None
+            pic_cb = None
+
+            def _refresh_dyn():
+                nonlocal cam_cb, pic_cb
+                self._clear_layout(dyn_lay)
+                # 读节点实时 img_src（_write 会替换该 dict，不能用入口捕获的 st）
+                live = node.get("img_src") or {}
+                if src_cb.currentText() == "虚拟相机":
+                    pic_cb = QComboBox()
+                    pic_cb.setFixedHeight(24)
+                    pic_cb.setStyleSheet(_combo_ss)
+                    pic_cb.addItems(["加载图片", "加载文件夹"])
+                    pic_cb.setCurrentText(live.get("pic_src", "加载图片"))
+                    pic_cb.currentIndexChanged.connect(_write)
+                    dyn_lay.addLayout(self._params_form_row("图片来源", pic_cb))
+                else:
+                    cam_cb = QComboBox()
+                    cam_cb.setFixedHeight(24)
+                    cam_cb.setStyleSheet(_combo_ss)
+                    cam_cb.addItems(self._camera_names)
+                    # 自动关联绑定当前调试界面相机（无手动选择时）
+                    cam_cb.setCurrentText(live.get("camera", default_cam))
+                    cam_cb.currentIndexChanged.connect(_write)
+                    dyn_lay.addLayout(self._params_form_row("相机列表", cam_cb))
+                _write()
+
+            src_cb.currentIndexChanged.connect(_refresh_dyn)
+            _refresh_dyn()
+
+        if is_image_src:
+            _add_image_source_rows()
+
         for label, first, suffix in (("定位器", "未指定", "坐标系"),
                                      ("图片输入", "未指定", "图像"),
                                      ("执行条件", "无条件", "结论")):
+            if is_image_src and label == "图片输入":
+                continue   # 图像源本身即图像来源，无「图片输入」
             cb = QComboBox()
             cb.setFixedHeight(24)
             cb.setStyleSheet(_combo_ss)
@@ -1960,7 +2035,9 @@ class FlowDesignPage(QWidget):
             self._dlg.raise_()
             self._dlg.activateWindow()
             return
-        self._dlg = FlowDesignDialog(self.document, self)
+        self._dlg = FlowDesignDialog(self.document, self,
+                                     camera_names=self._camera_names,
+                                     current_camera=self._current_camera)
         self._dlg.show()
         # ⚠️ show() 时 Qt 才按「父窗口居中」落位并按布局最小尺寸改大小，
         # 会覆盖 show 前设置的几何——因此几何必须在 show 之后再应用；
@@ -2066,7 +2143,7 @@ class FlowDesignPage(QWidget):
 class FlowDesignDialog(QDialog):
     """「放大编辑」非模态大窗口：与内嵌页共享 FlowDocument，实时同步。"""
 
-    def __init__(self, document, parent=None):
+    def __init__(self, document, parent=None, camera_names=None, current_camera=None):
         super().__init__(parent)
         self.setWindowTitle("检测流程设计 - 流程编辑器（放大编辑）")
         self.resize(1100, 720)
@@ -2075,4 +2152,6 @@ class FlowDesignDialog(QDialog):
         self.setStyleSheet(f"QDialog{{background-color:{COLORS['bg_dark']};}}")
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
-        lay.addWidget(FlowDesignPage(document=document, embedded=False))
+        lay.addWidget(FlowDesignPage(document=document, embedded=False,
+                                     camera_names=camera_names,
+                                     current_camera=current_camera))

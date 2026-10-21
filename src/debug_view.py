@@ -3049,7 +3049,9 @@ class DebugView(QWidget):
         # 卡片内嵌区域宽高受限的拥挤问题由 flow_design 模块内解：
         # 工具箱可折叠 / 画布可缩放+自动布局 / 「⛶ 放大编辑」弹出大窗口（同一数据模型实时同步）。
         from flow_design import FlowDesignPage, _make_icon
-        self._flow_page = FlowDesignPage(run_log=self._run_log)
+        self._flow_page = FlowDesignPage(run_log=self._run_log,
+                                         camera_names=CAMERA_NAMES,
+                                         current_camera=self.camera_name)
 
         tabs = QTabWidget()
         self._target_tabs = tabs
