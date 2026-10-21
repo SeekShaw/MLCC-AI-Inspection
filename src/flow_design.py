@@ -1745,6 +1745,10 @@ class FlowDesignPage(QWidget):
         scroll.setSizePolicy(QSizePolicy.Policy.Expanding,
                              QSizePolicy.Policy.Expanding)
         scroll.setStyleSheet(FLOAT_SCROLL_CSS)
+        # ⚠️ 2026-10-21 需求：viewport 仍会沿内容区四周描 1px #3A3E47 边框
+        # （内容下方空白大时像个多余的矩形框），实测须对 viewport 显式
+        # border:none 才能去掉。
+        scroll.viewport().setStyleSheet("border:none;")
         holder = QWidget()
         holder.setStyleSheet("background:transparent;")
         lay = QVBoxLayout(holder)
@@ -2061,8 +2065,12 @@ class FlowDesignPage(QWidget):
             f"border-radius:3px; font-size:11px; padding:0 4px;}}")
         tabs = QTabWidget()
         tabs.setStyleSheet(
-            f"QTabWidget::pane{{border:1px solid {COLORS['border']}; "
-            f"border-radius:4px; top:-1px;}}"
+            # ⚠️ 2026-10-21 需求：去掉页签内容区（pane）的边框——内容下方
+            # 大片空白时该框看起来像多余的矩形，用户要求去掉。实测仅
+            # pane{border:none} 不生效（Qt 仍按 1px 框绘制并内缩页面），
+            # 需同时对 QStackedWidget 显式 border:none（frameWidth 才归 0）。
+            f"QTabWidget::pane{{border:none; top:-1px;}}"
+            f"QStackedWidget{{border:none;}}"
             f"QTabBar::tab{{background:transparent; "
             f"color:{COLORS['text_secondary']}; padding:5px 14px; font-size:12px;}}"
             f"QTabBar::tab:selected{{color:{COLORS['text_primary']}; "
