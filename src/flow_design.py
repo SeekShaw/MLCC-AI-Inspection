@@ -1775,9 +1775,9 @@ class FlowDesignPage(QWidget):
             top_ref = ref if ref is not None else self
             use_bottom = False
         if use_bottom:
-            # ⚠️ 2026-10-21 需求（第五次反馈）：贴工具栏下缘仍差一点点，
-            # 顶缘再上移 10px（微调量集中在此常量）。
-            p_g_y = top_ref.mapToGlobal(top_ref.rect().bottomLeft()).y() - 10
+            # ⚠️ 2026-10-21 需求（第六次反馈）：顶缘精确对齐顶部工具栏
+            # （设备启动/停止所在的蓝色顶栏）的下边缘，不再上下微调。
+            p_g_y = top_ref.mapToGlobal(top_ref.rect().bottomLeft()).y()
         else:
             p_g_y = top_ref.mapToGlobal(top_ref.rect().topLeft()).y()
         b_g = self.mapToGlobal(self.rect().bottomLeft()).y()
