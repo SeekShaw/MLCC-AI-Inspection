@@ -13,6 +13,8 @@ old_exes/
 # ===== Credentials / runtime config with secrets =====
 # 真实账号配置（含明文口令）不入库；仓库提供 users.example.json 模板
 users.json
+# 检测项默认设置（「设置为默认」落盘的运行时配置）
+detect_defaults.json
 # Vision Copilot 运行时配置（含混淆后的 API Key 与 MCP 访问令牌），不入库
 copilot_config.json
 src/copilot_config.json

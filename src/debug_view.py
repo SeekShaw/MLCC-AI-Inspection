@@ -2451,7 +2451,9 @@ class SpecAutoAdjustDialog(QDialog):
     def __init__(self, owner, parent=None):
         super().__init__(parent)
         self._owner = owner      # DebugView 实例（提供分布样本与写回接口）
-        self._rows = []          # [(row, chk, sp_lo, sp_hi), ...]
+        self._rows = []          # [(row, chk, sp_lo, sp_hi, lbl_cur), ...]
+        self._undo_backup = None  # 上一次「应用调整」前的规格快照（撤销用）
+        self._undo_btn = None
         self.setWindowTitle("检测项规格上下限自动调整")
         self.setStyleSheet(f"QDialog {{ background-color: {COLORS['bg_dark']}; }}")
         self.resize(600, 500)
@@ -2517,7 +2519,7 @@ class SpecAutoAdjustDialog(QDialog):
         scroll.setWidget(body)
         v.addWidget(scroll, 1)
 
-        # 底部按钮
+        # 底部按钮：应用调整 + 应用撤销（撤销紧邻应用右侧）+ 取消
         btns = QHBoxLayout()
         btns.addStretch(1)
         apply_btn = QPushButton("应用调整")
@@ -2525,6 +2527,16 @@ class SpecAutoAdjustDialog(QDialog):
             f"background-color: {COLORS['accent_orange']}; color: white; "
             f"border: none; border-radius: 4px; padding: 6px 18px; font-size: 13px;")
         apply_btn.clicked.connect(self._on_apply)
+        # ⚠️ 2026-10-21 需求：应用调整右侧增加「应用撤销」——回退上一次
+        # 「应用调整」写入的规格（恢复应用前的上下限并重判检测结果）
+        undo_btn = QPushButton("应用撤销")
+        undo_btn.setEnabled(False)
+        undo_btn.setStyleSheet(
+            f"background-color: {COLORS['bg_panel']}; color: {COLORS['text_primary']}; "
+            f"border: 1px solid {COLORS['border']}; border-radius: 4px; "
+            f"padding: 6px 18px; font-size: 13px;")
+        undo_btn.clicked.connect(self._on_undo_apply)
+        self._undo_btn = undo_btn
         cancel = QPushButton("取消")
         cancel.setStyleSheet(
             f"background-color: {COLORS['bg_panel']}; color: {COLORS['text_primary']}; "
@@ -2532,6 +2544,7 @@ class SpecAutoAdjustDialog(QDialog):
             f"padding: 6px 18px; font-size: 13px;")
         cancel.clicked.connect(self.reject)
         btns.addWidget(apply_btn)
+        btns.addWidget(undo_btn)
         btns.addWidget(cancel)
         v.addLayout(btns)
 
@@ -2591,6 +2604,7 @@ class SpecAutoAdjustDialog(QDialog):
                 f"{cur_lo:g} ~ {cur_hi:g} {raw[8]}", 170)
             for w in (lbl_code, lbl_name, lbl_cur):
                 rg.addWidget(w, 0)
+            # 记录「当前规格」标签引用：应用/撤销后实时刷新显示
             sp_lo = QDoubleSpinBox()
             sp_hi = QDoubleSpinBox()
             span = max(abs(cur_hi - cur_lo), 1.0)
@@ -2612,7 +2626,7 @@ class SpecAutoAdjustDialog(QDialog):
             rg.addWidget(lbl_note, 0)
             rg.addStretch(1)
             self._body_lay.addWidget(row_w)
-            self._rows.append((r, chk, sp_lo, sp_hi))
+            self._rows.append((r, chk, sp_lo, sp_hi, lbl_cur))
         if not self._rows:
             empty = QLabel("当前没有可自动调整的数值型检测项")
             empty.setStyleSheet(
@@ -2652,12 +2666,12 @@ class SpecAutoAdjustDialog(QDialog):
 
     # -- 交互 ---------------------------------------------------------
     def _on_toggle_all(self, on):
-        for _r, chk, _lo, _hi in self._rows:
+        for _r, chk, _lo, _hi, _cur in self._rows:
             chk.setChecked(on)
 
     def _on_apply(self):
         changes = []
-        for r, chk, sp_lo, sp_hi in self._rows:
+        for r, chk, sp_lo, sp_hi, _cur in self._rows:
             if chk.isChecked():
                 lo, hi = sp_lo.value(), sp_hi.value()
                 if lo > hi:
@@ -2666,6 +2680,16 @@ class SpecAutoAdjustDialog(QDialog):
         if not changes:
             QMessageBox.information(self, "规格自动调整", "请先勾选需要调整的检测项。")
             return
+        # 备份「应用前」的规格（仅数值有效的行），供「应用撤销」回退；
+        # 同时保留原始字符串（"-100"），避免撤销后显示成 "-100.0"
+        backup = []
+        data = getattr(self._owner, "_table_data", None) or []
+        for r, _chk, _lo, _hi, _cur in self._rows:
+            if r < len(data):
+                b_lo, b_hi = _to_float(data[r][6]), _to_float(data[r][7])
+                if b_lo is not None and b_hi is not None and b_lo <= b_hi:
+                    backup.append((r, str(data[r][6]), str(data[r][7]),
+                                   b_lo, b_hi))
         n = 0
         try:
             n = self._owner.apply_spec_adjust(changes)
@@ -2673,10 +2697,54 @@ class SpecAutoAdjustDialog(QDialog):
             import traceback
             print("[SpecAutoAdjustDialog] 应用异常：", repr(e))
             traceback.print_exc()
+        self._undo_backup = backup if n else None
+        if self._undo_btn is not None:
+            self._undo_btn.setEnabled(bool(self._undo_backup))
+        self._refresh_cur_labels()
         QMessageBox.information(
             self, "规格自动调整",
-            f"已应用 {n} 个检测项的新规格上下限，并按新规格重新判定『检测结果』。")
-        self.accept()
+            f"已应用 {n} 个检测项的新规格上下限，并按新规格重新判定『检测结果』。\n"
+            f"如需回退，可点击「应用撤销」。")
+        # 注意：不关闭窗口——保留「应用撤销」入口（2026-10-21 需求）
+
+    def _on_undo_apply(self):
+        """应用撤销：回退上一次『应用调整』写入的规格上下限。"""
+        if not self._undo_backup:
+            QMessageBox.information(self, "规格自动调整", "当前没有可撤销的调整。")
+            return
+        # 先用浮点值走应用通道（写数据 + 重判检测结果），再以原始字符串
+        # 覆盖并逐行刷新，保证撤销后表格文本与应用前逐字一致
+        restore = [(r, lo_f, hi_f)
+                   for r, _slo, _shi, lo_f, hi_f in self._undo_backup]
+        n = 0
+        try:
+            n = self._owner.apply_spec_adjust(restore)
+            data = getattr(self._owner, "_table_data", None) or []
+            for r, slo, shi, _lo_f, _hi_f in self._undo_backup:
+                if r < len(data):
+                    data[r][6], data[r][7] = slo, shi
+                    self._owner._refresh_row_display(r)
+        except Exception as e:
+            import traceback
+            print("[SpecAutoAdjustDialog] 撤销异常：", repr(e))
+            traceback.print_exc()
+        self._undo_backup = None
+        if self._undo_btn is not None:
+            self._undo_btn.setEnabled(False)
+        self._refresh_cur_labels()
+        QMessageBox.information(
+            self, "规格自动调整",
+            f"已撤销 {n} 个检测项的规格调整，恢复为应用前的上下限。")
+
+    def _refresh_cur_labels(self):
+        """刷新各行「当前规格」显示（应用/撤销后与表格保持一致）。"""
+        data = getattr(self._owner, "_table_data", None) or []
+        for r, _chk, _lo, _hi, lbl in self._rows:
+            if r >= len(data) or lbl is None:
+                continue
+            cur_lo, cur_hi = _to_float(data[r][6]), _to_float(data[r][7])
+            if cur_lo is not None and cur_hi is not None:
+                lbl.setText(f"{cur_lo:g} ~ {cur_hi:g} {data[r][8]}")
 
 
 class DebugView(QWidget):
@@ -3062,6 +3130,8 @@ class DebugView(QWidget):
         # 良率预警设置：按行记录「启用 / 预警阈值(%)」，默认全部启用、阈值 50%
         self._yield_warn = {r: {"enabled": True, "threshold": 50}
                             for r in range(len(raw))}
+        # 出厂设置快照（「恢复至出厂」用）：内置原始数据的副本
+        self._factory_data = [list(r) for r in raw]
 
         # 统一的按钮样式（按钮+文字，10px 紧凑）：橙填充 / 橙描边 / 中性
         BTN_FILL = (f"background-color: {COLORS['accent_orange']}; color: white; "
@@ -3257,14 +3327,15 @@ class DebugView(QWidget):
             f"QPushButton {{ background-color: {COLORS['bg_card']}; color: {COLORS['text_primary']}; "
             f"border: 1px solid {COLORS['border']}; border-radius: 4px; padding: 2px 10px; font-size: 11px; }}"
             f"QPushButton:hover {{ background-color: {COLORS['bg_panel']}; }}")
-        # 2026-10-21 需求：本排按钮改为「图标 + 悬浮提示」显示，节省横向空间
+        # 2026-10-21 需求：本排按钮改为「图标 + 悬浮提示」显示，节省横向空间；
+        # 同日需求：前 6 个按钮补齐功能（此前 handler=None 为占位）
         toolbar_defs = [
-            ("设置为默认", "default_set", None),
-            ("恢复至默认", "restore", None),
-            ("恢复至出厂", "factory", None),
-            ("单位设置", "unit", None),
-            ("出料设置", "output", None),
-            ("全部同步", "sync", None),
+            ("设置为默认", "default_set", self._on_set_default),
+            ("恢复至默认", "restore", self._on_restore_default),
+            ("恢复至出厂", "factory", self._on_restore_factory),
+            ("单位设置", "unit", self._on_unit_settings),
+            ("出料设置", "output", self._on_output_settings),
+            ("全部同步", "sync", self._on_sync_all),
             ("规格自动调整", "params", self._on_auto_spec_adjust),
         ]
         for label, icon_kind, handler in toolbar_defs:
@@ -4328,6 +4399,283 @@ class DebugView(QWidget):
                              "全开", "全关")
 
     # ---- 检测项规格上下限自动调整 -------------------------------------
+    # ------------------------------------------------------------------
+    # 工具栏设置按钮：设置默认 / 恢复默认 / 恢复出厂 / 单位 / 出料 / 同步
+    # ⚠️ 2026-10-21 需求：本排 6 个按钮补齐功能（此前均为占位 None）。
+    #    设置集以「检测编号」为键做存取，天然支持跨相机同步。
+    # ------------------------------------------------------------------
+    def _dv_log(self, msg):
+        """写一条运行日志（失败静默，日志非关键路径）。"""
+        try:
+            if self._run_log is not None:
+                self._run_log.add(datetime.now().strftime("%H:%M:%S"),
+                                  msg, "#4261FF")
+        except Exception:
+            pass
+
+    def _detect_defaults_path(self):
+        """检测项默认配置落盘路径：与 exe 或脚本同目录（frozen 跟随可执行文件）。"""
+        if getattr(sys, "frozen", False) and getattr(sys, "executable", ""):
+            base = os.path.dirname(os.path.abspath(sys.executable))
+        else:
+            base = os.path.dirname(os.path.abspath(__file__))
+        return os.path.join(base, "detect_defaults.json")
+
+    def _collect_detect_settings(self):
+        """收集当前检测项设置（按检测编号为键，供存盘 / 跨相机同步）。"""
+        items = []
+        for r, row in enumerate(self._table_data):
+            warn = self._yield_warn.get(r, {"enabled": True, "threshold": 50})
+            items.append({
+                "code": str(row[1]), "name": str(row[2]),
+                "detect": bool(row[0]),
+                "lo": row[6], "hi": row[7],
+                "unit": str(row[8]), "port": str(row[9]),
+                "warn_enabled": bool(warn.get("enabled", True)),
+                "warn_threshold": int(warn.get("threshold", 50)),
+            })
+        return items
+
+    def _apply_detect_settings(self, items):
+        """把设置写回本视图（数据 + 控件显示 + 结果重判）。返回写入条数。"""
+        table = getattr(self, "_table", None)
+        if table is None or not items:
+            return 0
+        by_code = {str(row[1]): i for i, row in enumerate(self._table_data)}
+        n = 0
+        for it in items:
+            i = by_code.get(str(it.get("code", "")))
+            if i is None:
+                continue
+            row = self._table_data[i]
+            row[0] = bool(it.get("detect", row[0]))
+            row[6] = it.get("lo", row[6])
+            row[7] = it.get("hi", row[7])
+            row[8] = str(it.get("unit", row[8]))
+            row[9] = str(it.get("port", row[9]))
+            warn = self._yield_warn.setdefault(i, {"enabled": True,
+                                                   "threshold": 50})
+            warn["enabled"] = bool(it.get("warn_enabled", warn["enabled"]))
+            warn["threshold"] = int(it.get("warn_threshold",
+                                           warn["threshold"]))
+            self._refresh_row_display(i)
+            n += 1
+        return n
+
+    def _refresh_row_display(self, r):
+        """按底层数据刷新一行的控件与单元格显示（开关/单位/预警/规格/结果）。"""
+        if not (0 <= r < len(self._table_data)):
+            return
+        row = self._table_data[r]
+        table = self._table
+        # 1) 是否检测开关（set_on 不发信号，数据已由调用方写入）
+        chk = self._row_checks.get(r)
+        if chk is not None:
+            chk.set_on(bool(row[0]))
+        # 2) 单位单元格
+        cell = self._unit_cells.get(r)
+        if cell is not None:
+            cell.set_unit(str(row[8]))     # 回调写同值，幂等
+        # 3) 文本列（表头查列，避免与列序耦合）
+        for name, idx in (("检测编号", 1), ("检测项目", 2), ("标称值", 3),
+                          ("补偿值", 5), ("规格下限", 6), ("规格上限", 7),
+                          ("收料位置", 9), ("检测结果", 10)):
+            c = self._col_by_header(name)
+            if c < 0:
+                continue
+            it = table.item(r, c)
+            if it is not None:
+                it.setText(str(row[idx]))
+        # 4) 检测值列（cellWidget 内的数值标签）
+        lbl = self._val_labels.get(r)
+        if lbl is not None:
+            lbl.setText(str(row[4]))
+        # 5) 良率预警控件（开关 + 阈值）
+        cw = table.cellWidget(r, self._col_by_header("良率预警设置"))
+        if cw is not None:
+            warn = self._yield_warn.get(r, {"enabled": True, "threshold": 50})
+            for c in cw.children():
+                if isinstance(c, ToggleSwitch):
+                    c.set_on(bool(warn["enabled"]))
+                elif isinstance(c, QSpinBox):
+                    c.setValue(int(warn["threshold"]))
+        # 6) 规格变化后按新限重判检测结果
+        lo, hi = _to_float(row[6]), _to_float(row[7])
+        if lo is not None and hi is not None and lo <= hi:
+            result = self._judge_result(bool(row[0]), row[4], lo, hi)
+            row[10] = result
+            c = self._col_by_header("检测结果")
+            if c >= 0:
+                it = table.item(r, c)
+                if it is not None:
+                    it.setText(result)
+                    self._apply_result_color(it, result)
+
+    def _on_set_default(self):
+        """设置为默认：把当前检测项设置存盘，供『恢复至默认』调用。"""
+        p = self._detect_defaults_path()
+        try:
+            with open(p, "w", encoding="utf-8") as f:
+                json.dump({"items": self._collect_detect_settings()}, f,
+                          ensure_ascii=False, indent=2)
+        except Exception as e:
+            QMessageBox.warning(self, "设置默认", f"保存默认设置失败：{e!r}")
+            return
+        self._dv_log(f"检测项设置：已保存默认（{len(self._table_data)} 项）")
+        QMessageBox.information(
+            self, "设置默认",
+            f"已把当前 {len(self._table_data)} 项检测设置保存为默认。")
+
+    def _on_restore_default(self):
+        """恢复至默认：读取『设置为默认』的配置并应用。"""
+        p = self._detect_defaults_path()
+        if not os.path.exists(p):
+            QMessageBox.information(self, "恢复至默认",
+                                    "尚未保存过默认设置，请先点击「设置为默认」。")
+            return
+        try:
+            with open(p, "r", encoding="utf-8") as f:
+                items = (json.load(f) or {}).get("items", [])
+        except Exception as e:
+            QMessageBox.warning(self, "恢复至默认", f"读取默认设置失败：{e!r}")
+            return
+        n = self._apply_detect_settings(items)
+        self._dv_log(f"检测项设置：已恢复默认（{n} 项）")
+        QMessageBox.information(self, "恢复至默认", f"已恢复 {n} 项检测设置。")
+
+    def _on_restore_factory(self):
+        """恢复至出厂：还原到内置出厂数据。"""
+        factory = getattr(self, "_factory_data", None)
+        if not factory:
+            QMessageBox.information(self, "恢复至出厂", "缺少出厂数据，无法恢复。")
+            return
+        items = [{"code": str(row[1]), "detect": bool(row[0]),
+                  "lo": row[6], "hi": row[7], "unit": str(row[8]),
+                  "port": str(row[9]), "warn_enabled": True,
+                  "warn_threshold": 50} for row in factory]
+        n = self._apply_detect_settings(items)
+        self._dv_log(f"检测项设置：已恢复出厂（{n} 项）")
+        QMessageBox.information(self, "恢复至出厂", f"已恢复 {n} 项出厂设置。")
+
+    def _on_unit_settings(self):
+        """单位设置：对话框批量查看/修改各检测项单位。"""
+        dlg = QDialog(self)
+        dlg.setWindowTitle("单位设置")
+        dlg.setWindowFlags(dlg.windowFlags() | Qt.WindowType.WindowStaysOnTopHint)
+        dlg.setStyleSheet(f"QDialog {{ background-color: {COLORS['bg_panel']}; }}")
+        dlg.resize(420, 540)
+        v = QVBoxLayout(dlg)
+        v.setContentsMargins(14, 12, 14, 12)
+        v.setSpacing(8)
+        tip = QLabel("为每个检测项选择单位（Pixel / mm / Deg / Dec / 灰度级）")
+        tip.setStyleSheet(f"color:{COLORS['text_secondary']}; font-size:11px;")
+        v.addWidget(tip)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setStyleSheet("QScrollArea { background: transparent; }")
+        body = QWidget()
+        body.setStyleSheet("background: transparent;")
+        bl = QVBoxLayout(body)
+        bl.setContentsMargins(0, 0, 0, 0)
+        bl.setSpacing(6)
+        _f = QFont("Microsoft YaHei")
+        _f.setPixelSize(10)
+        combos = []   # [(row, combo), ...]
+        for r, row in enumerate(self._table_data):
+            if not str(row[2] or "").strip():
+                continue
+            rw = QWidget()
+            rw.setStyleSheet("background: transparent;")
+            hl = QHBoxLayout(rw)
+            hl.setContentsMargins(0, 0, 0, 0)
+            hl.setSpacing(8)
+            name = QLabel(f"{row[1]}  {row[2]}")
+            name.setFont(_f)
+            name.setStyleSheet(
+                f"color:{COLORS['text_primary']}; font-size:10px;")
+            hl.addWidget(name, 1)
+            cb = QComboBox()
+            cb.setFont(_f)
+            cb.addItems(UnitCell.OPTIONS)
+            cur = str(row[8])
+            cb.setCurrentIndex(UnitCell.OPTIONS.index(cur)
+                               if cur in UnitCell.OPTIONS else 0)
+            cb.setFixedHeight(24)
+            hl.addWidget(cb, 0)
+            bl.addWidget(rw)
+            combos.append((r, cb))
+        bl.addStretch(1)
+        scroll.setWidget(body)
+        v.addWidget(scroll, 1)
+        btns = QHBoxLayout()
+        btns.addStretch(1)
+        ok_btn = QPushButton("确定")
+        ok_btn.setStyleSheet(
+            f"background-color:{COLORS['accent_blue']}; color:white; border:none; "
+            f"border-radius:4px; padding:6px 18px; font-size:12px;")
+        cancel_btn = QPushButton("取消")
+        cancel_btn.setStyleSheet(
+            f"background-color:{COLORS['bg_card']}; color:{COLORS['text_primary']}; "
+            f"border:1px solid {COLORS['border']}; border-radius:4px; "
+            f"padding:6px 18px; font-size:12px;")
+        ok_btn.clicked.connect(dlg.accept)
+        cancel_btn.clicked.connect(dlg.reject)
+        btns.addWidget(ok_btn)
+        btns.addWidget(cancel_btn)
+        v.addLayout(btns)
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+        n = 0
+        for r, cb in combos:
+            unit = cb.currentText()
+            if 0 <= r < len(self._table_data) \
+                    and str(self._table_data[r][8]) != unit:
+                self._set_unit(r, unit)
+                cell = self._unit_cells.get(r)
+                if cell is not None:
+                    cell.set_unit(unit)
+                n += 1
+        self._dv_log(f"检测项设置：单位设置已更新（{n} 项）")
+        if n:
+            QMessageBox.information(self, "单位设置", f"已更新 {n} 项单位。")
+
+    def _on_output_settings(self):
+        """出料设置：打开剔除设定（各剔除口顺序/启用/位置/吹气/优先级）。"""
+        mw = self.main_window
+        if mw is None:
+            QMessageBox.information(self, "出料设置", "请在主程序中使用「出料设置」。")
+            return
+        try:
+            from device_settings_dialog import RejectSettingsDialog
+            RejectSettingsDialog(mw).exec()
+        except Exception as e:
+            QMessageBox.warning(self, "出料设置", f"打开剔除设定失败：{e!r}")
+
+    def _on_sync_all(self):
+        """全部同步：把本相机检测项设置同步到其它所有相机调试页。"""
+        mw = self.main_window
+        if mw is None:
+            QMessageBox.information(self, "全部同步", "请在主程序中使用「全部同步」。")
+            return
+        views = [v for v in getattr(mw, "debug_views", []) if v is not self]
+        if not views:
+            QMessageBox.information(self, "全部同步", "没有其它相机页面可同步。")
+            return
+        items = self._collect_detect_settings()
+        total, failed = 0, []
+        for v in views:
+            try:
+                total += v._apply_detect_settings(items)
+            except Exception:
+                failed.append(getattr(v, "camera_name", "?"))
+        done = len(views) - len(failed)
+        msg = f"已同步到 {done} 个相机页面（共 {total} 项检测设置）。"
+        if failed:
+            msg += f"\n失败：{'、'.join(failed)}"
+        self._dv_log(f"检测项设置：全部同步 → {done} 个相机（{total} 项）")
+        QMessageBox.information(self, "全部同步", msg)
+
     def _on_auto_spec_adjust(self):
         """「规格自动调整」按钮：打开规格上下限自动调整窗口。"""
         dlg = SpecAutoAdjustDialog(self, self)
