@@ -2563,7 +2563,7 @@ class FlowDesignDialog(QDialog):
         # ⚠️ 2026-10-22 需求：展开按钮放缩略图条按钮行「第1张」左侧——
         # 收起运行效果面板后由此按钮重新展开（未点过运行按钮时不显示）
         self._result_expand_btn = _FoldArrowButton()
-        self._result_expand_btn.set_direction("right")
+        self._result_expand_btn.set_direction("left")
         self._result_expand_btn.setToolTip("展开运行效果")
         self._result_expand_btn.setStyleSheet(
             f"QPushButton{{background-color:{COLORS['accent_blue']}; "
@@ -2599,8 +2599,10 @@ class FlowDesignDialog(QDialog):
         title.setStyleSheet(
             f"color:{COLORS['text_primary']}; font-size:12px; "
             f"font-weight:bold; border:none;")
+        # ⚠️ 2026-10-22 需求：箭头方向与直觉一致——收起=面板向右收起（→），
+        # 展开=面板向左展开（←）；此前两处方向刚好相反。
         collapse_btn = _FoldArrowButton()
-        collapse_btn.set_direction("left")
+        collapse_btn.set_direction("right")
         collapse_btn.setToolTip("收起运行效果")
         collapse_btn.setStyleSheet(
             f"QPushButton{{background-color:{COLORS['accent_blue']}; "
