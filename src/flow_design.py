@@ -2567,15 +2567,17 @@ class FlowDesignDialog(QDialog):
         bar_lay = QVBoxLayout(self._result_bar)
         bar_lay.setContentsMargins(2, 8, 2, 8)
         bar_lay.setSpacing(2)
-        expand_btn = QPushButton("▶")
-        expand_btn.setFixedSize(22, 22)
+        # ⚠️ 2026-10-22 需求：折叠/展开按钮与算子工具箱折叠按钮同款
+        # （_FoldArrowButton：蓝底白色矢量箭头，文字箭头字符不醒目）
+        expand_btn = _FoldArrowButton()
+        expand_btn.set_direction("right")
         expand_btn.setToolTip("展开运行效果")
-        expand_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         expand_btn.setStyleSheet(
-            f"QPushButton{{background-color:{COLORS['bg_card']}; "
-            f"color:{COLORS['text_secondary']}; border:1px solid {COLORS['border']}; "
-            f"border-radius:3px; font-size:10px;}}"
-            f"QPushButton:hover{{background-color:{COLORS['border']};}}")
+            f"QPushButton{{background-color:{COLORS['accent_blue']}; "
+            f"border:1px solid {COLORS['accent_blue']}; "
+            f"border-radius:3px;}}"
+            f"QPushButton:hover{{background-color:#6B85FF; "
+            f"border-color:#6B85FF;}}")
         expand_btn.clicked.connect(lambda: self._set_result_expanded(True))
         bar_lay.addWidget(expand_btn)
         bar_lay.addStretch(1)
@@ -2600,15 +2602,15 @@ class FlowDesignDialog(QDialog):
         title.setStyleSheet(
             f"color:{COLORS['text_primary']}; font-size:12px; "
             f"font-weight:bold; border:none;")
-        collapse_btn = QPushButton("◀")
-        collapse_btn.setFixedSize(22, 22)
+        collapse_btn = _FoldArrowButton()
+        collapse_btn.set_direction("left")
         collapse_btn.setToolTip("收起运行效果")
-        collapse_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         collapse_btn.setStyleSheet(
-            f"QPushButton{{background-color:{COLORS['bg_card']}; "
-            f"color:{COLORS['text_secondary']}; border:1px solid {COLORS['border']}; "
-            f"border-radius:3px; font-size:10px;}}"
-            f"QPushButton:hover{{background-color:{COLORS['border']};}}")
+            f"QPushButton{{background-color:{COLORS['accent_blue']}; "
+            f"border:1px solid {COLORS['accent_blue']}; "
+            f"border-radius:3px;}}"
+            f"QPushButton:hover{{background-color:#6B85FF; "
+            f"border-color:#6B85FF;}}")
         collapse_btn.clicked.connect(lambda: self._set_result_expanded(False))
         head.addWidget(title)
         head.addStretch(1)
