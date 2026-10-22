@@ -1276,15 +1276,19 @@ class FlowDesignPage(QWidget):
     """检测流程设计页（内嵌于卡片标签页，或被「放大编辑」大窗口承载）。"""
 
     def __init__(self, parent=None, document=None, run_log=None, embedded=True,
-                 camera_names=None, current_camera=None, image_display_cb=None):
+                 camera_names=None, current_camera=None, image_display_cb=None,
+                 result_image_cb=None):
         super().__init__(parent)
         self._run_log = run_log
         # 物理相机列表（用于图像源算子的「相机列表」候选）与当前调试界面相机
         # （自动关联/绑定）。由宿主调试界面传入；独立运行时为空。
         self._camera_names = list(camera_names or [])
         self._current_camera = current_camera
-        # ⚠️ 2026-10-21 需求：流程执行时把当前图片同步到调试界面相机画布的回调
+        # ⚠️ 2026-10-22 需求：运行效果不再同步到调试界面相机画布——
+        # _image_display_cb 保留入参但不再调用；改由 result_image_cb 把
+        # 运行图像推给放大编辑窗口左侧的「运行效果」折叠面板。
         self._image_display_cb = image_display_cb
+        self._result_image_cb = result_image_cb
         self._embedded = embedded
         self._dlg = None
         self._side_mode = None    # 蓝窗当前模式：None / "params" / "timing"
@@ -1432,12 +1436,16 @@ class FlowDesignPage(QWidget):
         # 位于画布底部整行，仅当「选中图像源算子 + 图像源=虚拟相机 + 已加载
         # 图片」时出现；上方为 第1张/上1张/下1张/最后1张/执行所有 按钮，
         # 下方为图片缩略图（横向滚动，可点选当前图）。
-        self._img_strip = self._make_img_strip()
-        v.addWidget(self._img_strip)
-        self._img_strip.hide()
-        # 按当前文档状态初始化缩略图条（避免后开「放大编辑」窗时遗漏已有
-        # 的虚拟相机+已加载图片状态）：虚拟相机且已加载即显示，与选中无关。
-        self._refresh_img_strip()
+        # ⚠️ 2026-10-22 需求：缩略图条（第1张/上1张/…/执行所有 + 缩略图）
+        # 仅在「放大编辑」窗口显示，内嵌页面状态下不显示。
+        if self._embedded:
+            self._img_strip = None
+        else:
+            self._img_strip = self._make_img_strip()
+            v.addWidget(self._img_strip)
+            self._img_strip.hide()
+            # 按当前文档状态初始化缩略图条（虚拟相机且已加载即显示）
+            self._refresh_img_strip()
         self._fitted = False
 
     # ---- 图像源缩略图条（虚拟相机加载图片后出现在画布底部） ----
@@ -1633,9 +1641,10 @@ class FlowDesignPage(QWidget):
                        / 9.0 + len(order) * 0.37, 2)
             doc.set_ms(nid, ms)
             self._log(f"  {i + 1}. {nd['name']}：{ms:.2f} ms")
-        # 图片同步到调试界面相机画布
-        if self._image_display_cb is not None and img_path:
-            self._image_display_cb(img_path)
+        # ⚠️ 2026-10-22 需求：运行效果不再占用调试界面相机画布——推给
+        # 放大编辑窗口左侧的「运行效果」折叠面板（仅该窗口传入回调）
+        if self._result_image_cb is not None and img_path:
+            self._result_image_cb(img_path)
 
     def _seed_demo(self):
         """首次创建时给一组示例流程（读取图像 → 二值化），与参考图一致。"""
@@ -2408,8 +2417,7 @@ class FlowDesignPage(QWidget):
             return
         self._dlg = FlowDesignDialog(self.document, self,
                                      camera_names=self._camera_names,
-                                     current_camera=self._current_camera,
-                                     image_display_cb=self._image_display_cb)
+                                     current_camera=self._current_camera)
         self._dlg.show()
         # ⚠️ show() 时 Qt 才按「父窗口居中」落位并按布局最小尺寸改大小，
         # 会覆盖 show 前设置的几何——因此几何必须在 show 之后再应用；
@@ -2517,19 +2525,152 @@ class FlowDesignPage(QWidget):
 
 
 class FlowDesignDialog(QDialog):
-    """「放大编辑」非模态大窗口：与内嵌页共享 FlowDocument，实时同步。"""
+    """「放大编辑」非模态大窗口：与内嵌页共享 FlowDocument，实时同步。
 
-    def __init__(self, document, parent=None, camera_names=None, current_camera=None,
-                 image_display_cb=None):
+    ⚠️ 2026-10-22 需求：
+    1) 窗口左侧带「运行效果」折叠面板——虚拟相机已加载图片且点击了
+       运行相关按钮（第1张/上1张/下1张/最后1张/执行所有）后才展开
+       显示运行图像；可手动收起（窄条）再展开；
+    2) 运行效果不再占用调试界面相机画布（该窗口不再转发 image_display_cb）；
+    3) 关闭本窗口时，读取图像算子自动从虚拟相机切回「物理相机」（连接
+       当前调试界面对应相机；已加载图片保留），再次进入需重新手动选虚拟相机；
+       展开的运行效果面板随窗口关闭消失（下次进入重新隐藏）。"""
+
+    def __init__(self, document, parent=None, camera_names=None, current_camera=None):
         super().__init__(parent)
         self.setWindowTitle("检测流程设计 - 流程编辑器（放大编辑）")
         self.resize(1100, 720)
         self.setModal(False)
+        self._document = document
+        self._camera_names = list(camera_names or [])
+        self._current_camera = current_camera
         # 与主程序暗色弹窗一致
         self.setStyleSheet(f"QDialog{{background-color:{COLORS['bg_dark']};}}")
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
-        lay.addWidget(FlowDesignPage(document=document, embedded=False,
-                                     camera_names=camera_names,
-                                     current_camera=current_camera,
-                                     image_display_cb=image_display_cb))
+        body = QHBoxLayout()
+        body.setContentsMargins(0, 0, 0, 0)
+        body.setSpacing(0)
+        body.addWidget(self._build_result_panel())
+        body.addWidget(FlowDesignPage(document=document, embedded=False,
+                                      camera_names=camera_names,
+                                      current_camera=current_camera,
+                                      result_image_cb=self.show_run_image), 1)
+        lay.addLayout(body)
+
+    # ---- 左侧「运行效果」折叠面板 ----
+    def _build_result_panel(self):
+        self._result_expanded = True
+        # 收起态：左侧窄条（▶ 展开按钮）
+        self._result_bar = QWidget()
+        self._result_bar.setFixedWidth(26)
+        bar_lay = QVBoxLayout(self._result_bar)
+        bar_lay.setContentsMargins(2, 8, 2, 8)
+        bar_lay.setSpacing(2)
+        expand_btn = QPushButton("▶")
+        expand_btn.setFixedSize(22, 22)
+        expand_btn.setToolTip("展开运行效果")
+        expand_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        expand_btn.setStyleSheet(
+            f"QPushButton{{background-color:{COLORS['bg_card']}; "
+            f"color:{COLORS['text_secondary']}; border:1px solid {COLORS['border']}; "
+            f"border-radius:3px; font-size:10px;}}"
+            f"QPushButton:hover{{background-color:{COLORS['border']};}}")
+        expand_btn.clicked.connect(lambda: self._set_result_expanded(True))
+        bar_lay.addWidget(expand_btn)
+        bar_lay.addStretch(1)
+        self._result_bar.setStyleSheet(
+            f"QWidget{{background-color:{COLORS['bg_panel']}; "
+            f"border-right:1px solid {COLORS['border']};}}")
+        self._result_bar.hide()
+
+        # 展开态：完整面板（标题 + 文件名 + 图像）
+        panel = QFrame()
+        panel.setObjectName("runResultPanel")
+        panel.setFixedWidth(300)
+        panel.setStyleSheet(
+            f"QFrame#runResultPanel{{background-color:{COLORS['bg_panel']}; "
+            f"border-right:1px solid {COLORS['border']};}}")
+        v = QVBoxLayout(panel)
+        v.setContentsMargins(8, 8, 8, 8)
+        v.setSpacing(6)
+        head = QHBoxLayout()
+        head.setSpacing(4)
+        title = QLabel("运行效果")
+        title.setStyleSheet(
+            f"color:{COLORS['text_primary']}; font-size:12px; "
+            f"font-weight:bold; border:none;")
+        collapse_btn = QPushButton("◀")
+        collapse_btn.setFixedSize(22, 22)
+        collapse_btn.setToolTip("收起运行效果")
+        collapse_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        collapse_btn.setStyleSheet(
+            f"QPushButton{{background-color:{COLORS['bg_card']}; "
+            f"color:{COLORS['text_secondary']}; border:1px solid {COLORS['border']}; "
+            f"border-radius:3px; font-size:10px;}}"
+            f"QPushButton:hover{{background-color:{COLORS['border']};}}")
+        collapse_btn.clicked.connect(lambda: self._set_result_expanded(False))
+        head.addWidget(title)
+        head.addStretch(1)
+        head.addWidget(collapse_btn)
+        v.addLayout(head)
+        self._result_name = QLabel("")
+        self._result_name.setStyleSheet(
+            f"color:{COLORS['text_secondary']}; font-size:10px; border:none;")
+        v.addWidget(self._result_name)
+        self._result_img = QLabel()
+        self._result_img.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._result_img.setStyleSheet(
+            f"background-color:{COLORS['bg_dark']}; border:1px solid "
+            f"{COLORS['border']}; border-radius:3px;")
+        v.addWidget(self._result_img, 1)
+        self._result_panel = panel
+        panel.hide()   # 初始隐藏：未点运行相关按钮不展开
+        return panel
+
+    def show_run_image(self, path):
+        """流程页执行/切图回调：显示运行图像并确保面板处于展开态。"""
+        pm = QPixmap(path)
+        if pm.isNull():
+            return
+        self._result_pm = pm
+        self._result_name.setText(os.path.basename(path))
+        if not self._result_expanded:
+            self._set_result_expanded(True)
+        self._result_panel.setVisible(True)
+        self._result_bar.hide()
+        self._render_result()
+
+    def _set_result_expanded(self, expanded):
+        self._result_expanded = bool(expanded)
+        self._result_panel.setVisible(self._result_expanded)
+        self._result_bar.setVisible(not self._result_expanded)
+        if self._result_expanded:
+            QTimer.singleShot(0, self._render_result)
+
+    def _render_result(self):
+        pm = getattr(self, "_result_pm", None)
+        if pm is None:
+            return
+        self._result_img.setPixmap(pm.scaled(
+            self._result_img.size(), Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation))
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._render_result()
+
+    def closeEvent(self, event):
+        super().closeEvent(event)
+        # 退出放大编辑：读取图像算子自动切回「物理相机」（连接当前调试
+        # 界面对应相机；已加载图片保留），再次进入需重新手动选虚拟相机。
+        for n in self._document.nodes():
+            if n.get("cat") != "图像源":
+                continue
+            st = n.get("img_src") or {}
+            if st.get("type") == "虚拟相机":
+                n["img_src"] = {"type": "物理相机",
+                                "camera": st.get("camera")
+                                          or (self._current_camera or ""),
+                                "files": st.get("files") or []}
+        self._document.changed.emit()
