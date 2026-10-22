@@ -1480,6 +1480,8 @@ class FlowDesignPage(QWidget):
         _btn("最后1张", lambda: self._img_nav("last"))
         _btn("执行所有", self._img_run_all)
         btns.addStretch(1)
+        # 暴露按钮行布局：放大编辑窗在「第1张」左侧插入「运行效果」展开按钮
+        self._strip_btns_layout = btns
         h.addLayout(btns)
 
         self._thumb_scroll = QScrollArea()
@@ -2530,7 +2532,7 @@ class FlowDesignDialog(QDialog):
     ⚠️ 2026-10-22 需求：
     1) 窗口左侧带「运行效果」折叠面板——虚拟相机已加载图片且点击了
        运行相关按钮（第1张/上1张/下1张/最后1张/执行所有）后才展开
-       显示运行图像；可手动收起（窄条）再展开；
+       显示运行图像；收起后经缩略图条「第1张」左侧的展开按钮再展开；
     2) 运行效果不再占用调试界面相机画布（该窗口不再转发 image_display_cb）；
     3) 关闭本窗口时，读取图像算子自动从虚拟相机切回「物理相机」（连接
        当前调试界面对应相机；已加载图片保留），再次进入需重新手动选虚拟相机；
@@ -2552,40 +2554,35 @@ class FlowDesignDialog(QDialog):
         body.setContentsMargins(0, 0, 0, 0)
         body.setSpacing(0)
         body.addWidget(self._build_result_panel())
-        body.addWidget(FlowDesignPage(document=document, embedded=False,
-                                      camera_names=camera_names,
-                                      current_camera=current_camera,
-                                      result_image_cb=self.show_run_image), 1)
+        self._page = FlowDesignPage(document=document, embedded=False,
+                                    camera_names=camera_names,
+                                    current_camera=current_camera,
+                                    result_image_cb=self.show_run_image)
+        body.addWidget(self._page, 1)
         lay.addLayout(body)
-
-    # ---- 左侧「运行效果」折叠面板 ----
-    def _build_result_panel(self):
-        self._result_expanded = True
-        # 收起态：左侧窄条（▶ 展开按钮）
-        self._result_bar = QWidget()
-        self._result_bar.setFixedWidth(26)
-        bar_lay = QVBoxLayout(self._result_bar)
-        bar_lay.setContentsMargins(2, 8, 2, 8)
-        bar_lay.setSpacing(2)
-        # ⚠️ 2026-10-22 需求：折叠/展开按钮与算子工具箱折叠按钮同款
-        # （_FoldArrowButton：蓝底白色矢量箭头，文字箭头字符不醒目）
-        expand_btn = _FoldArrowButton()
-        expand_btn.set_direction("right")
-        expand_btn.setToolTip("展开运行效果")
-        expand_btn.setStyleSheet(
+        # ⚠️ 2026-10-22 需求：展开按钮放缩略图条按钮行「第1张」左侧——
+        # 收起运行效果面板后由此按钮重新展开（未点过运行按钮时不显示）
+        self._result_expand_btn = _FoldArrowButton()
+        self._result_expand_btn.set_direction("right")
+        self._result_expand_btn.setToolTip("展开运行效果")
+        self._result_expand_btn.setStyleSheet(
             f"QPushButton{{background-color:{COLORS['accent_blue']}; "
             f"border:1px solid {COLORS['accent_blue']}; "
             f"border-radius:3px;}}"
             f"QPushButton:hover{{background-color:#6B85FF; "
             f"border-color:#6B85FF;}}")
-        expand_btn.clicked.connect(lambda: self._set_result_expanded(True))
-        bar_lay.addWidget(expand_btn)
-        bar_lay.addStretch(1)
-        self._result_bar.setStyleSheet(
-            f"QWidget{{background-color:{COLORS['bg_panel']}; "
-            f"border-right:1px solid {COLORS['border']};}}")
-        self._result_bar.hide()
+        self._result_expand_btn.clicked.connect(
+            lambda: self._set_result_expanded(True))
+        self._result_expand_btn.hide()
+        self._page._strip_btns_layout.insertWidget(0, self._result_expand_btn)
 
+    # ---- 左侧「运行效果」折叠面板 ----
+    def _build_result_panel(self):
+        # ⚠️ 2026-10-22 需求：收起态不再留左侧窄条子窗口（无 parent/布局
+        # 时会弹成带标题栏的独立小窗）——展开按钮改放缩略图条「第1张」左侧
+        # （见 __init__ 中 _result_expand_btn）。
+        self._result_expanded = True
+        self._result_ever_shown = False   # 未点过运行按钮前不显示展开按钮
         # 展开态：完整面板（标题 + 文件名 + 图像）
         panel = QFrame()
         panel.setObjectName("runResultPanel")
@@ -2637,16 +2634,18 @@ class FlowDesignDialog(QDialog):
             return
         self._result_pm = pm
         self._result_name.setText(os.path.basename(path))
+        self._result_ever_shown = True
         if not self._result_expanded:
             self._set_result_expanded(True)
         self._result_panel.setVisible(True)
-        self._result_bar.hide()
         self._render_result()
 
     def _set_result_expanded(self, expanded):
         self._result_expanded = bool(expanded)
         self._result_panel.setVisible(self._result_expanded)
-        self._result_bar.setVisible(not self._result_expanded)
+        # 收起后展开按钮出现在缩略图条「第1张」左侧（点过运行后才有意义）
+        self._result_expand_btn.setVisible(
+            self._result_ever_shown and not self._result_expanded)
         if self._result_expanded:
             QTimer.singleShot(0, self._render_result)
 
