@@ -25,7 +25,7 @@ from components import (
     Card, SectionTitle, CameraPreview, CameraScreen, LogView, FloatPanel,
     ToggleSwitch, make_sample_frames, _extract_channel)
 from production_view import (
-    StatsPanel, _make_user_frames, _CAMERA_FRAME_IMAGES, _camera_frame_dir,
+    StatsPanel, _make_user_frames, _load_camera_frames, _camera_frame_dir,
     CAMERA_NAMES,
 )
 
@@ -3973,12 +3973,10 @@ class DebugView(QWidget):
     @staticmethod
     def _make_frames_like_production(cam_name, w, h, index=0):
         """与生产界面 start_playback 完全相同的样张生成逻辑：
-        有用户样张图片则用 _make_user_frames，否则用 make_sample_frames(seed=100+index)。"""
-        if cam_name and cam_name in _CAMERA_FRAME_IMAGES:
-            img_file = _CAMERA_FRAME_IMAGES[cam_name]
-            img_path = os.path.join(_camera_frame_dir(), img_file)
-            if os.path.exists(img_path):
-                return _make_user_frames(img_path, w, h, count=12)
+        有用户样张图片则按其匹配文件轮播，否则用 make_sample_frames(seed=100+index)。"""
+        frames = _load_camera_frames(cam_name, w, h)
+        if frames is not None:
+            return frames
         return make_sample_frames(w, h, count=12, seed=100 + index)
 
     def stop_playback(self):

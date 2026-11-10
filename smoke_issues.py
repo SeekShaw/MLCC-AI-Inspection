@@ -1180,6 +1180,32 @@ check(pv._realtime_rechk_rate() == 0.0, "实时重检率: 无增量时显示 0.0
 pv._live_total, pv._rechk_win = _rt_total_bak, _rt_win_bak
 pv._refresh_live_stats_ui()
 
+# ============ 相机样张多张轮播（camera_frames 按命名归集 + 自然排序 + 轮番加载） ============
+import tempfile as _tempfile, shutil as _shutil
+_fr = _tempfile.mkdtemp(prefix="camfr_")
+for _n in ("下表面.png", "下表面2.png", "下表面10.png"):
+    # 占位文件（非合法 png，_make_user_frames 会回退示例帧，但不影响归集/排序/拼接逻辑）
+    open(os.path.join(_fr, _n), "wb").write(b"\x89PNG\r\n\x1a\n")
+_orig_dir = _pvm._camera_frame_dir
+_pvm._camera_frame_dir = lambda: _fr
+try:
+    _files = _pvm._camera_frame_files()
+    _order = [os.path.basename(p) for p in _files["下表面"]]
+    check(_order == ["下表面.png", "下表面2.png", "下表面10.png"],
+          f"相机样张: 文件名自然排序(下表面<下表面2<下表面10) (实际 {_order})")
+    _fr2 = _pvm._load_camera_frames("下表面", 100, 100)
+    check(_fr2 is not None and len(_fr2) == 36,   # 3 张 × count=12 → 轮番加载
+          f"相机样张: 多张样张轮播(3张×12帧=36) (实际 {None if _fr2 is None else len(_fr2)})")
+    # 无匹配样张 → 返回 None，由调用方回退示例帧
+    _fr_empty = _tempfile.mkdtemp(prefix="camfr_empty_")
+    _pvm._camera_frame_dir = lambda: _fr_empty
+    check(_pvm._load_camera_frames("上表面", 100, 100) is None,
+          "相机样张: 无匹配样张时返回 None(调用方回退示例帧)")
+finally:
+    _pvm._camera_frame_dir = _orig_dir
+    _shutil.rmtree(_fr, ignore_errors=True)
+    _shutil.rmtree(_fr_empty, ignore_errors=True)
+
 # ============ 新需求：检索按钮→「返回」→恢复默认「当前运行-运行开始-现在」 ============
 # 默认（当前运行）：按钮「检索」且置灰不可点
 check(pv._btn_search_stat.text() == "检索" and not pv._btn_search_stat.isEnabled(),

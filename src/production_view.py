@@ -1,6 +1,7 @@
 import json
 import math
 import os
+import re
 import sys
 import random
 import time
@@ -158,15 +159,55 @@ def _make_zigaa_pixmap(w, h, font_family="Microsoft YaHei") -> "QPixmap":
     return pm
 
 
-# 用户提供的 6 路真实相机样张（前 6 路：上/下/内/外/后/前端面）
-_CAMERA_FRAME_IMAGES = {
-    "上表面": "上表面.png",
-    "下表面": "下表面.png",
-    "内侧面": "内侧面.png",
-    "外侧面": "外侧面.png",
-    "后端面": "后端面.png",
-    "前端面": "前端面.png",
-}
+# 6 路真实相机的样张命名关键字（文件名包含该关键字即归为该路相机样张）
+_CAMERA_FRAME_KEYWORDS = ["上表面", "下表面", "内侧面", "外侧面", "后端面", "前端面"]
+
+
+def _camera_frame_files():
+    """扫描相机样张目录，按相机关键字归集所有匹配图片（支持多张轮播）。
+
+    返回 {关键字: [按文件名自然排序的文件路径列表]}。文件名只要包含关键字即匹配，
+    例如「下表面」「下表面2」「下表面_3.jpg」都归入「下表面」一路，运行时轮番加载。
+    """
+    d = _camera_frame_dir()
+    result = {kw: [] for kw in _CAMERA_FRAME_KEYWORDS}
+    if not os.path.isdir(d):
+        return result
+    for fn in os.listdir(d):
+        if not fn.lower().endswith((".png", ".jpg", ".jpeg", ".bmp", ".gif")):
+            continue
+        for kw in _CAMERA_FRAME_KEYWORDS:
+            if kw in fn:
+                result[kw].append(os.path.join(d, fn))
+                break
+
+    def _nat_key(p):
+        # 自然排序：下表面 < 下表面2 < 下表面10（纯字符串排序会得到 10<2）。
+        # 先去掉扩展名，再取首个数字前的名称为主排序键（均为相机关键字，前缀一致），
+        # 其余按数字段自然排序。
+        stem, _ext = os.path.splitext(os.path.basename(p))
+        m = re.match(r"^([^\d]*)(.*)$", stem)
+        head = (m.group(1).lower() if m else stem.lower())
+        tail = [(1, int(t)) if t.isdigit() else (0, t.lower())
+                for t in re.split(r"(\d+)", m.group(2) if m else stem)]
+        return (head, tail)
+
+    for kw in result:
+        result[kw].sort(key=_nat_key)
+    return result
+
+
+def _load_camera_frames(cam_name, w, h, count_per=12):
+    """为某路相机加载样张帧：归集该路所有匹配图片，逐张生成漂移帧并拼接，
+    运行时即可在图片间轮番切换（多张则轮番加载多张）。
+    无匹配样张时返回 None（调用方回退到示例帧）。"""
+    files = _camera_frame_files().get(cam_name)
+    if not files:
+        return None
+    frames = []
+    for fp in files:
+        frames += _make_user_frames(fp, w, h, count=count_per)
+    return frames if frames else None
 
 
 def _camera_frame_dir() -> str:
@@ -6357,17 +6398,12 @@ class ProductionView(_ReportExportMixin, QWidget):
                         cam.set_frame_index(0)
                     else:
                         name = CAMERA_NAMES[i]
-                        img_file = _CAMERA_FRAME_IMAGES.get(name)
-                        if img_file:
-                            img_path = os.path.join(_camera_frame_dir(), img_file)
-                            if os.path.exists(img_path):
-                                frames = _make_user_frames(img_path, sw, sh, count=12)
-                            else:
-                                frames = make_sample_frames(sw, sh, count=12, seed=100 + i)
-                        else:
+                        # 动态归集该路相机所有匹配样张（多张则轮番加载），无样张回退示例帧
+                        frames = _load_camera_frames(name, sw, sh)
+                        if frames is None:
                             frames = make_sample_frames(sw, sh, count=12, seed=100 + i)
                         cam.set_frames(frames)
-                        cam.set_frame_index(self._cam_phase[i] % 12)
+                        cam.set_frame_index(self._cam_phase[i] % len(frames))
                     cam.set_playing(True)
             except Exception:
                 # 单相机帧生成失败不影响其它相机与整体播放（保证画布/统计仍启动刷新）
