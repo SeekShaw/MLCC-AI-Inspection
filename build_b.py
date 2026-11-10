@@ -210,6 +210,13 @@ def main():
 
     print(">> 完成 ->", OUT_EXE)
 
+    # 5) 同步生成便携版压缩包（可直接拷贝到其他电脑打开，反复替换）
+    try:
+        import make_portable_zip
+        make_portable_zip.build()
+    except Exception as e:
+        print("!! 便携版压缩包生成失败（不影响 exe 产物）:", repr(e))
+
 
 if __name__ == "__main__":
     main()
