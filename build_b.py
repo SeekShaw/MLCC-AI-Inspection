@@ -217,6 +217,21 @@ def main():
     except Exception as e:
         print("!! 便携版压缩包生成失败（不影响 exe 产物）:", repr(e))
 
+    # 6) 自动暂存最新 exe：output/* 被 .gitignore 忽略，普通 git add 加不进去，
+    #    需强制 add，避免下次提交时漏掉 exe（不自动 commit，留给你确认）。
+    try:
+        r = subprocess.run(
+            ["git", "add", "-f", OUT_EXE],
+            cwd=root, capture_output=True, text=True,
+        )
+        if r.returncode == 0:
+            print(">> 已自动暂存最新 exe ->", OUT_EXE,
+                  "（如需同步 GitHub，请 git commit && git push）")
+        else:
+            print("!! 自动暂存 exe 失败（不影响产物）:", r.stderr.strip())
+    except Exception as e:
+        print("!! 自动暂存 exe 异常（不影响产物）:", repr(e))
+
 
 if __name__ == "__main__":
     main()
