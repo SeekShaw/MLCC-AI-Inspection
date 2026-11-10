@@ -114,7 +114,7 @@ class DeviceSettingsDialog(QDialog):
         lay.setContentsMargins(16, 16, 16, 16)
         lay.setSpacing(12)
 
-        tabs = QTabWidget()
+        tabs = self.tabs = QTabWidget()
         tabs.setStyleSheet(_tab_style())
         tabs.addTab(self._tab_dd(), "DD马达")
         tabs.addTab(self._tab_vib(), "振动盘")
@@ -665,9 +665,12 @@ class DeviceSettingsDialog(QDialog):
 
 
 class TriggerSettingsDialog(QDialog):
-    """触发设定：相机按钮列表 + 选中相机详情（采图使能 / 触发位置 / 触发光源 1-18）。
+    """触发设定：8 相机参数表格 + 当前相机的触发光源 1-18。
 
-    每个相机为一个按钮，点击后在下方详情区勾选该相机的 18 个触发光源；
+    表格首行为「相机1..相机8」按钮，首列依次为 采图使能 / 多次曝光使能 /
+    触发位置 / 曝光增益 / 曝光时间 / 最小匹配 / 最大匹配；多次曝光使能开启时
+    追加 曝光次数 / 曝光延时 两行。点击表头相机按钮会切换下方触发光源区，
+    显示该相机已选光源（光源交互逻辑与改造前保持一致）。
     编辑先写入工作副本，点「保存」才提交到 dev_cfg 并持久化到 device_config.json。
     """
 
@@ -677,21 +680,23 @@ class TriggerSettingsDialog(QDialog):
         self.pv = mw.production
         self.setWindowTitle("触发设定")
         self.setWindowFlags(self.windowFlags() | Qt.WindowType.WindowStaysOnTopHint)
-        self.setMinimumSize(660, 480)
-        self.resize(680, 640)
+        # 表格含 8 个相机列，需更宽的窗口容纳（不足时可横向/纵向滚动）
+        self.setMinimumSize(820, 560)
+        self.resize(1120, 760)
         self.setStyleSheet(f"QDialog {{ background-color: {COLORS['bg_panel']}; }}")
         self._cam_names = [f"相机{i}" for i in range(1, 9)]
         # 工作副本：编辑先写入 _work，点保存才提交到 dev_cfg
         cfg = self.pv.get_trigger_config()
         self._work = {}
         for name in self._cam_names:
-            cam = cfg.get(name, {"enable": True, "position": 5112, "lights": [True] * 18,
+            cam = cfg.get(name, {"enable": False, "position": 5112, "lights": [True] * 18,
                                  "multi_enable": False, "multi_count": 2, "multi_delay": 100})
             lights = list(cam.get("lights", [True] * 18))
             while len(lights) < 18:
                 lights.append(False)
             self._work[name] = {
-                "enable": bool(cam.get("enable", True)),
+                # 采图使能 / 多次曝光使能默认均为关闭
+                "enable": bool(cam.get("enable", False)),
                 "position": int(cam.get("position", 5112)),
                 "lights": [bool(x) for x in lights[:18]],
                 "multi_enable": bool(cam.get("multi_enable", False)),
@@ -715,7 +720,9 @@ class TriggerSettingsDialog(QDialog):
         self._light_values = values[:18]
         self._current = self._cam_names[0]
         self._cam_btns = {}
-        self._loading = False
+        # 构建表格时控件 setValue / setChecked 会触发回写信号，用 _loading 屏蔽；
+        # _select() 结束时解除屏蔽。
+        self._loading = True
         self._build()
         self._select(self._current)
 
@@ -724,28 +731,10 @@ class TriggerSettingsDialog(QDialog):
         lay.setContentsMargins(16, 16, 16, 16)
         lay.setSpacing(12)
 
-        # 相机按钮列表：一行 8 个（每个相机一个按钮）
-        cam_box = QWidget()
-        cam_box.setStyleSheet(
-            f"background-color: {COLORS['bg_card']}; border: 1px solid {COLORS['border']}; "
-            f"border-radius: 6px;")
-        cam_lay = QHBoxLayout(cam_box)
-        cam_lay.setContentsMargins(10, 10, 10, 10)
-        cam_lay.setSpacing(6)
-        for name in self._cam_names:
-            btn = QPushButton(name)
-            btn.setFixedSize(64, 32)
-            btn.setCheckable(True)
-            btn.setStyleSheet(self._cam_btn_style(False))
-            btn.clicked.connect(lambda _, n=name: self._select(n))
-            cam_lay.addWidget(btn)
-            self._cam_btns[name] = btn
-        cam_lay.addStretch()
-
-        # 主内容区：放入可滚动容器，避免内容超出窗口被裁剪（触发光源 6 行 + 高级参数较高）
+        # 主内容区：放入可滚动容器，避免内容超出窗口被裁剪
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         scroll.setStyleSheet(
             f"QScrollArea {{ border: none; background: {COLORS['bg_panel']}; }}")
@@ -753,135 +742,13 @@ class TriggerSettingsDialog(QDialog):
         clay = QVBoxLayout(content)
         clay.setContentsMargins(0, 0, 0, 0)
         clay.setSpacing(12)
-        clay.addWidget(cam_box)
 
-        # 选中相机的详情区
+        # 相机参数表格：首行为相机1~8（点击切换下方触发光源），首列为各参数行
+        clay.addWidget(self._build_param_table())
+
+        # 触发光源区（按当前选中相机显示/编辑，显示与交互逻辑保持不变）
         self.detail_box, d_inner = _section_box("相机参数")
         lbl_style = f"color: {COLORS['text_primary']}; font-size: 12px;"
-
-        # 采图使能
-        en_row = QHBoxLayout()
-        en_row.setSpacing(8)
-        en_lbl = QLabel("采图使能")
-        en_lbl.setStyleSheet(lbl_style)
-        self.toggle = ToggleSwitch(on=True, on_color="#2F80ED")
-        self.toggle_text = QLabel("开启")
-        self.toggle_text.setStyleSheet(lbl_style)
-        self.toggle.toggled.connect(self._on_enable_toggled)
-        en_row.addWidget(en_lbl)
-        en_row.addSpacing(8)
-        en_row.addWidget(self.toggle)
-        en_row.addWidget(self.toggle_text)
-        en_row.addStretch()
-        d_inner.addLayout(en_row)
-
-        # 多次曝光（仅在「采图使能」开启时显示，否则整块收起隐藏）
-        # 曝光次数 / 曝光延时 与「多次曝光使能」置于同一行
-        self.multi_block = QWidget()
-        mb_lay = QHBoxLayout(self.multi_block)
-        mb_lay.setContentsMargins(0, 0, 0, 0)
-        mb_lay.setSpacing(10)
-        # 多次曝光使能
-        me_row = QHBoxLayout()
-        me_row.setSpacing(6)
-        me_lbl = QLabel("多次曝光使能")
-        me_lbl.setStyleSheet(lbl_style)
-        self.multi_toggle = ToggleSwitch(on=False, on_color="#2F80ED")
-        self.multi_toggle_text = QLabel("关闭")
-        self.multi_toggle_text.setStyleSheet(lbl_style)
-        self.multi_toggle.toggled.connect(self._on_multi_toggled)
-        me_row.addWidget(me_lbl)
-        me_row.addWidget(self.multi_toggle)
-        me_row.addWidget(self.multi_toggle_text)
-        mb_lay.addLayout(me_row)
-        # 曝光次数
-        mc = QHBoxLayout()
-        mc.setSpacing(6)
-        mc_lbl = QLabel("曝光次数")
-        mc_lbl.setStyleSheet(lbl_style)
-        self.multi_count = QSpinBox()
-        self.multi_count.setFixedWidth(100)
-        self.multi_count.setRange(2, 16)
-        self.multi_count.setSuffix(" 次")
-        self.multi_count.setStyleSheet(self._spin_style())
-        self.multi_count.valueChanged.connect(self._sync_work)
-        mc.addWidget(mc_lbl)
-        mc.addWidget(self.multi_count)
-        mb_lay.addLayout(mc)
-        # 曝光延时
-        md = QHBoxLayout()
-        md.setSpacing(6)
-        md_lbl = QLabel("曝光延时")
-        md_lbl.setStyleSheet(lbl_style)
-        self.multi_delay = QSpinBox()
-        self.multi_delay.setFixedWidth(100)
-        self.multi_delay.setRange(0, 9999)
-        self.multi_delay.setSuffix(" Pulse")
-        self.multi_delay.setStyleSheet(self._spin_style())
-        self.multi_delay.valueChanged.connect(self._sync_work)
-        md.addWidget(md_lbl)
-        md.addWidget(self.multi_delay)
-        mb_lay.addLayout(md)
-        mb_lay.addStretch(1)
-        d_inner.addWidget(self.multi_block)
-
-        # 触发位置
-        pos_row = QHBoxLayout()
-        pos_row.setSpacing(8)
-        pos_lbl = QLabel("触发位置")
-        pos_lbl.setStyleSheet(lbl_style)
-        self.pos = QSpinBox()
-        self.pos.setFixedWidth(_SPIN_W)
-        self.pos.setRange(0, 99999)
-        self.pos.setSuffix(" Pulse")
-        self.pos.setStyleSheet(self._spin_style())
-        self.pos.valueChanged.connect(self._sync_work)
-        pos_row.addWidget(pos_lbl)
-        pos_row.addSpacing(8)
-        pos_row.addWidget(self.pos)
-        # 「自动获取」按钮：从运行系统自动获取当前触发位置并填入
-        auto_btn = QPushButton("自动获取")
-        auto_btn.setFixedWidth(88)
-        auto_btn.setToolTip("从运行系统自动获取当前触发位置（Pulse）并填入")
-        auto_btn.setStyleSheet(
-            f"QPushButton {{ background-color: {COLORS['bg_card']}; color: {COLORS['accent_blue']}; "
-            f"border: 1px solid {COLORS['border']}; border-radius: 4px; "
-            f"padding: 4px 0; font-size: 12px; }}"
-            f"QPushButton:hover {{ border-color: {COLORS['accent_blue']}; }}")
-        auto_btn.clicked.connect(self._on_auto_get_position)
-        pos_row.addWidget(auto_btn)
-        pos_row.addStretch()
-        d_inner.addLayout(pos_row)
-
-        # 相机参数（曝光增益 / 曝光时间 / 最小匹配 / 最大匹配，每相机独立）
-        # 与报警设置中的原「相机参数」页一致：四项可调参数，保存在各相机自身配置中
-        cam_param_box, cam_param_inner = _section_box("相机参数")
-        cam_param_specs = [
-            ("exposure_gain", "曝光增益", "", 0, 64, 1),
-            ("exposure_time", "曝光时间", " µs", 0, 100000, 100),
-            ("min_match", "最小匹配", " %", 0, 100, 1),
-            ("max_match", "最大匹配", " %", 0, 100, 1),
-        ]
-        self.cam_param_spins = {}
-        for key, label, suffix, lo, hi, step in cam_param_specs:
-            row = QHBoxLayout()
-            row.setSpacing(8)
-            lbl = QLabel(label)
-            lbl.setStyleSheet(lbl_style)
-            spin = QSpinBox()
-            spin.setFixedWidth(_SPIN_W)
-            spin.setRange(lo, hi)
-            spin.setSingleStep(step)
-            spin.setSuffix(suffix)
-            spin.setStyleSheet(self._spin_style())
-            spin.valueChanged.connect(self._sync_work)
-            row.addWidget(lbl)
-            row.addSpacing(8)
-            row.addWidget(spin)
-            row.addStretch()
-            cam_param_inner.addLayout(row)
-            self.cam_param_spins[key] = spin
-        d_inner.addWidget(cam_param_box)
 
         # 触发光源 1-18（每行 3 个；勾选框紧跟名称，间距收紧；名称可编辑，跨相机共享）
         src_row = QHBoxLayout()
@@ -889,9 +756,13 @@ class TriggerSettingsDialog(QDialog):
         src_lbl.setStyleSheet(lbl_style)
         src_row.addWidget(src_lbl)
         src_row.addStretch(1)
-        self._light_filter = "all"  # 全部 / 仅已选
-        self.light_filter_btn = QPushButton("显示已选")
+        # 默认「显示已选」：只显示当前相机已勾选的光源，未勾选的单元隐藏；
+        # 按钮文字表示「点击后切换到的模式」，故默认态为「显示所有」。
+        self._light_filter = "selected"  # 全部(all) / 仅已选(selected)
+        self.light_filter_btn = QPushButton("显示所有")
         self.light_filter_btn.setFixedWidth(90)
+        self.light_filter_btn.setToolTip(
+            "当前仅显示已勾选光源；需勾选新光源时点击切换为「显示所有」")
         self.light_filter_btn.setStyleSheet(
             f"background-color: {COLORS['bg_card']}; color: {COLORS['text_primary']}; "
             f"border: 1px solid {COLORS['border']}; border-radius: 4px; "
@@ -1016,6 +887,156 @@ class TriggerSettingsDialog(QDialog):
         row.addWidget(close)
         lay.addLayout(row)
 
+    # 表格列宽：首列参数名 + 8 个等宽相机列（保证上下对齐）
+    _ROW_LABEL_W = 96
+    _CELL_W = 112
+
+    def _build_param_table(self):
+        """相机参数表格：表头首行为「相机1..相机8」按钮（点击切换下方触发光源），
+        首列依次为 采图使能 / 多次曝光使能 / 触发位置 / 曝光增益 / 曝光时间 /
+        最小匹配 / 最大匹配；多次曝光使能开启时在其下方追加 曝光次数 / 曝光延时 两行。
+        每个单元格是对应相机的独立控件，值来自工作副本 _work。"""
+        box, inner = _section_box("相机参数表（点击表头相机切换下方触发光源）")
+        inner.setSpacing(4)
+
+        def new_row(label, header=False):
+            w = QWidget()
+            w.setObjectName("paramRow")
+            bg = COLORS["bg_panel"] if header else COLORS["bg_card"]
+            w.setStyleSheet(
+                f"QWidget#paramRow {{ background-color: {bg}; "
+                f"border: 1px solid {COLORS['border']}; border-radius: 4px; }}")
+            h = QHBoxLayout(w)
+            h.setContentsMargins(6, 4, 6, 4)
+            h.setSpacing(6)
+            lbl = QLabel(label)
+            lbl.setFixedWidth(self._ROW_LABEL_W)
+            lbl.setStyleSheet(
+                f"color: {COLORS['text_primary']}; font-size: 12px; "
+                f"background-color: transparent;")
+            h.addWidget(lbl)
+            return w, h
+
+        def cell(widget, center=False):
+            holder = QWidget()
+            holder.setFixedWidth(self._CELL_W)
+            ch = QHBoxLayout(holder)
+            ch.setContentsMargins(0, 0, 0, 0)
+            ch.setSpacing(0)
+            if center:
+                ch.addStretch(1)
+                ch.addWidget(widget)
+                ch.addStretch(1)
+            else:
+                widget.setFixedWidth(self._CELL_W)
+                ch.addWidget(widget)
+            return holder
+
+        # —— 表头首行：相机1 ~ 相机8（点击后 _select 切换触发光源显示）——
+        head, hh = new_row("", header=True)
+        self._cam_btns = {}
+        for name in self._cam_names:
+            btn = QPushButton(name)
+            btn.setFixedWidth(self._CELL_W)
+            btn.setFixedHeight(28)
+            btn.setCheckable(True)
+            btn.setStyleSheet(self._cam_btn_style(False))
+            btn.clicked.connect(lambda _, n=name: self._select(n))
+            hh.addWidget(btn)
+            self._cam_btns[name] = btn
+        hh.addStretch(1)
+        inner.addWidget(head)
+
+        def switch_row(label, key, slot):
+            w, h = new_row(label)
+            d = {}
+            for name in self._cam_names:
+                sw = ToggleSwitch(on=bool(self._work[name][key]), on_color="#2F80ED")
+                sw.toggled.connect(slot)
+                h.addWidget(cell(sw, center=True))
+                d[name] = sw
+            h.addStretch(1)
+            inner.addWidget(w)
+            return w, d
+
+        def spin_row(label, key, suffix, lo, hi, step):
+            w, h = new_row(label)
+            d = {}
+            for name in self._cam_names:
+                sp = QSpinBox()
+                sp.setRange(lo, hi)
+                sp.setSingleStep(step)
+                sp.setSuffix(suffix)
+                sp.setStyleSheet(self._spin_style())
+                sp.setValue(int(self._work[name][key]))
+                sp.valueChanged.connect(self._sync_work)
+                h.addWidget(cell(sp))
+                d[name] = sp
+            h.addStretch(1)
+            inner.addWidget(w)
+            return w, d
+
+        # 采图使能 / 多次曝光使能：默认均为关闭
+        _, self.enable_switches = switch_row("采图使能", "enable", self._on_enable_toggled)
+        _, self.multi_switches = switch_row("多次曝光使能", "multi_enable",
+                                            self._on_multi_toggled)
+
+        # 多次曝光使能开启后才显示的两行（紧跟「多次曝光使能」下方）
+        cnt_row, self.multi_counts = spin_row("曝光次数", "multi_count", " 次", 2, 16, 1)
+        dly_row, self.multi_delays = spin_row("曝光延时", "multi_delay", " Pulse", 0, 9999, 1)
+        self.multi_extra_rows = [cnt_row, dly_row]
+
+        # 常规参数行（顺序与需求一致）
+        _, self.positions = spin_row("触发位置", "position", " Pulse", 0, 99999, 1)
+        specs = [
+            ("exposure_gain", "曝光增益", "", 0, 64, 1),
+            ("exposure_time", "曝光时间", " µs", 0, 100000, 100),
+            ("min_match", "最小匹配", " %", 0, 100, 1),
+            ("max_match", "最大匹配", " %", 0, 100, 1),
+        ]
+        self.cam_param_spins = {}
+        for key, label, suffix, lo, hi, step in specs:
+            _, spins = spin_row(label, key, suffix, lo, hi, step)
+            self.cam_param_spins[key] = spins
+
+        # 底部：自动获取触发位置（作用于表头当前选中的相机）+ 说明
+        foot = QHBoxLayout()
+        foot.setSpacing(10)
+        self._auto_cur_lbl = QLabel("")
+        self._auto_cur_lbl.setStyleSheet(
+            f"color: {COLORS['text_secondary']}; font-size: 11px;")
+        auto_btn = QPushButton("自动获取触发位置")
+        auto_btn.setFixedWidth(140)
+        auto_btn.setToolTip("从运行系统获取当前触发位置（Pulse），填入表头当前选中的相机")
+        auto_btn.setStyleSheet(
+            f"QPushButton {{ background-color: {COLORS['bg_card']}; color: {COLORS['accent_blue']}; "
+            f"border: 1px solid {COLORS['border']}; border-radius: 4px; "
+            f"padding: 4px 0; font-size: 12px; }}"
+            f"QPushButton:hover {{ border-color: {COLORS['accent_blue']}; }}")
+        auto_btn.clicked.connect(self._on_auto_get_position)
+        foot.addWidget(self._auto_cur_lbl)
+        foot.addWidget(auto_btn)
+        foot.addStretch(1)
+        tip = QLabel("多次曝光使能开启后显示曝光次数 / 曝光延时两行")
+        tip.setStyleSheet(f"color: {COLORS['text_secondary']}; font-size: 11px;")
+        foot.addWidget(tip)
+        inner.addLayout(foot)
+
+        self._update_multi_rows_visibility()
+        return box
+
+    def _update_multi_rows_visibility(self):
+        """任一相机的「多次曝光使能」开启 → 显示曝光次数 / 曝光延时两行；全部关闭则隐藏。
+        未开启多次曝光的相机列，其两行数值框置灰禁用（配置值仍保留）。"""
+        any_on = any(sw.is_on() for sw in self.multi_switches.values())
+        for w in self.multi_extra_rows:
+            w.setVisible(any_on)
+        for name in self._cam_names:
+            on = self.multi_switches[name].is_on()
+            for sp in (self.multi_counts[name], self.multi_delays[name]):
+                sp.setEnabled(on)
+                sp.setStyleSheet(self._spin_style(disabled=not on))
+
     def _cam_btn_style(self, selected):
         if selected:
             return (
@@ -1041,60 +1062,59 @@ class TriggerSettingsDialog(QDialog):
         )
 
     def _select(self, name):
+        """点击表头相机：高亮该列并切换下方触发光源区为该相机已选光源。
+
+        相机参数表格本身同时展示 8 个相机的全部参数，无需按选中相机回填；
+        触发光源区沿用原有的「按当前相机显示/编辑」逻辑（保持不变）。
+        """
         if name not in self._work:
             return
         self._loading = True
         self._current = name
         for n, btn in self._cam_btns.items():
+            btn.setChecked(n == name)
             btn.setStyleSheet(self._cam_btn_style(n == name))
         cam = self._work[name]
-        self.toggle.set_on(bool(cam["enable"]))
-        self.toggle_text.setText("开启" if cam["enable"] else "关闭")
-        self.multi_block.setVisible(bool(cam["enable"]))
-        self.multi_toggle.set_on(bool(cam["multi_enable"]))
-        self.multi_toggle_text.setText("开启" if cam["multi_enable"] else "关闭")
-        self.multi_count.setValue(int(cam["multi_count"]))
-        self.multi_delay.setValue(int(cam["multi_delay"]))
-        self.pos.setValue(int(cam["position"]))
-        # 相机参数（每相机独立）
-        self.cam_param_spins["exposure_gain"].setValue(int(cam["exposure_gain"]))
-        self.cam_param_spins["exposure_time"].setValue(int(cam["exposure_time"]))
-        self.cam_param_spins["min_match"].setValue(int(cam["min_match"]))
-        self.cam_param_spins["max_match"].setValue(int(cam["max_match"]))
         for ck, v in zip(self.lights, cam["lights"][:18]):
             ck.setChecked(bool(v))
         for le, nm in zip(self.name_edits, self._light_names):
             if le.text() != nm:
                 le.setText(nm)
         self.detail_box.setTitle(f"相机参数 - {name}")
+        if getattr(self, "_auto_cur_lbl", None) is not None:
+            self._auto_cur_lbl.setText(f"当前相机（自动获取作用于）：{name}")
         self._apply_light_filter()
         self._loading = False
 
     def _on_enable_toggled(self, on):
-        """采图使能切换：更新文字、收起/展开多次曝光整块，并同步工作副本。"""
-        self.toggle_text.setText("开启" if on else "关闭")
-        self.multi_block.setVisible(on)
+        """采图使能切换：同步工作副本（表格中每个相机独立开关）。"""
         self._sync_work()
 
     def _on_multi_toggled(self, on):
-        self.multi_toggle_text.setText("开启" if on else "关闭")
+        """多次曝光使能切换：同步工作副本，并即时增删曝光次数/曝光延时两行。"""
         self._sync_work()
+        self._update_multi_rows_visibility()
 
     def _sync_work(self):
+        """把表格中 8 个相机的全部参数回写工作副本。
+
+        光源复选框是共享的 18 个控件，仅代表「当前选中相机」，故只更新
+        _work[self._current]["lights"]，其余相机的光源配置保持不变。
+        """
         if self._loading:
             return
-        cam = self._work[self._current]
-        cam["enable"] = bool(self.toggle._on)
-        cam["position"] = int(self.pos.value())
-        cam["lights"] = [ck.isChecked() for ck in self.lights]
-        cam["multi_enable"] = bool(self.multi_toggle._on)
-        cam["multi_count"] = int(self.multi_count.value())
-        cam["multi_delay"] = int(self.multi_delay.value())
-        # 相机参数（每相机独立）
-        cam["exposure_gain"] = int(self.cam_param_spins["exposure_gain"].value())
-        cam["exposure_time"] = int(self.cam_param_spins["exposure_time"].value())
-        cam["min_match"] = int(self.cam_param_spins["min_match"].value())
-        cam["max_match"] = int(self.cam_param_spins["max_match"].value())
+        for name in self._cam_names:
+            cam = self._work[name]
+            cam["enable"] = bool(self.enable_switches[name].is_on())
+            cam["multi_enable"] = bool(self.multi_switches[name].is_on())
+            cam["multi_count"] = int(self.multi_counts[name].value())
+            cam["multi_delay"] = int(self.multi_delays[name].value())
+            cam["position"] = int(self.positions[name].value())
+            for key, spins in self.cam_param_spins.items():
+                cam[key] = int(spins[name].value())
+        lights = getattr(self, "lights", None)
+        if lights:
+            self._work[self._current]["lights"] = [ck.isChecked() for ck in lights]
         self._apply_light_filter()
 
     def _on_name(self, idx, txt):
@@ -1102,12 +1122,13 @@ class TriggerSettingsDialog(QDialog):
         self._light_names[idx] = (txt or f"光源{idx + 1}").strip()
 
     def _on_auto_get_position(self):
-        """「自动获取」：从运行系统读取当前脉冲位置并填入触发位置（随 _sync_work 写入工作副本）。"""
+        """「自动获取」：从运行系统读取当前脉冲位置，填入表头当前选中相机的触发位置。"""
         try:
             pos = int(self.pv.get_current_pulse_position())
         except Exception:
             return
-        self.pos.setValue(max(self.pos.minimum(), min(self.pos.maximum(), pos)))
+        sp = self.positions[self._current]
+        sp.setValue(max(sp.minimum(), min(sp.maximum(), pos)))
 
     def _on_light_filter_toggle(self):
         """切换「显示所有 / 显示已选」：按钮文字随当前模式变化，并即时刷新可见性。"""

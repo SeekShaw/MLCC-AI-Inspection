@@ -40,6 +40,7 @@ from alarm_config import (
     feature_estop_alarm, estop_mode,
     feature_ion_fan_alarm, ion_fan_plan,
     feature_glass_disk_jump_alarm, glass_disk_jump_plan, feature_glass_disk_jump_count,
+    feature_glass_rotation_alarm, glass_rotation_plan, glass_rotation_count,
     cont_mix_plan, cont_tilt_plan, cont_stick_plan, cont_fly_plan,
     valve_alarm_pct, valve_alarm_plan, valve_stop_pct, valve_stop_enabled, sq_plan, item_yield_plan,
     state_plans_count, state_plans, state_plan_aliases,
@@ -83,7 +84,7 @@ class AlarmSettingsDialog(QDialog):
         lay.setSpacing(12)
 
         # 标签页：点击标签切换显示不同子页；每个子页自带滚动，互不干扰
-        tabs = QTabWidget()
+        tabs = self.tabs = QTabWidget()
         tabs.setStyleSheet(self._tab_style())
         tabs.addTab(self._make_tab_page(self._build_bin_group()), "料盒满料停机")
         tabs.addTab(self._make_tab_page(self._build_valve_group()), "电磁阀寿命")
@@ -547,7 +548,8 @@ class AlarmSettingsDialog(QDialog):
         ranges = {
             "turntable_low": (0, 99999), "turntable_high": (0, 99999),
             "detect_low": (0, 99999), "detect_high": (0, 99999),
-            "good_low": (0, 100), "cam_yield_low": (0, 100), "recheck_high": (0, 100),
+            "good_low": (0, 100), "cam_yield_low": (0, 100),
+            "cam_yield_diff": (0, 100), "recheck_high": (0, 100),
         }
         self._sq_plan_combos = {}
         for key in SQ_KEYS:
@@ -982,11 +984,51 @@ class AlarmSettingsDialog(QDialog):
         t_glass.sw.toggled.connect(_sync_glass)
         _sync_glass(t_glass.is_on())
 
+        # 玻璃使用转数报警（默认关闭）+ 报警方案（可选）+ 旋转圈数阈值（圈）
+        t_grot = self._make_toggle("玻璃使用转数报警", feature_glass_rotation_alarm(), _FEAT_NAME_W)
+        grot_lbl = QLabel("报警方案")
+        grot_lbl.setFixedWidth(56)
+        grot_lbl.setStyleSheet(f"color: {COLORS['text_primary']}; font-size: 12px;")
+        self._glass_rotation_plan_combo = self._make_plan_combo(
+            state_plan_aliases(), glass_rotation_plan())
+        _grot_row = QHBoxLayout()
+        _grot_row.setSpacing(8)
+        _grot_row.addWidget(t_grot)
+        _grot_row.addSpacing(8)
+        _grot_row.addWidget(grot_lbl)
+        _grot_row.addWidget(self._glass_rotation_plan_combo)
+        # 旋转圈数阈值（示例 100000 圈，玻璃盘累计旋转圈数达到该值即按所选报警方案报警）
+        grot_count_lbl = QLabel("旋转圈数")
+        grot_count_lbl.setStyleSheet(f"color: {COLORS['text_primary']}; font-size: 12px;")
+        self._glass_rotation_count_spin = QSpinBox()
+        self._glass_rotation_count_spin.setFixedWidth(_SPIN_W)
+        self._glass_rotation_count_spin.setRange(1, 9_999_999)
+        self._glass_rotation_count_spin.setSingleStep(1000)
+        self._glass_rotation_count_spin.setValue(glass_rotation_count())
+        self._glass_rotation_count_spin.setSuffix(" 圈")
+        self._glass_rotation_count_spin.setStyleSheet(self._spin_style())
+        _grot_row.addSpacing(16)
+        _grot_row.addWidget(grot_count_lbl)
+        _grot_row.addWidget(self._glass_rotation_count_spin)
+        _grot_row.addStretch()
+        inner.addLayout(_grot_row)
+
+        def _sync_grot(on_):
+            grot_lbl.setEnabled(on_)
+            self._glass_rotation_plan_combo.setEnabled(on_)
+            self._glass_rotation_plan_combo.setStyleSheet(self._combo_style(disabled=not on_))
+            grot_count_lbl.setEnabled(on_)
+            self._glass_rotation_count_spin.setEnabled(on_)
+            self._glass_rotation_count_spin.setStyleSheet(self._spin_style(disabled=not on_))
+
+        t_grot.sw.toggled.connect(_sync_grot)
+        _sync_grot(t_grot.is_on())
+
         self._feat_toggles = {**getattr(self, "_feat_toggles", {}), **{
             "door_alarm": t_door,
             "cont_mix": t_mix, "cont_tilt": t_tilt,
             "cont_stick": t_stick, "cont_fly": t_fly, "estop": t_estop,
-            "ion_fan": t_ion, "glass_disk_jump": t_glass,
+            "ion_fan": t_ion, "glass_disk_jump": t_glass, "glass_rotation": t_grot,
         }}
         # 注：mis_wrong/mis_miss/bin_to_spin/bin_to_mode_combo 已在「料盒满料停机」页赋值
         self._door_mode_combo = door_mode
@@ -1241,6 +1283,10 @@ class AlarmSettingsDialog(QDialog):
         ALARM["features"]["glass_disk_jump_alarm"] = self._feat_toggles["glass_disk_jump"].is_on()
         ALARM["features"]["glass_disk_jump_plan"] = self._glass_disk_jump_plan_combo.currentText()
         ALARM["features"]["glass_disk_jump_count"] = int(self._glass_disk_jump_count_spin.value())
+        # 玻璃使用转数报警（开关与报警方案下拉 + 旋转圈数阈值）
+        ALARM["features"]["glass_rotation_alarm"] = self._feat_toggles["glass_rotation"].is_on()
+        ALARM["features"]["glass_rotation_plan"] = self._glass_rotation_plan_combo.currentText()
+        ALARM["features"]["glass_rotation_count"] = int(self._glass_rotation_count_spin.value())
         save_alarm_config()
 
     def _on_apply(self):

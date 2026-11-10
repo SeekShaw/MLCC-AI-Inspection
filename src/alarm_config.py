@@ -19,11 +19,12 @@ VALVE_KEYS = ["OK", "NG1", "NG2", "RST"]
 # - detect_*：   检测速度，单位 Pcs/Min
 # - good_low：   综合良率过低，单位 %
 # - cam_yield_low：单相机良率过低，单位 %（比较各相机实时最低良率）
+# - cam_yield_diff：相机良率差异过大，单位 %（各相机实时良率的最大值-最小值）
 # - recheck_high：重检率过高，单位 %
 SQ_KEYS = [
     "turntable_low", "turntable_high",
     "detect_low", "detect_high",
-    "good_low", "cam_yield_low", "recheck_high",
+    "good_low", "cam_yield_low", "cam_yield_diff", "recheck_high",
 ]
 SQ_LABELS = {
     "turntable_low": "转盘速度过低",
@@ -32,12 +33,14 @@ SQ_LABELS = {
     "detect_high": "检测速度过高",
     "good_low": "综合良率低",
     "cam_yield_low": "单相机良率低",
+    "cam_yield_diff": "相机良率差异",
     "recheck_high": "重检率过高",
 }
 SQ_UNITS = {
     "turntable_low": " RPM", "turntable_high": " RPM",
     "detect_low": " Pcs/Min", "detect_high": " Pcs/Min",
-    "good_low": " %", "cam_yield_low": " %", "recheck_high": " %",
+    "good_low": " %", "cam_yield_low": " %", "cam_yield_diff": " %",
+    "recheck_high": " %",
 }
 
 # 示例阈值（演示用，可在「报警设备」窗口中修改并保存）
@@ -55,6 +58,8 @@ DEFAULT_ALARM = {
         # 检测速度示例阈值：过低 8000 Pcs/Min、过高 12000 Pcs/Min
         "detect_low": 8000, "detect_high": 12000,
         "good_low": 90, "cam_yield_low": 85, "recheck_high": 5,
+        # 相机良率差异示例阈值：各相机实时良率最大值-最小值超过该值即报警（默认 5 %）
+        "cam_yield_diff": 5,
     },
     # 报警时长 / 报警延时（单位 ms）：作用于总气源/旋转盘/负压/静电四类设备状态报警
     # - duration_ms：报警触发后保持激活的时长，到时自动解除并重新开始延时计数
@@ -141,6 +146,12 @@ DEFAULT_ALARM = {
         "glass_disk_jump_plan": "方案 1",
         # 玻璃盘上下跳动超限报警条件：连续超限次数（达到该次数才触发报警），示例值 10 次
         "glass_disk_jump_count": 10,
+        # 玻璃使用转数报警：默认关闭；玻璃盘（DD 马达）累计旋转圈数达到设定阈值即按所选
+        # 报警方案（别名，默认「方案 1」）记录并显示报警（不触发停机），重新启动生产时从 0 累计
+        "glass_rotation_alarm": False,
+        "glass_rotation_plan": "方案 1",
+        # 玻璃使用转数报警阈值：累计旋转圈数（圈），达到该值即按所选报警方案报警，示例 100000 圈
+        "glass_rotation_count": 100000,
         # 检测项良率预警：阈值在调试界面「良率预警设置」列按检测项逐行设置，
         # 此处仅选择触发预警时所按的报警方案（别名，默认取第一个方案）
         "item_yield_plan": "方案 1",
@@ -169,7 +180,8 @@ DEFAULT_ALARM = {
     "sq_plan": {
         "turntable_low": "方案 1", "turntable_high": "方案 1",
         "detect_low": "方案 1", "detect_high": "方案 1",
-        "good_low": "方案 1", "cam_yield_low": "方案 1", "recheck_high": "方案 1",
+        "good_low": "方案 1", "cam_yield_low": "方案 1",
+        "cam_yield_diff": "方案 1", "recheck_high": "方案 1",
     },
 }
 
@@ -496,6 +508,24 @@ def feature_glass_disk_jump_count():
     """玻璃盘上下跳动超限报警条件：连续超限次数（默认 10 次，达到该次数才触发报警）。"""
     return int(ALARM["features"].get("glass_disk_jump_count",
                                     DEFAULT_ALARM["features"]["glass_disk_jump_count"]))
+
+
+def feature_glass_rotation_alarm():
+    """玻璃使用转数报警：默认关闭；玻璃盘累计旋转圈数达阈值即按所选报警方案报警（不触发停机）。"""
+    return bool(ALARM["features"].get("glass_rotation_alarm",
+                                      DEFAULT_ALARM["features"]["glass_rotation_alarm"]))
+
+
+def glass_rotation_plan():
+    """玻璃使用转数报警所选报警方案（别名），默认取第一个方案。"""
+    return str(ALARM["features"].get("glass_rotation_plan",
+                                     DEFAULT_ALARM["features"]["glass_rotation_plan"]))
+
+
+def glass_rotation_count():
+    """玻璃使用转数报警阈值（圈）：玻璃盘累计旋转圈数达到该值即按所选报警方案报警（默认 100000 圈）。"""
+    return int(ALARM["features"].get("glass_rotation_count",
+                                     DEFAULT_ALARM["features"]["glass_rotation_count"]))
 
 
 def sq_plan(key):

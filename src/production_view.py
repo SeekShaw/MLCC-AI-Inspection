@@ -14,7 +14,13 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, QTimer, QRect, QSize, pyqtSignal
 from PyQt6.QtGui import QGuiApplication, QColor, QFont, QFontMetrics, QPainter, QPixmap, QIcon, QPen, QBrush, QAction
 
+# 演示用：模拟生产批次视为「完成」的时长（毫秒）。到点后「模拟生产」按钮
+# 文案由「模拟生产中」转为「模拟生产结束」。可按需调整。
+SIM_END_MS = 5000
+
 from styles import COLORS, register_restyle
+from permission_ui import bind
+import simulate_config as _simcfg
 from components import (
     FloatPanel, EditableKpiGrid, DonutChart, LogView, CameraPreview, StateToggle,
     make_sample_frames
@@ -37,6 +43,7 @@ from alarm_config import (
     valve_alarm_pct, valve_alarm_plan, valve_stop_pct,
     feature_door_alarm_plan, sq_plan,
     feature_ion_fan_alarm, ion_fan_plan,
+    feature_glass_rotation_alarm, glass_rotation_plan, glass_rotation_count,
 )
 
 # 设备状态实时行的显示名（报警 / 恢复日志用，避免「旋转盘」与「转盘速度」混用）
@@ -46,6 +53,23 @@ _LIVE_DISP = {
     "负压": "负压",
     "静电": "静电",
 }
+# 设备状态卡片显示名 → 实时测量数据键（_dev_readings）。
+# 2026-11-09：卡片中「旋转盘」「静电」改名为「旋转盘转速」「静电电压」；
+# 后台 _dev_readings / 设备设置 / 报警模块仍沿用原键，避免牵动其它模块。
+_LIVE_ROW_KEY = {
+    "总气源": "总气源",
+    "旋转盘转速": "旋转盘",
+    "静电电压": "静电",
+}
+_LIVE_ROW_BY_KEY = {v: k for k, v in _LIVE_ROW_KEY.items()}
+# 「飞料状态」行的飞料率（飞料颗数 / 生产总数）：每批产品在基准附近小幅波动
+_FLY_BASE_RATE = 0.005
+# 设备状态行「名称框 ↔ 百分比框」之间的固定空隙（2026-11-09）。
+# 行内 spacing 由 6 收到 3（省 12px），再用这 12px 做 spacer，
+# 故两列合计宽度与卡片宽度都保持不变；实际空隙 = 3 + GAP = 15px。
+_NAME_PCT_GAP = 12
+# 状态行行内 spacing（原 6 → 3，用来给「名称框↔百分比框」腾空隙）
+_STATUS_ROW_SPACING = 3
 # 料盒取出状态文案：False=未取出，True=取出
 BIN_STATE_TEXT = {False: "未取出", True: "取出"}
 
@@ -79,6 +103,7 @@ _SQ_RECOVERY = {
     "detect_high": "检测速度过高",
     "good_low": "综合良率低",
     "cam_yield_low": "单相机良率低",
+    "cam_yield_diff": "相机良率差异过大",
     "recheck_high": "重检率过高",
 }
 
@@ -225,7 +250,7 @@ _BASE_CAM = [
 # 缺陷类型（按缺陷项统计表的所有行；新增多项后表体可滚动显示）
 _DEFECT_TYPES = [
     "产品长度", "产品宽度", "端头不一", "瓷体缺损",
-    "产品歪斜", "产品偏位", "产品变形", "端面漏瓷",
+    "产品连料", "产品偏位", "产品变形", "端面漏瓷",
     "瓷体发黑", "瓷体划痕", "爬镀", "电极突出", "电极横向内延",
 ]
 # 缺陷项饼图配色（按 _DEFECT_TYPES 顺序循环使用）
@@ -234,13 +259,26 @@ _DEFECT_COLORS = [
     "#2F80ED", "#7B61FF", "#00B8A9", "#F94144", "#577590",
     "#F3722C", "#43AA8B", "#90BE6D",
 ]
+# 检测项 102「产品歪料」/ 104「产品连料」的标准口径：
+# 编号 → (名称, 规格下限, 规格上限, 单位)。
+# 与调试界面「检测列表」出厂数据、output/detect_defaults.json 完全一致，
+# 作为生产统计侧的唯一来源，避免其它界面残留旧名称、旧编号或旧规格 / 旧单位。
+_DETECT_ITEM_STANDARD = {
+    "102": ("产品歪料", "-5", "5", "Deg"),
+    "104": ("产品连料", "180", "600", "Pixel"),
+}
+# 名称 → 编号 / 单位，供 SPC 表显示单位与悬停提示
+_DETECT_ITEM_CODE = {v[0]: k for k, v in _DETECT_ITEM_STANDARD.items()}
+_DEFECT_UNIT = {v[0]: v[3] for v in _DETECT_ITEM_STANDARD.values()}
 # 各检测项（缺陷项）SPC 规格：标称值 / 规格下限 / 规格上限（仅用于「按缺陷项统计」SPC 表展示）
 _DEFECT_SPEC = {
     "产品长度":     ("5.00", "4.90", "5.10"),
     "产品宽度":     ("3.20", "3.10", "3.30"),
     "端头不一":     ("0.50", "0.35", "0.65"),
     "瓷体缺损":     ("1.00", "0.85", "1.15"),
-    "产品歪斜":     ("0.20", "0.10", "0.30"),
+    # 104 产品连料：标称 0 / 下限 180 / 上限 600，单位 Pixel（与检测列表一致）
+    "产品连料":     ("0", _DETECT_ITEM_STANDARD["104"][1],
+                     _DETECT_ITEM_STANDARD["104"][2]),
     "产品偏位":     ("0.30", "0.15", "0.45"),
     "产品变形":     ("0.10", "0.05", "0.15"),
     "端面漏瓷":     ("1.00", "0.80", "1.20"),
@@ -256,7 +294,7 @@ _DEFECT_SPLIT = {
     "产品宽度":     (0.50, 0.50),
     "端头不一":     (0.70, 0.30),
     "瓷体缺损":     (0.40, 0.60),
-    "产品歪斜":     (0.45, 0.55),
+    "产品连料":     (0.45, 0.55),
     "产品偏位":     (0.65, 0.35),
     "产品变形":     (0.50, 0.50),
     "端面漏瓷":     (0.30, 0.70),
@@ -269,7 +307,7 @@ _DEFECT_SPLIT = {
 # 各缺陷在「权重=1 相机」上的本班次基准数量
 _DEFECT_BASE = {
     "产品长度": 45, "产品宽度": 30, "端头不一": 80, "瓷体缺损": 60,
-    "产品歪斜": 25, "产品偏位": 20, "产品变形": 15, "端面漏瓷": 12,
+    "产品连料": 25, "产品偏位": 20, "产品变形": 15, "端面漏瓷": 12,
     "瓷体发黑": 10, "瓷体划痕": 35, "爬镀": 8, "电极突出": 18, "电极横向内延": 14,
 }
 # 各相机相对权重：刻意保持接近均匀（仅 ±3% 微偏差），使各相机处理的产品总数基本一致，
@@ -857,7 +895,12 @@ class DefectSPCStatTable(QTableWidget):
     def set_rows(self, rows):
         self.setRowCount(len(rows))
         for r, (d, nom, lo, hi, below, above, ratio) in enumerate(rows):
-            vals = [d, nom, lo, hi, str(below), str(above), f"{ratio:.2f}%"]
+            # 102 / 104 两项的规格列附上单位，检测项列悬停提示带上检测编号，
+            # 保证统计表展示的规格口径与调试界面「检测列表」完全一致。
+            unit = _DEFECT_UNIT.get(d, "")
+            lo_txt = f"{lo} {unit}" if unit else str(lo)
+            hi_txt = f"{hi} {unit}" if unit else str(hi)
+            vals = [d, nom, lo_txt, hi_txt, str(below), str(above), f"{ratio:.2f}%"]
             for c, txt in enumerate(vals):
                 item = QTableWidgetItem(txt)
                 item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -867,6 +910,9 @@ class DefectSPCStatTable(QTableWidget):
                     f = QFont("Microsoft YaHei", QFont.Weight.Bold)
                     f.setPixelSize(9)
                     item.setFont(f)
+                    code = _DETECT_ITEM_CODE.get(d)
+                    if code:
+                        item.setToolTip(f"检测编号 {code} · 单位 {_DEFECT_UNIT.get(d, '')}")
                 elif c == 6:
                     item.setForeground(QColor(COLORS["accent_blue"]))
                 self.setItem(r, c, item)
@@ -1496,6 +1542,8 @@ class _ReportExportMixin:
 
     def _open_production_report(self):
         """收集当前统计时段的数据与产品信息，打开生产报表弹窗。"""
+        if not self._perm_allowed("production_report"):
+            return
         period = getattr(self, "period", "当前运行")
         pd = PERIOD_DATA.get(period, PERIOD_DATA["当前运行"])
         start, end = (getattr(self, "period_times", {}) or {}).get(period, ("", ""))
@@ -3117,6 +3165,12 @@ class ProductionView(_ReportExportMixin, QWidget):
         self._estop_due_ts = None           # 本次运行随机安排的「急停被按下」时刻（5~60 分钟后）
         self._ion_fan_abnormal = False      # 离子风扇异常报警态（默认开启，运行中低概率出现）
         self._pending_routed = set()        # 已按「抽盒超时剔除逻辑」改判为待定的料盒（日志去重）
+        # 玻璃使用转数累计：生产运行时按 DD 马达转速 × 真实流逝时间累计旋转圈数，
+        # 达到「玻璃使用转数报警」设定阈值即按所选报警方案记红色报警（不触发停机）。
+        # 每次启动生产从 0 累计（见 _on_start），达阈值只记一次（_glass_rota_alarmed 守卫）。
+        self._glass_rotations = 0.0
+        self._glass_rota_alarmed = False
+        self._last_rot_ts = None            # 上次累计旋转圈数的真实时刻（time.monotonic()）
         self._products_per_tick = 20      # 每个播放节拍模拟经过的产品数
         # 时间基实时累计状态（播放态）：保证一分钟内「总数」差值 ≈ 显示的平均速度。
         # 此前固定「供料速度折算件数/节拍」，受 Qt 定时器实际间隔偏长影响，
@@ -3189,6 +3243,19 @@ class ProductionView(_ReportExportMixin, QWidget):
         self._style_glass_clean_btn(False)
         self._btn_glass_clean.clicked.connect(self._on_glass_clean_clicked)
 
+        # ⚠️ 2026-11-06 需求：「模拟生产」左侧新增「点动调试」按钮。
+        # 点击弹出点动调试小窗（点动速度/方向、自动锁定元件、拍照/剔除工位定位）。
+        # 设备处于「生产运行中」时该按钮置灰不可点击，停止状态可点击。
+        self._btn_jog = QPushButton("点动调试")
+        self._btn_jog.setFixedHeight(20)
+        self._btn_jog.setMinimumWidth(74)
+        self._btn_jog.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._btn_jog.setToolTip("点动调试（速度/方向、自动锁定元件、工位定位）")
+        self._btn_jog.setFont(QFont("Microsoft YaHei", 9))
+        self._style_jog_btn()
+        self._btn_jog.clicked.connect(self._on_jog_clicked)
+        self._jog_dlg = None
+
         # ⚠️ 2026-10-09 需求：「玻璃清洁」左侧新增「模拟生产」按钮。
         # 点击弹出模拟生产设置窗口（开关 + 各相机图片来源路径）。
         # 设备处于「生产运行中」时该按钮置灰不可点击，停止状态可点击。
@@ -3201,10 +3268,23 @@ class ProductionView(_ReportExportMixin, QWidget):
         self._style_simulate_btn()
         self._btn_simulate.clicked.connect(self._on_simulate_clicked)
         self._simulate_dlg = None
-        status.set_header_actions([self._btn_simulate, self._btn_glass_clean])
+        # 模拟生产运行状态：本次运行是否为「模拟生产」，以及批次完成定时器
+        self._sim_run = False
+        self._sim_end_timer = None
+        status.set_header_actions(
+            [self._btn_jog, self._btn_simulate, self._btn_glass_clean])
 
-        stats = FloatPanel("统计信息", self, min_w=410, min_h=440)
+        # 2026-11-09：最小宽 410 → 360（与运行日志一致）。右列分配宽度若小于
+        # 面板 minimumWidth，Qt 会强制撑宽并把右边缘推出窗口，统计信息卡片被裁切。
+        stats = FloatPanel("统计信息", self, min_w=360, min_h=440)
         stats.set_body_layout(self._build_stats())
+        # 实时重检率（2026-11-10 需求）：显示在卡片标题栏中部（标题与右侧
+        # 饼图/详情按钮之间），黄色，与 KPI「重检率」颜色一致；数值由
+        # _refresh_live_stats_ui 按滚动窗口计算刷新。
+        self._rt_rechk_label = QLabel("实时重检率: 0.00%")
+        self._rt_rechk_label.setStyleSheet(
+            f"color: {COLORS['accent_yellow']}; font-size: 12px; font-weight: bold;")
+        stats.header.add_after_title(self._rt_rechk_label)
         # 饼图/详情 切换按钮放到卡片标题栏右侧（两种统计方式切换按钮已移到底部操作行）
         stats.set_header_actions([self._btn_pie, self._btn_detail])
 
@@ -3291,9 +3371,24 @@ class ProductionView(_ReportExportMixin, QWidget):
                         if len(self.panels) > 2 else 0)
         if col_w < _st_min_w:
             col_w = _st_min_w
-            right_w = max(200, rw - gap - col_w)
+        # ⚠️ 2026-11-09 修复「统计信息卡片右侧被裁切」：右列宽度不得小于
+        # 统计信息 / 运行日志面板的 minimumWidth。旧逻辑用 max(200, ...) 保底，
+        # 窗口较窄时 Qt 会把面板强制撑宽，右边缘越出窗口。
+        _right_min_w = max(self.panels[3].minimumWidth(),
+                           self.panels[4].minimumWidth())
+        if col_w + gap + _right_min_w > rw:
+            # 空间不足时压缩设备状态列，并同步放低其 minimumWidth；
+            # 否则 Qt 仍会把面板撑回 _st_min_w，把右列推到窗口之外。
+            col_w = max(320, rw - gap - _right_min_w)
+            _st_allowed = max(320, min(_st_min_w, col_w))
+            if self.panels[2].minimumWidth() != _st_allowed:
+                self.panels[2].setMinimumWidth(_st_allowed)
+                self.panels[2].min_w = _st_allowed
         else:
-            right_w = col_w
+            if self.panels[2].minimumWidth() < _st_min_w:
+                self.panels[2].setMinimumWidth(_st_min_w)
+                self.panels[2].min_w = _st_min_w
+        right_w = max(_right_min_w, rw - gap - col_w)
 
         # 右侧两列，均占满整高；列内上下两块保留可见间隙
         # 左列：设备信息（上） + 设备运行状态（下，保留间隙）
@@ -3368,8 +3463,10 @@ class ProductionView(_ReportExportMixin, QWidget):
                 return
             uw = max([r["unit"].width() for r in rs
                       if r["unit"] is not None] or [0])
-            # 12=行内边距 12=dot 24=四个间距 46/46=百分比/数值
-            col_need[c] = 12 + 12 + need[c] + 46 + 46 + uw + 24
+            # 12=行内边距 12=dot 46/46=百分比/数值
+            # 行内间距 = 4*spacing + spacer，与 _build_device_status 的列宽口径一致
+            col_need[c] = (12 + 12 + need[c] + 46 + 46 + uw
+                           + 4 * _STATUS_ROW_SPACING + _NAME_PCT_GAP)
         # 名称框下限恒为本列最长文案宽（保证文案完整、不截断）；
         # 实际宽度由 Expanding 吸收富余决定 —— 同列尾部组等宽故各行必然相同。
         for c in (0, 1):
@@ -3627,8 +3724,12 @@ class ProductionView(_ReportExportMixin, QWidget):
     # ------------------------------------------------------------------
     def _build_device_status(self):
         lay = QVBoxLayout()
-        # 底部边距压到 1px：让分页行（前一页/页码/后一页）尽量贴近卡片底部
-        lay.setContentsMargins(10, 8, 10, 1)
+        # 底部边距压到 1px：让分页行（前一页/页码/后一页）尽量贴近卡片底部。
+        # ⚠️ 2026-11-09：左右边距由 10 收到 0 —— 这 20px 原本被 `_status_lay`
+        # 吃掉，导致内容容器比两列网格实需宽少 20px、行内控件被压缩重叠。
+        # 收回后容器宽度正好等于网格实需宽，**卡片宽度本身保持不变**，
+        # 空隙得以真正显示出来，而不需要把卡片撑宽。
+        lay.setContentsMargins(0, 8, 0, 1)
         lay.setSpacing(8)
         # 设备运行状态整体采用 2 列网格对齐：
         # ① 顶部：4 个料盒卡片横向排列（卡片自带边界，无需小标题）；
@@ -3663,11 +3764,13 @@ class ProductionView(_ReportExportMixin, QWidget):
         # 料盒满料状态：True=已满料（100%）应显示红底「满料，请取料」；取走/清零后解除
         self._bin_full = {k: False for k in BIN_KEYS}
 
-        # 实时测量行（总气源/旋转盘/静电/负压）+ 设备门 / 误踢漏踢 / 急停 / 视觉控制器：
+        # 实时测量行（总气源/旋转盘转速/静电电压）+ 设备门 / 误踢漏踢 / 急停 / 视觉控制器：
         # 均不写百分比，运行期间示例值波动、越界则状态灯变红并报警。
-        no_pct_rows = {"总气源", "旋转盘", "静电", "负压", "设备门",
+        # 2026-11-09：「负压」显示行已删除，但后台实时测量与设备设置的负压参数仍保留；
+        #「玻璃盘使用转数」「飞料状态」需显示百分比，故不在此集合中。
+        no_pct_rows = {"总气源", "旋转盘转速", "静电电压", "设备门",
                        "OK料仓误踢频率", "OK料仓漏踢频率", "急停按钮", "视觉控制器",
-                       "飞料频率", "玻璃盘上下跳动", "相机状态"}
+                       "玻璃盘上下跳动", "相机状态"}
         # 实时测量 + 设备门：门打开报警时状态灯随 live_color 变红
         live_rows = no_pct_rows | {"设备门"}
 
@@ -3756,25 +3859,27 @@ class ProductionView(_ReportExportMixin, QWidget):
             self._apply_status_style()
 
         # ---- ② 2 列网格状态行（行优先：左列、右列交替填入） ----
+        # 2026-11-09 布局（共 15 项，最后一行右列留空）：
+        #  左列：OK/NG1/NG2 电磁阀、玻璃盘使用转数、飞料状态、玻璃盘上下跳动、
+        #        OK料仓漏踢/误踢频率；
+        #  右列：总气源、旋转盘转速、静电电压、急停按钮、视觉控制器、相机状态、设备门。
+        # 「飞料状态」= 飞料比例（飞料颗数 / 生产总数）+ 飞料颗数，单位「颗」。
         grid_items = [
             ("OK 电磁阀", "3200 次"),
             ("总气源", "0.62 MPa"),
             ("NG1 电磁阀", "120 次"),
-            ("旋转盘", "15.0 RPM"),
+            ("旋转盘转速", "15.0 RPM"),
             ("NG2 电磁阀", "45 次"),
-            ("静电", "2.8 KV"),
-            ("RST 电磁阀", "8 次"),
-            ("负压", "0.10 MPa"),
+            ("静电电压", "2.8 KV"),
+            ("玻璃盘使用转数", "0 圈"),
             ("急停按钮", "未开启"),
+            ("飞料状态", "0 颗"),
+            ("视觉控制器", "在线"),
+            ("玻璃盘上下跳动", f"{self._draw_glass_jump_val():.2f} mm"),
+            ("相机状态", "在线"),
             ("OK料仓漏踢频率", "8 Pcs/H"),
             ("设备门", "已关闭"),
             ("OK料仓误踢频率", "12 Pcs/H"),
-            ("视觉控制器", "在线"),
-            ("飞料频率", f"{random.randint(1, 10)} Pcs/min"),
-            # 左列「视觉控制器」正下方：相机状态（在线/掉线，示例保持在线）；
-            # 右列「飞料频率」正下方：玻璃盘上下跳动
-            ("相机状态", "在线"),
-            ("玻璃盘上下跳动", f"{self._draw_glass_jump_val():.2f} mm"),
         ]
         # 名称列宽度：按各列内最长名称自适应 +6px 安全边距。
         # 左列最长名称为阀门名（NG1/NG2 电磁阀），右列为料仓频率名；
@@ -3812,6 +3917,12 @@ class ProductionView(_ReportExportMixin, QWidget):
                         + (_col_unit_old_w[0] - _col_unit_w[0]))
         _name_w_col1 = (max(_fm.horizontalAdvance(n) for n in _col1_names) + 6
                         + (_col_unit_old_w[1] - _col_unit_w[1]))
+        # 2026-11-09：名称框与百分比框之间留出**可见空隙**。
+        # ⚠️ 卡片宽度必须保持原样：把行内 4 处 spacing 由 6 收到 3（省 12px），
+        # 再把这 12px 用 spacer 加在「名称框↔百分比框」之间，行总宽/列宽都不变。
+        # 必须用 spacer 而不是把余量并进名称框：名称框自带边框，
+        # 并进去只会让边框一起变长，看上去仍贴着百分比框。
+        # QHBoxLayout 只在 spacer 左侧计一次 spacing，故实际空隙 = 3+GAP = 15px。
         grid_recs = []
         for i, (name, val) in enumerate(grid_items):
             if " " in val:
@@ -3830,6 +3941,16 @@ class ProductionView(_ReportExportMixin, QWidget):
                 self._valve_used_init[key] = used
                 thr = valve_life_threshold(key)
                 pct = min(100.0, used / thr * 100) if thr else 0.0
+            elif name == "玻璃盘使用转数":
+                # 百分比 = 已转圈数 /「玻璃使用转数报警」设定的圈数阈值
+                used = getattr(self, "_glass_rotations", 0.0)
+                thr = glass_rotation_count()
+                pct = min(100.0, used / thr * 100) if thr else 0.0
+            elif name == "飞料状态":
+                # 飞料比例 = 飞料颗数 / 生产总数
+                fly = getattr(self, "_fly_count", 0.0)
+                total = getattr(self, "_live_total", 0)
+                pct = min(100.0, fly / total * 100) if total else 0.0
             else:
                 pct = 0.0
 
@@ -3876,7 +3997,7 @@ class ProductionView(_ReportExportMixin, QWidget):
             row.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
             h = QHBoxLayout(row)
             h.setContentsMargins(6, 3, 6, 3)
-            h.setSpacing(6)
+            h.setSpacing(_STATUS_ROW_SPACING)
             pct_box = QLabel(pct_str)
             # 百分比框 / 数值框宽度**固定不可压缩**（Fixed 策略）：
             # 它们是数据主体，被压成0 宽整列数值就消失了。
@@ -3905,6 +4026,7 @@ class ProductionView(_ReportExportMixin, QWidget):
             # 若行内再加 stretch，富余会被 stretch 与名称框平分，
             # 名称框右边又会出现空隙，且名称框实际拿不到预期宽度。
             h.addWidget(nm)
+            h.addSpacing(_NAME_PCT_GAP)   # 2026-11-09：百分比窗体与左侧名称框留出空隙
             h.addWidget(pct_box)
             h.addWidget(val_box)
             # ⚠️ 单位框**每行都建**（无单位时留空+透明），且宽度取**本列最长单位**
@@ -3965,16 +4087,20 @@ class ProductionView(_ReportExportMixin, QWidget):
         # （百分比/数值框是 Fixed，被压成 0 宽整列数据就消失了）。
         # ⚠️ 2026-10-08：尾部组已统一为「百分比46 + 数值46 + 单位(列统一宽)」，
         # 行内控件数由 3 项变 4 项 → 间距由 3 个变 4 个（18 → 24）。
-        # 12=行内边距(6+6)  12=dot  6*4=四个间距  46/46=百分比框/数值框
+        # 12=行内边距(6+6)  12=dot  46/46=百分比框/数值框
+        # 行内间距 = 4*3(四边界)+12(spacer) = 24，与原来的 4*6 完全相同，
+        # 因此列最小宽、**设备状态卡片整体宽度都保持原值 582px 不变**。
+        _row_gaps = 4 * _STATUS_ROW_SPACING + _NAME_PCT_GAP
         _status_min_w = 0
         for _c, _nw in ((0, _name_w_col0), (1, _name_w_col1)):
             _uw_max = _col_unit_w[_c]
-            _col_min = 12 + 12 + _nw + 46 + 46 + int(_uw_max) + 24
+            _col_min = 12 + 12 + _nw + 46 + 46 + int(_uw_max) + _row_gaps
             grid.setColumnMinimumWidth(_c, _col_min)
             _status_min_w += _col_min
         # 两列合计 + 列间距 10 + 面板 body 左右内缩 2*MARGIN
         _status_min_w = int(_status_min_w + 10 + 2 * FloatPanel.MARGIN)
-        # 面板 min_w 不得小于内容实需宽：否则面板被拖窄时名称文字被截断
+        # ⚠️ 卡片宽度保持 582px：不人为抬高、也不因空隙外扩，
+        # 避免挤占右侧统计信息列导致其右边缘越出窗口被裁切。
         self._status_min_w = _status_min_w
         # 名称框「拉长余量」：**保持 0 —— 设备状态卡片的整体宽度不改变**。
         # ⚠️ 2026-10-09 用户需求「设备状态卡片的整体宽度不要改变，给我复原」：
@@ -3996,7 +4122,7 @@ class ProductionView(_ReportExportMixin, QWidget):
         QTimer.singleShot(0, self._stretch_status_name_boxes)
 
         # ---- ③ 底部分页：前一页 / 当前页序号 / 后一页 ----
-        # 第 1 页 = 设备状态（料盒 4 卡 + 16 项状态行）；
+        # 第 1 页 = 设备状态（料盒 4 卡 + 15 项状态行，最后一行右列留空）；
         # 第 2 页 = 光源状态（光源1~光源18 共18 路，每路在「频闪中 / 未频闪」间来回切换）。
         # 两页内容各自独立：第 1 页内容容器固定挂在 _status_page1，第 2 页挂 _light_content。
         self._status_page = 0
@@ -4703,6 +4829,8 @@ class ProductionView(_ReportExportMixin, QWidget):
     def _update_device_status_live(self):
         """运行期间模拟总气源 / 旋转盘 / 负压 / 静电四类实时测量值，并驱动状态灯与报警。
 
+        2026-11-09：设备状态卡片已删除「负压」显示行；负压数值仍在后台按设备设置模拟
+        （供负压参数与报警配置复用），但因无对应显示行不再刷新状态灯 / 越界报警。
         - 示例值在正常范围内小幅随机游走，偶尔越界以演示报警；
         - 范围内指示灯绿色，越界红色；
         - 越界后持续「报警延时」才真正记日志（去抖），记日志后保持「报警时长」再自动解除，
@@ -4742,7 +4870,9 @@ class ProductionView(_ReportExportMixin, QWidget):
         now = time.monotonic() * 1000.0
 
         for name, info in rd.items():
-            rec = self._status_recs.get(name)
+            # 卡片上「旋转盘」「静电」已改名为「旋转盘转速」「静电电压」，
+            # 按显示名反查状态行；「负压」无对应显示行，取不到 rec 即跳过。
+            rec = self._status_recs.get(_LIVE_ROW_BY_KEY.get(name, name))
             if rec is None:
                 continue
             # 数值刷新到数值框（单位框在建立时固定）
@@ -4817,15 +4947,19 @@ class ProductionView(_ReportExportMixin, QWidget):
         pcs = self._detect_pcs
         yld = self._live_yield
         rechk = self._live_rechk_rate
-        # 单相机良率低：比较各相机实时最低良率（取最差的一路相机）
+        # 单相机良率低 / 相机良率差异：遍历各相机实时良率，取最低值与最大-最小差值
         worst_cam_yield = 100.0
+        best_cam_yield = 0.0
         for i in range(8):
             g = self._live_cam_good[i]
             b = self._live_cam_bad[i]
             tot = g + b
             cy = (g / tot * 100.0) if tot else 100.0
             worst_cam_yield = min(worst_cam_yield, cy)
+            best_cam_yield = max(best_cam_yield, cy)
         self._worst_cam_yield = worst_cam_yield
+        # 相机良率差异：各相机实时良率的最大值-最小值，超过阈值即报警
+        cam_yield_span = max(0.0, best_cam_yield - worst_cam_yield)
         checks = [
             ("detect_low", pcs < sq_threshold("detect_low"),
              f"检测速度过低：{pcs:.0f} Pcs/Min < 阈值 {sq_threshold('detect_low')} Pcs/Min"),
@@ -4835,6 +4969,9 @@ class ProductionView(_ReportExportMixin, QWidget):
              f"综合良率低：{yld:.2f}% < 阈值 {sq_threshold('good_low')}%"),
             ("cam_yield_low", worst_cam_yield < sq_threshold("cam_yield_low"),
              f"单相机良率低：最低相机良率 {worst_cam_yield:.2f}% < 阈值 {sq_threshold('cam_yield_low')}%"),
+            ("cam_yield_diff", cam_yield_span > sq_threshold("cam_yield_diff"),
+             f"相机良率差异过大：最高 {best_cam_yield:.2f}% - 最低 {worst_cam_yield:.2f}% "
+             f"= {cam_yield_span:.2f}% > 阈值 {sq_threshold('cam_yield_diff')}%"),
             ("recheck_high", rechk > sq_threshold("recheck_high"),
              f"重检率过高：{rechk:.2f}% > 阈值 {sq_threshold('recheck_high')}%"),
         ]
@@ -4960,6 +5097,75 @@ class ProductionView(_ReportExportMixin, QWidget):
             cb = getattr(self, "_alarm_stop_cb", None)
             if cb is not None:
                 cb()
+
+    # ------------------------------------------------------------------
+    # 玻璃使用转数报警：生产运行时累计 DD 马达（玻璃盘）旋转圈数，达到设定
+    # 阈值即按所选报警方案记红色报警（不触发停机）。累计值每次启动生产从 0 重新累计。
+    # ------------------------------------------------------------------
+    def _accumulate_rotation(self):
+        """按真实流逝时间 × 当前 DD 马达转速累计玻璃盘旋转圈数（仅生产运行时）。"""
+        if not getattr(self, "_playing", False):
+            self._last_rot_ts = None
+            return
+        cfg = self.dev_cfg.get("dd_motor", {})
+        rpm = float(cfg.get("speed_rpm", 0.0) or 0.0)
+        now = time.monotonic()
+        last = getattr(self, "_last_rot_ts", None)
+        self._last_rot_ts = now
+        if rpm <= 0 or last is None:
+            return
+        dt = max(0.0, now - last)
+        self._glass_rotations += (rpm / 60.0) * dt
+        self._refresh_glass_rotation_row()
+        self._check_glass_rotation_alarm()
+
+    def _refresh_glass_rotation_row(self):
+        """把玻璃盘累计旋转圈数刷新到设备状态「玻璃盘使用转数」行。
+
+        百分比 = 已转圈数 /「玻璃使用转数报警」设定的圈数阈值；
+        数值框 = 已转圈数（随生产运行实时累计），单位固定为「圈」。
+        """
+        rec = getattr(self, "_status_recs", {}).get("玻璃盘使用转数")
+        if rec is None:
+            return
+        used = getattr(self, "_glass_rotations", 0.0)
+        thr = glass_rotation_count()
+        pct = min(100.0, used / thr * 100) if thr else 0.0
+        self._set_status_pct(rec, pct)
+        rec["val_box"].setText(f"{used:.0f}")
+
+    def _refresh_fly_status_row(self):
+        """刷新设备状态「飞料状态」行。
+
+        百分比 = 飞料比例（飞料颗数 ÷ 生产总数），数值框 = 飞料颗数，
+        单位「颗」在建行时固定，运行期间随生产累计实时更新。
+        """
+        rec = getattr(self, "_status_recs", {}).get("飞料状态")
+        if rec is None:
+            return
+        fly = getattr(self, "_fly_count", 0.0)
+        total = getattr(self, "_live_total", 0)
+        pct = min(100.0, fly / total * 100) if total else 0.0
+        self._set_status_pct(rec, pct)
+        rec["val_box"].setText(f"{fly:.0f}")
+
+    def _check_glass_rotation_alarm(self):
+        """玻璃使用转数报警：累计旋转圈数达阈值即按所选方案记一次红色报警（不触发停机）。"""
+        if not getattr(self, "_playing", False):
+            return
+        if not feature_glass_rotation_alarm():
+            return
+        thr = glass_rotation_count()
+        if self._glass_rotations < thr:
+            return
+        if getattr(self, "_glass_rota_alarmed", False):
+            return
+        self._glass_rota_alarmed = True
+        plan = state_plan_by_alias(glass_rotation_plan())
+        plan_name = plan.get("alias", glass_rotation_plan()) if plan else glass_rotation_plan()
+        self._push_alarm(
+            f"玻璃使用转数报警：玻璃盘累计旋转 {self._glass_rotations:.0f} 圈，"
+            f"已达阈值 {thr} 圈（报警方案：{plan_name}）", stop=False)
 
     # ------------------------------------------------------------------
     # 急停报警：示例演示中常态保持「未开启」，仅以极低概率随机触发一次
@@ -5245,7 +5451,7 @@ class ProductionView(_ReportExportMixin, QWidget):
                                    f"报警功能未开启", COLORS["accent_blue"])
 
     # ------------------------------------------------------------------
-    # 连续混料 / 连续产品歪斜 / 连续连料 报警（各自独立连续计数，超阈值报警）
+    # 连续混料 / 连续歪斜 / 连续连料 报警（各自独立连续计数，超阈值报警）
     # ------------------------------------------------------------------
     def _tick_consecutive(self, f_attr, alarmed_attr, disp, feature_on, threshold):
         """推进一项连续不良报警：连续计数在阈值附近随机游走，越界记红色报警、恢复记绿色。
@@ -5277,11 +5483,11 @@ class ProductionView(_ReportExportMixin, QWidget):
                 lv.add(ts, f"报警恢复：{disp}恢复至正常", COLORS["accent_green"])
 
     def _check_consecutive_alarms(self):
-        """连续混料 / 连续产品歪斜 / 连续连料 三项报警的统一入口。"""
+        """连续混料 / 连续歪斜 / 连续连料 三项报警的统一入口。"""
         self._tick_consecutive("_consec_mix_f", "_consec_mix_alarmed",
                                "连续混料", feature_cont_mix(), cont_mix_threshold())
         self._tick_consecutive("_consec_tilt_f", "_consec_tilt_alarmed",
-                               "连续产品歪斜", feature_cont_tilt(), cont_tilt_threshold())
+                               "连续歪斜", feature_cont_tilt(), cont_tilt_threshold())
         self._tick_consecutive("_consec_stick_f", "_consec_stick_alarmed",
                                "连续连料", feature_cont_stick(), cont_stick_threshold())
 
@@ -5867,6 +6073,8 @@ class ProductionView(_ReportExportMixin, QWidget):
     # ------------------------------------------------------------------
     def _on_glass_clean_clicked(self):
         """点击「玻璃清洁」：先判断高压静电模块是否已断电，未断电则弹窗提示且禁止清洁。"""
+        if not self._perm_allowed("glass_clean"):
+            return
         esd = self.dev_cfg.get("hv_esd", {})
         esd_on = bool(esd.get("powered", True))   # 默认视为通电工作中
         if esd_on:
@@ -5897,13 +6105,99 @@ class ProductionView(_ReportExportMixin, QWidget):
         self._refresh_simulate_btn()
 
     def _refresh_simulate_btn(self):
-        """按生产运行状态刷新「模拟生产」按钮可用性：
+        """按生产运行状态刷新「模拟生产」/「点动调试」按钮可用性：
         运行中置灰不可点击，停止状态可点击。"""
+        playing = bool(getattr(self, "_playing", False))
         btn = getattr(self, "_btn_simulate", None)
         if btn is None:
             return
-        btn.setEnabled(not bool(getattr(self, "_playing", False)))
+        btn.setEnabled(not playing)
         self._style_simulate_btn()
+        jog = getattr(self, "_btn_jog", None)
+        if jog is not None:
+            jog.setEnabled(not playing)
+            self._style_jog_btn()
+
+    def _refresh_simulate_btn_label(self):
+        """按当前生产运行类型刷新「模拟生产」按钮文案：
+
+        - 未运行：          模拟生产（默认）
+        - 模拟生产运行中：  模拟生产中（批次完成后转「模拟生产结束」）
+        - 正常生产中：      正常生产中
+        - 模拟生产运行停止：模拟生产结束
+        """
+        btn = getattr(self, "_btn_simulate", None)
+        if btn is None:
+            return
+        if not self._playing:
+            btn.setText("模拟生产")
+            return
+        btn.setText("模拟生产中" if self._sim_run else "正常生产中")
+
+    def _cancel_sim_end_timer(self):
+        """取消尚未触发的模拟生产批次完成定时器。"""
+        t = getattr(self, "_sim_end_timer", None)
+        if t is not None:
+            try:
+                t.stop()
+            except Exception:
+                pass
+            self._sim_end_timer = None
+
+    def _on_sim_end_timeout(self):
+        """模拟生产批次完成：按钮文案由「模拟生产中」转「模拟生产结束」（仍保持运行）。"""
+        self._sim_end_timer = None
+        if self._playing and self._sim_run:
+            btn = getattr(self, "_btn_simulate", None)
+            if btn is not None:
+                btn.setText("模拟生产结束")
+
+    def _style_jog_btn(self):
+        """「点动调试」按钮样式（与「模拟生产」同一视觉规格，9px 字号）。
+
+        运行中（禁用）时用次级灰字 + 灰边框，明确表达「不可点击」。
+        """
+        btn = getattr(self, "_btn_jog", None)
+        if btn is None:
+            return
+        running = bool(getattr(self, "_playing", False))
+        if running:
+            btn.setStyleSheet(
+                f"QPushButton {{ background-color: {COLORS['bg_card']}; "
+                f"color: {COLORS['text_secondary']}; "
+                f"border: 1px solid {COLORS['border']}; border-radius: 4px; "
+                f"font-size: 9px; padding: 0 5px; }}")
+        else:
+            btn.setStyleSheet(
+                f"QPushButton {{ background-color: {COLORS['bg_card']}; "
+                f"color: {COLORS['accent_blue']}; "
+                f"border: 1px solid {COLORS['accent_blue']}; border-radius: 4px; "
+                f"font-size: 9px; padding: 0 5px; }}"
+                f"QPushButton:hover {{ background-color: {COLORS['accent_blue']}; "
+                f"color: white; }}")
+
+    def _on_jog_clicked(self):
+        """点击「点动调试」：打开点动调试小窗（速度/方向、自动锁定元件、工位定位）。
+
+        生产运行中禁止进入（按钮已置灰，这里再兜底一次，避免快捷方式绕过）。
+        """
+        if not self._perm_allowed("jog_debug"):
+            return
+        if bool(getattr(self, "_playing", False)):
+            QMessageBox.information(
+                self, "提示", "设备处于「生产运行中」，请先停止生产再进行点动调试")
+            return
+        from nav_dialogs import JogDebugDialog
+        prev = getattr(self, "_jog_dlg", None)
+        if prev is not None:
+            try:
+                prev.close()
+            except Exception:
+                pass
+        dlg = JogDebugDialog(self, self)
+        dlg.setModal(False)
+        self._jog_dlg = dlg
+        dlg.show()
 
     def _style_simulate_btn(self):
         """「模拟生产」按钮样式（与「玻璃清洁」同一视觉规格，9px 字号）。
@@ -5934,6 +6228,8 @@ class ProductionView(_ReportExportMixin, QWidget):
 
         生产运行中禁止进入（按钮已置灰，这里再兜底一次，避免快捷方式绕过）。
         """
+        if not self._perm_allowed("simulate_production"):
+            return
         if bool(getattr(self, "_playing", False)):
             QMessageBox.information(
                 self, "提示", "设备处于「生产运行中」，请先停止生产再设置模拟生产")
@@ -5975,6 +6271,19 @@ class ProductionView(_ReportExportMixin, QWidget):
             _pd("early-return: already playing")
             return
         self._playing = True
+        # 本次运行是否为「模拟生产」：启动瞬间读取模拟生产开关配置（用户已点保存）
+        try:
+            self._sim_run = bool(_simcfg.load_cfg().get("enabled", False))
+        except Exception:
+            self._sim_run = False
+        self._refresh_simulate_btn_label()   # 写入「模拟生产中」/「正常生产中」
+        # 模拟生产：演示批次在 SIM_END_MS 后视为完成，按钮转「模拟生产结束」
+        self._cancel_sim_end_timer()
+        if self._sim_run:
+            self._sim_end_timer = QTimer(self)
+            self._sim_end_timer.setSingleShot(True)
+            self._sim_end_timer.timeout.connect(self._on_sim_end_timeout)
+            self._sim_end_timer.start(SIM_END_MS)
         self.set_speed_running(True)   # 进入生产运行态：速度开始波动刷新
         self._btn_glass_clean.setEnabled(False)   # 生产运行态下禁用「玻璃清洁」按钮
         self._btn_simulate.setEnabled(False)    # 生产运行态下「模拟生产」置灰不可点击
@@ -6012,6 +6321,11 @@ class ProductionView(_ReportExportMixin, QWidget):
             self.set_vision_online(True, force=True, log=False, remind=False)  # 启动即置为在线（示例演示始终在线）
             self._clear_estop()          # 启动时解除上一次的急停报警状态
             self._schedule_estop_random()  # 本次运行随机安排一次急停（5~60 分钟后，绝大多数演示不会触发）
+            # 玻璃使用转数累计：本次启动生产从 0 重新累计（无论是否保留其它统计）
+            self._glass_rotations = 0.0
+            self._glass_rota_alarmed = False
+            self._last_rot_ts = None
+            self._refresh_glass_rotation_row()   # 状态行同步归零
             # 先累计首批，避免开局环形图空白；随后每节拍推进并联动刷新统计
             self._accumulate_batch()
             self._tick_count = 1
@@ -6067,6 +6381,11 @@ class ProductionView(_ReportExportMixin, QWidget):
         self._playing = False
         self.set_speed_running(False)  # 停止：速度随后逐渐衰减到 0
         self._last_accum_ts = None     # 停止后清掉时间戳：重新启动不带入停机时长
+        self._cancel_sim_end_timer()   # 取消未触发的批次完成定时器
+        # 停止文案：模拟生产运行停在「模拟生产结束」，正常生产恢复默认「模拟生产」
+        btn = getattr(self, "_btn_simulate", None)
+        if btn is not None:
+            btn.setText("模拟生产结束" if self._sim_run else "模拟生产")
         self._btn_glass_clean.setEnabled(True)   # 停止态恢复「玻璃清洁」按钮可用
         self._btn_simulate.setEnabled(True)     # 停止态恢复「模拟生产」可点击
         self._style_simulate_btn()
@@ -6163,6 +6482,9 @@ class ProductionView(_ReportExportMixin, QWidget):
         # 绝不会因为清零而停止更新数据。
         self._accumulate_batch()
         self._tick_count += 1
+        # 玻璃使用转数累计：生产运行时按 DD 马达转速 × 真实流逝时间累计旋转圈数，
+        # 达到「玻璃使用转数报警」设定阈值即记红色报警（不触发停机）。
+        self._accumulate_rotation()
         if self._tick_count % self._refresh_every == 0:
             self._refresh_live_stats()
 
@@ -6181,6 +6503,8 @@ class ProductionView(_ReportExportMixin, QWidget):
             self._live_good = 0.0
             self._live_bad = 0.0
             self._live_rechk = 0.0
+            self._rechk_win = []       # 实时重检率滚动窗口一并清零
+            self._fly_count = 0.0        # 飞料颗数（与生产总数同口径清零）
             self._live_cam_good = [0.0] * 8
             self._live_cam_bad = [0.0] * 8
             self._live_cam_rechk = [0.0] * 8
@@ -6234,7 +6558,7 @@ class ProductionView(_ReportExportMixin, QWidget):
         if hasattr(self, "_bin_state_labels"):
             for _n in self._bin_state_labels:
                 self._paint_bin_state(_n)
-        # 连续混料 / 连续产品歪斜 / 连续连料：连续计数与报警标记重置
+        # 连续混料 / 连续歪斜 / 连续连料：连续计数与报警标记重置
         self._consec_mix_f = 0.0
         self._consec_mix_alarmed = False
         self._consec_tilt_f = 0.0
@@ -6282,7 +6606,8 @@ class ProductionView(_ReportExportMixin, QWidget):
                 "light_values": [255 for _ in range(18)],           # 18 通道亮度值（默认 255，跨相机共享）
                 "input_filter": 5000,     # 触发高级参数（全局）：输入滤波，单位 μs
                 "trigger_response": 5,    # 触发高级参数（全局）：触发应答，单位 ms
-                **{f"相机{i + 1}": {"enable": True, "position": 5112 + i * 1000, "lights": [True] * 18,
+                # 采图使能 / 多次曝光使能默认均为关闭（可在「触发设定」表格中逐相机开启）
+                **{f"相机{i + 1}": {"enable": False, "position": 5112 + i * 1000, "lights": [True] * 18,
                                     "multi_enable": False, "multi_count": 2, "multi_delay": 100,
                                     "exposure_gain": 16, "exposure_time": 2000,
                                     "min_match": 50, "max_match": 90}
@@ -6382,6 +6707,18 @@ class ProductionView(_ReportExportMixin, QWidget):
         self._live_good += g
         self._live_bad += b
         self._live_rechk += r
+        # 实时重检率（2026-11-10 需求）：记录本批重检增量与时间戳，
+        # 供「最近 2 秒重检数 × 30（每分钟）÷ 生产总数」的滚动窗口计算。
+        win = getattr(self, "_rechk_win", None)
+        if win is None:
+            win = self._rechk_win = []
+        win.append((time.monotonic(), r))
+        if len(win) > 4096:            # 防御：极端情况下限制窗口长度
+            del win[:len(win) - 4096]
+        # 飞料颗数：本批按基准飞料率附近小幅波动累计，供「飞料状态」行
+        # 计算飞料比例（飞料颗数 / 生产总数）与显示飞料数量（颗）。
+        _fly_rate = max(0.0, _FLY_BASE_RATE + random.uniform(-0.002, 0.002))
+        self._fly_count = getattr(self, "_fly_count", 0.0) + n * _fly_rate
         # 每批产品按相机权重拆分到 8 路相机：各相机 总数=良品+不良+重检，
         # 与全局口径一致，KPI / 按相机统计 / 详情表 完全一致。
         weights = [_CAM_WEIGHTS[f"相机{i}"] for i in range(1, 9)]
@@ -6572,6 +6909,10 @@ class ProductionView(_ReportExportMixin, QWidget):
         rechk_rate = (rechk / total * 100) if total else 0.0
         self._live_yield = yld
         self._live_rechk_rate = rechk_rate
+        # 实时重检率标签：黄色，与 KPI「重检率」显示颜色一致
+        lab = getattr(self, "_rt_rechk_label", None)
+        if lab is not None:
+            lab.setText(f"实时重检率: {self._realtime_rechk_rate():.2f}%")
         kpi = [
             ("总数", str(total), COLORS["text_primary"]),
             ("良品数", str(good), COLORS["accent_green"]),
@@ -6603,6 +6944,22 @@ class ProductionView(_ReportExportMixin, QWidget):
         self.defect_stats_view.set_data(cam_def)
         self._refresh_reject_detail()
 
+    def _realtime_rechk_rate(self):
+        """实时重检率（2026-11-10 需求）：
+
+        最近 2 秒内的重检数 × 30（换算为每分钟重检数量）÷ 生产总数 × 100%。
+        滚动窗口按时间戳剪枝，停止生产 2 秒后自然归零。
+        """
+        win = getattr(self, "_rechk_win", None)
+        if not win:
+            return 0.0
+        now = time.monotonic()
+        while win and now - win[0][0] > 2.0:
+            win.pop(0)
+        per_min = sum(r for _t, r in win) * 30.0
+        total = self._live_total
+        return (per_min / total * 100.0) if total else 0.0
+
     def _refresh_live_stats(self):
         """把实时累计值刷新到统计 UI，并联动设备状态、报警、定量停机等运行逻辑。"""
         # 统计类 UI 刷新（播放与待机共用同一套口径）
@@ -6617,6 +6974,8 @@ class ProductionView(_ReportExportMixin, QWidget):
         self._check_quant_target()
         # 设备运行状态区：OK 料仓误踢/漏踢频率示例值实时波动
         self._update_mis_freq_display()
+        # 设备运行状态区：飞料状态 = 飞料比例（飞料颗数 / 生产总数）+ 飞料颗数
+        self._refresh_fly_status_row()
         # OK 良品料仓误漏剔除监控：1 小时内误踢/漏踢超阈值则按触发方式报警或停机
         # （演示用：监控开启时按 ~Pcs/H 量级随机产生误踢/漏踢事件，阈值调低可快速验证）
         if feature_mis_wrong() and random.random() < 0.0004:
@@ -6631,7 +6990,7 @@ class ProductionView(_ReportExportMixin, QWidget):
         self._update_door_status()
         # 料盒取出未放回超时报警：随机切换取出态 + 实时计时 + 超阈值变红/报警
         self._update_bin_taken_status()
-        # 连续混料 / 连续产品歪斜 / 连续连料 报警
+        # 连续混料 / 连续歪斜 / 连续连料 报警
         self._check_consecutive_alarms()
         # 离子风扇异常报警（默认开启；按所选报警方案记日志，不触发停机）
         self._check_ion_fan_alarm()
@@ -6641,6 +7000,35 @@ class ProductionView(_ReportExportMixin, QWidget):
     # ------------------------------------------------------------------
     # 运行日志
     # ------------------------------------------------------------------
+    def bind_permission_ui(self):
+        """生产运行界面内按权限显隐的功能内容（由主窗口统一调用）。
+
+        注意：统计卡片的「饼图 / 详情」按钮有业务显隐逻辑（图表切换时隐藏），
+        不能绑定权限，否则会被权限刷新覆盖；这里只绑定状态稳定的面板与按钮。
+        """
+        panels = getattr(self, "panels", [])
+        if len(panels) > 3:
+            bind(panels[3], "production_report")   # 统计信息
+        if len(panels) > 4:
+            bind(panels[4], "log_manage")          # 运行日志
+        # 「生产运行」模块细分：三个按钮各自独立授权。拆分前分别借用
+        # camera_debug / run_settings，玻璃清洁则完全未受权限控制。
+        bind(getattr(self, "_btn_jog", None), "jog_debug")
+        bind(getattr(self, "_btn_simulate", None), "simulate_production")
+        bind(getattr(self, "_btn_glass_clean", None), "glass_clean")
+        # 运行日志标题栏：日志详情与导出
+        bind(getattr(self, "_btn_log_detail", None), "log_manage")
+        lv = getattr(self, "_log_view", None)
+        if lv is not None:
+            bind(getattr(lv, "_export_btn", None), "log_manage")
+        # 统计信息「导出」按钮（打开生产报表）
+        bind(getattr(self, "_export_btn", None), "production_report")
+
+    def _perm_allowed(self, perm_key):
+        """由主窗口注入的权限判定回调；未注入时不做限制（兼容独立使用）。"""
+        cb = getattr(self, "permission_check", None)
+        return True if cb is None else bool(cb(perm_key))
+
     def set_current_user(self, name, username=None):
         """记录当前登录用户（用于运行日志操作人标识），并将「负责人」同步为当前登录用户名。"""
         self._op_user = name or "操作员"
@@ -6957,6 +7345,8 @@ class ProductionView(_ReportExportMixin, QWidget):
         直接复用 LogManagerDialog（与生产运行界面 MainWindow._open_log_manager 中打开的是同一类），
         数据源均取自本生产运行界面的 get_operation_logs()，保证内容一致。
         """
+        if not self._perm_allowed("log_manage"):
+            return
         from nav_dialogs import LogManagerDialog
         dlg = getattr(self, "_dlg_log_detail", None)
         if dlg is not None and dlg.isVisible():

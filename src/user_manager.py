@@ -2,7 +2,7 @@
 
 提供：
 - 5 种用户类别
-- 7 项功能权限
+- 按「模块 / 功能」分组细化的权限清单（单一事实源：PERMISSION_GROUPS）
 - 按用户类别的权限模板（演示用默认值，超级管理员可修改）
 - 用户增删改、改密 / 重置他人密码
 - 权限配置（按类别）
@@ -27,48 +27,221 @@ CATEGORIES = [
     "设备操作员",
 ]
 
-# 权限项：key -> 中文标签
+# 权限清单：按「模块 / 功能」两级拆解，作为权限项的单一事实源。
+# 模块顺序即配置界面中的分组顺序；每个功能项可独立授权，且与真实功能入口一一对应。
+# 兼容说明：原有 10 个 key 全部保留，避免历史 users.json 与既有校验点失效。
+PERMISSION_GROUPS = [
+    ("生产运行", [
+        ("start_stop", "启动/停止生产"),
+        ("simulate_production", "模拟生产"),
+        ("glass_clean", "玻璃清洁"),
+        ("jog_debug", "点动调试"),
+    ]),
+    ("产品管理", [
+        ("create_product", "新建产品"),
+        ("manage_product", "管理产品"),
+    ]),
+    ("相机与图像", [
+        ("camera_debug", "相机调试（页面入口）"),
+        ("camera_work_mode", "相机工作模式"),
+        ("camera_calibration", "相机标定"),
+        ("photo_settings", "拍照设置"),
+        ("flow_design", "检测流程设计"),
+        ("target_search", "产品目标检索"),
+        ("element_find", "计算元素精确查找"),
+        ("image_effect", "图像效果调节"),
+        ("detect_list", "检测列表设置（入口）"),
+        ("image_save", "图片保存"),
+    ]),
+    ("检测列表设置", [
+        ("detect_default_set", "设置为默认"),
+        ("detect_restore_default", "恢复至默认"),
+        ("detect_restore_factory", "恢复至出厂"),
+        ("detect_unit", "单位设置"),
+        ("detect_output", "出料设置"),
+        ("detect_sync_all", "全部同步"),
+        ("detect_auto_spec", "规格自动调整"),
+    ]),
+    ("检测项列表", [
+        ("dcol_nominal", "标称值"),
+        ("dcol_comp", "补偿值"),
+        ("dcol_spec_lo", "规格下限"),
+        ("dcol_spec_hi", "规格上限"),
+        ("dcol_unit", "单位"),
+        ("dcol_pos", "收料位置"),
+        ("dcol_ops", "检测项操作"),
+        ("dcol_yield", "良率预警设置"),
+    ]),
+    ("报警设置", [
+        ("alarm_settings", "报警设置（入口）"),
+        ("alarm_bin_full", "料盒满料停机"),
+        ("alarm_valve_life", "电磁阀寿命"),
+        ("alarm_speed_yield", "速度 / 良率"),
+        ("alarm_other", "其他报警功能"),
+        ("alarm_scheme", "报警方案配置"),
+    ]),
+    ("设备设置", [
+        ("run_settings", "运行设置（入口）"),
+        ("dev_dd_motor", "DD马达"),
+        ("dev_vibrator", "振动盘"),
+        ("dev_esd", "高压静电"),
+        ("dev_negative_pressure", "负压"),
+    ]),
+    ("检测与分选", [
+        ("sort_settings", "分选设置"),
+        ("box_monitor", "盒子监控"),
+    ]),
+    ("设备与系统设置", [
+        ("sys_config", "系统配置"),
+        ("advanced_settings", "高级设置"),
+        ("device_code", "设备设置"),
+        ("device_software_name", "设备软件名称"),
+    ]),
+    ("数据与报表", [
+        ("production_report", "生产报表"),
+        ("log_manage", "日志管理"),
+        ("ai_copilot", "AI助手"),
+    ]),
+    ("模型训练", [
+        ("model_training", "模型训练助手"),
+    ]),
+    ("用户与权限", [
+        ("user_center", "用户中心"),
+        ("user_manage", "用户管理"),
+        ("perm_config", "权限配置"),
+    ]),
+]
+
+# 权限项：key -> 中文标签（顺序即分组展示顺序）
 PERMISSIONS = {
-    "create_product": "新建产品",
-    "manage_product": "管理产品",
-    "start_stop": "启动/停止生产",
-    "camera_debug": "相机调试",
-    "camera_calibration": "相机标定",
-    "image_save": "图片保存",
-    "user_manage": "用户管理",
-    "perm_config": "权限配置",
-    "device_code": "设备设置",
-    "device_software_name": "设备软件名称",
+    key: label
+    for _group, items in PERMISSION_GROUPS
+    for key, label in items
 }
 
-# 演示用默认权限模板（超级管理员可在「权限配置」中修改）
-# 注：image_save（图片保存）默认所有用户类别均拥有。
-DEFAULT_CATEGORY_PERMISSIONS = {
+# 权限项 -> 所属模块（供个人信息 / 只读明细按模块分组显示）
+PERMISSION_MODULE = {
+    key: group
+    for group, items in PERMISSION_GROUPS
+    for key, _label in items
+}
+
+# 子页面 / 子操作 -> 权限项的固定顺序映射（供界面绑定与回归断言共用）。
+# 顺序必须与弹窗 QTabWidget.addTab、工具条按钮、目标页签的创建顺序一致。
+ALARM_TAB_PERMISSIONS = (
+    "alarm_bin_full", "alarm_valve_life", "alarm_speed_yield",
+    "alarm_other", "alarm_scheme",
+)
+DEVICE_TAB_PERMISSIONS = (
+    "dev_dd_motor", "dev_vibrator", "dev_esd", "dev_negative_pressure",
+)
+DETECT_LIST_PERMISSIONS = (
+    "detect_default_set", "detect_restore_default", "detect_restore_factory",
+    "detect_unit", "detect_output", "detect_sync_all", "detect_auto_spec",
+)
+# 检测项列表按**列头**细分的权限项：(列头名, 权限键)。
+# 列头名用于在 debug_view 里按表头定位列号（列序调整后依然正确）。
+DETECT_COL_PERMISSIONS = (
+    ("标称值", "dcol_nominal"),
+    ("补偿值", "dcol_comp"),
+    ("规格下限", "dcol_spec_lo"),
+    ("规格上限", "dcol_spec_hi"),
+    ("单位", "dcol_unit"),
+    ("收料位置", "dcol_pos"),
+    ("检测项操作", "dcol_ops"),
+    ("良率预警设置", "dcol_yield"),
+)
+TARGET_TAB_PERMISSIONS = (
+    "flow_design", "target_search", "element_find", "image_effect",
+)
+
+
+def permission_rows():
+    """配置界面行序列：("group", None, 模块名) 或 ("perm", key, 功能名)。"""
+    rows = []
+    for group, items in PERMISSION_GROUPS:
+        rows.append(("group", None, group))
+        rows.extend(("perm", key, label) for key, label in items)
+    return rows
+
+
+# 左侧导航按钮 key -> 权限项 key：把原硬编码的导航可见性纳入权限矩阵。
+# 「用户管理」导航按钮实际打开的是用户中心，故映射到 user_center；
+# 「用户管理」页签权限仍由 user_manage 单独控制。
+NAV_PERMISSION_KEY = {
+    "sys_config": "sys_config",
+    "box_monitor": "box_monitor",
+    "run_settings": "run_settings",
+    "photo_settings": "photo_settings",
+    "sort_settings": "sort_settings",
+    "alarm_settings": "alarm_settings",
+    "advanced_settings": "advanced_settings",
+    "model_training": "model_training",
+    "ai_copilot": "ai_copilot",
+    "production_report": "production_report",
+    "log_manage": "log_manage",
+    "image_save": "image_save",
+    "user_manage": "user_center",
+}
+
+
+# 演示用默认权限模板：按角色列出「默认授予」的功能项，未列出的均为 False。
+# 注：image_save（图片保存）默认所有用户类别均拥有；
+#     新增的左侧导航项默认值与 app.py 的 NAV_VISIBILITY 保持一致。
+_DEFAULT_GRANTS = {
     "设备操作员": {
-        "create_product": False, "manage_product": False, "start_stop": True,
-        "camera_debug": True, "camera_calibration": False, "image_save": True,
-        "user_manage": False,
-        "perm_config": False, "device_code": False, "device_software_name": False,
+        "start_stop", "camera_debug", "image_save",
+        "alarm_settings", "production_report", "log_manage",
     },
     "设备技术员": {
-        "create_product": True, "manage_product": True, "start_stop": True,
-        "camera_debug": True, "camera_calibration": True, "image_save": True,
-        "user_manage": False,
-        "perm_config": False, "device_code": False, "device_software_name": False,
-    },
-    "设备工程师": {
-        "create_product": True, "manage_product": True, "start_stop": True,
-        "camera_debug": True, "camera_calibration": True, "image_save": True,
-        "user_manage": False,
-        "perm_config": False, "device_code": False, "device_software_name": False,
+    "create_product", "manage_product", "start_stop", "camera_debug",
+    "camera_calibration", "image_save", "photo_settings", "sort_settings",
+    "alarm_settings", "production_report", "log_manage", "ai_copilot",
+    "model_training",
     },
     "设备管理员": {
-        "create_product": True, "manage_product": True, "start_stop": True,
-        "camera_debug": True, "camera_calibration": True, "image_save": True,
-        "user_manage": True,
-        "perm_config": False, "device_code": False, "device_software_name": False,
+    "create_product", "manage_product", "start_stop", "camera_debug",
+    "camera_calibration", "image_save", "user_manage",
+    "production_report", "log_manage", "ai_copilot", "model_training",
     },
-    "超级管理员": {k: True for k in PERMISSIONS},
+    "超级管理员": set(PERMISSIONS),
+}
+_DEFAULT_GRANTS["设备工程师"] = (
+    _DEFAULT_GRANTS["设备技术员"] | {"box_monitor", "run_settings"}
+)
+# 细分权限默认继承「拆分前所绑定的原权限项」，保证权限细化后各角色的
+# 界面可见性与原版一致；用户可在权限配置中再单独收紧 / 放开每一项。
+_CHILD_GRANTS = {
+    "alarm_settings": {
+        "alarm_bin_full", "alarm_valve_life", "alarm_speed_yield",
+        "alarm_other", "alarm_scheme",
+    },
+    "run_settings": {
+        "dev_dd_motor", "dev_vibrator", "dev_esd", "dev_negative_pressure",
+        "simulate_production",
+    },
+    "camera_debug": {
+        "camera_work_mode", "flow_design", "target_search", "image_effect",
+        "detect_list", "jog_debug", *DETECT_LIST_PERMISSIONS,
+        # 检测项列表 8 个列头权限：拆分前列一直可见，默认随相机调试入口继承
+        *(k for _h, k in DETECT_COL_PERMISSIONS),
+    },
+    "camera_calibration": {"element_find"},
+}
+# 「用户中心」是个人信息 / 修改密码 / 切换用户的入口，所有类别默认可用，
+# 与「用户管理」页签（仅管理员）区分，避免细化后误关入口；
+# 「玻璃清洁」拆分前未受权限控制（一直可见），故同样默认全角色可用。
+for _grants in _DEFAULT_GRANTS.values():
+    _grants.add("user_center")
+    _grants.add("glass_clean")
+for _grants in _DEFAULT_GRANTS.values():
+    for _parent, _children in _CHILD_GRANTS.items():
+        if _parent in _grants:
+            _grants.update(_children)
+
+DEFAULT_CATEGORY_PERMISSIONS = {
+    cat: {key: (key in _DEFAULT_GRANTS[cat]) for key in PERMISSIONS}
+    for cat in CATEGORIES
 }
 
 
@@ -109,7 +282,36 @@ class UserManager:
         self.users: list[dict] = []
         self.recent_users: list[str] = []  # 最近登录用户（最多 5 个，最新在前）
         self.default_login: str | None = None  # 设为默认登录的用户名（开登录框时自动选中）
+        # 权限变更观察者：权限配置保存后即时刷新所有已打开的界面
+        self._permission_listeners = []
         self.load()
+        self._last_perm_snapshot = self._perm_snapshot()
+
+    # ---------- 权限变更广播 ----------
+    def _perm_snapshot(self):
+        return {c: dict(p) for c, p in self.category_permissions.items()}
+
+    def add_permission_listener(self, callback):
+        """注册权限变更回调（界面刷新函数）；重复注册忽略。"""
+        if callback not in self._permission_listeners:
+            self._permission_listeners.append(callback)
+
+    def remove_permission_listener(self, callback):
+        if callback in self._permission_listeners:
+            self._permission_listeners.remove(callback)
+
+    def _notify_permission_changed(self):
+        """权限矩阵真正发生变化时才广播，避免登录/改密等无关写盘触发刷新。"""
+        snap = self._perm_snapshot()
+        if snap == getattr(self, "_last_perm_snapshot", None):
+            return
+        self._last_perm_snapshot = snap
+        for cb in list(self._permission_listeners):
+            try:
+                cb()
+            except Exception:
+                # 界面已销毁或刷新异常不应影响权限保存
+                pass
 
     # ---------- 持久化 ----------
     @staticmethod
@@ -117,6 +319,25 @@ class UserManager:
         if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
             return Path(sys.executable).parent / "users.json"
         return Path(__file__).resolve().parent.parent / "users.json"
+
+    def normalize_category_permissions(self):
+        """按当前权限清单规范化矩阵：补齐新增细化项、丢弃历史遗留 key、强制锁定项。
+
+        - 旧 users.json 中已配置的项保留原值；新增项取出厂默认值；
+        - 已改名 / 删除的旧 key 一律丢弃，避免僵尸权限；
+        - 超级管理员整列锁定为全部允许；「设备设置」仅超级管理员可用。
+        """
+        for cat in CATEGORIES:
+            saved = self.category_permissions.get(cat, {}) or {}
+            base = DEFAULT_CATEGORY_PERMISSIONS[cat]
+            cleaned = {
+                key: bool(saved[key]) if key in saved else bool(base[key])
+                for key in PERMISSIONS
+            }
+            if cat == "超级管理员":
+                cleaned = {key: True for key in PERMISSIONS}
+            cleaned["device_code"] = (cat == "超级管理员")
+            self.category_permissions[cat] = cleaned
 
     def load(self):
         if self.path.exists():
@@ -149,9 +370,11 @@ class UserManager:
                             _adv[_k] = _v
                 self.adv_options = _adv
                 if self.users:
+                    self.normalize_category_permissions()
                     return
             except Exception:
                 pass
+        self.normalize_category_permissions()
         self._seed()
 
     def _seed(self):
@@ -171,6 +394,8 @@ class UserManager:
         self.save()
 
     def save(self):
+        # 任何写入路径都先规范化：补齐新增细化项、丢弃未知 key、锁定超级管理员
+        self.normalize_category_permissions()
         data = {
             "users": self.users,
             "category_permissions": self.category_permissions,
@@ -189,6 +414,8 @@ class UserManager:
         self.path.write_text(
             json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
         )
+        # 权限配置保存后立即通知所有界面刷新可见性（登录 / 改密等无关写盘不触发）
+        self._notify_permission_changed()
 
     # ---------- 查询 ----------
     def get_user(self, username: str) -> dict | None:
@@ -210,11 +437,18 @@ class UserManager:
 
     def can(self, user: dict | None, perm_key: str) -> bool:
         """判断用户是否拥有某项权限。
-        设备编码设置仅超级管理员可用（强制，不受模板影响）。"""
+
+        超级管理员始终拥有全部细化权限；设备编码设置仅超级管理员可用
+        （强制，不受模板影响）。未知权限 key 一律拒绝，避免僵尸项误放行。
+        """
         if user is None:
             return False
+        if perm_key not in PERMISSIONS:
+            return False
+        if user["category"] == "超级管理员":
+            return True
         if perm_key == "device_code":
-            return user["category"] == "超级管理员"
+            return False
         return bool(self.permissions_of(user).get(perm_key, False))
 
     # ---------- 用户 CRUD ----------
@@ -283,14 +517,14 @@ class UserManager:
 
     # ---------- 权限配置 ----------
     def set_category_permissions(self, category: str, perms: dict):
+        """按类别写入权限（白名单过滤 + 锁定项强制由 save 统一处理）。"""
         if category not in self.category_permissions:
             return
+        if category == "超级管理员":
+            return  # 超级管理员列锁定，不可修改
         for k, v in perms.items():
-            if k in self.category_permissions[category]:
+            if k in PERMISSIONS:
                 self.category_permissions[category][k] = bool(v)
-        # 设备编码设置强制仅超级管理员
-        for cat in self.category_permissions:
-            self.category_permissions[cat]["device_code"] = (cat == "超级管理员")
         self.save()
 
     # ---------- 设备编码 ----------

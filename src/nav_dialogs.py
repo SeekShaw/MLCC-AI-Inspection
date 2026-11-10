@@ -16,8 +16,8 @@ from PyQt6.QtWidgets import (
     QListView, QFileDialog, QMessageBox,
 )
 from PyQt6.QtGui import (QPainter, QColor, QStandardItem, QStandardItemModel,
-                         QFont, QFontMetrics)
-from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QEvent
+                         QFont, QFontMetrics, QIcon, QPixmap, QPen)
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QEvent, QPoint
 
 import styles
 from styles import COLORS
@@ -458,6 +458,321 @@ class SimulateProductionDialog(QDialog):
         self._simcfg.save_cfg(cfg)
         QMessageBox.information(
             self, "提示", "模拟生产设置已保存\n设置完毕后点击设备启动即可模拟生产")
+
+
+class JogDebugDialog(QDialog):
+    """点动调试小窗（设备状态卡片「点动调试」按钮打开，非模态）。
+
+    - 点动速度：快速 / 慢速（快速取生产转速 prod_rpm，慢速取点动转速 jog_rpm）；
+    - 点动方向：顺时针 / 逆时针（写入 dd_motor.direction）；
+    - 自动锁定元件：开/关切换按钮；
+    - 拍照工位（相机1~8）与剔除工位（OK/NG1/NG2/RST）按钮：点击后玻璃盘
+      （DD 马达）按当前速度/方向自动旋转至对应工位（演示：运行约 1.5s 后到位）。
+    """
+
+    # 拍照工位：工位名 → 触发设定里的相机键；剔除工位：工位名 → 剔除口键
+    CAM_STATIONS = [(f"拍照工位{i}", f"相机{i}") for i in range(1, 9)]
+    REJECT_STATIONS = [("OK剔除口", "ok"), ("NG1剔除口", "ng1"),
+                       ("NG2剔除口", "ng2"), ("RST剔除口", "rst")]
+
+    def __init__(self, pv, parent=None):
+        super().__init__(parent)
+        self.pv = pv
+        _dialog_base(self, "点动调试", 520, 560)
+        cfg = pv.dev_cfg["dd_motor"]
+        # 速度/方向默认取当前配置：prod_rpm=快速、jog_rpm=慢速；direction: 1=顺时针 -1=逆时针
+        self._fast_rpm = float(cfg.get("prod_rpm", 21.0) or 21.0)
+        self._slow_rpm = float(cfg.get("jog_rpm", 5.0) or 5.0)
+        self._speed_fast = False            # 默认慢速（点动以慢速为宜）
+        self._direction = int(cfg.get("direction", 1) or 1)
+        self._locked = False                # 自动锁定元件状态
+        self._moving = False                # 是否正在转至某工位（期间禁止重复下发）
+        self._build_ui()
+        self._sync_motion_btns()
+        self._sync_lock_btn()
+
+    # ------------------------------------------------------------------
+    # UI
+    # ------------------------------------------------------------------
+    def _build_ui(self):
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(16, 16, 16, 16)
+        lay.setSpacing(10)
+
+        # —— 点动速度 / 点动方向：一行 4 个箭头按钮 ——
+        # 图标含义：2 条箭头=速度更快（快速），1 条箭头=速度更慢（慢速）；
+        #           箭头朝左=逆时针，箭头朝右=顺时针。
+        # 依次为：快速·逆时针(<<) / 慢速·逆时针(<) / 慢速·顺时针(>) / 快速·顺时针(>>)
+        sp_box = QGroupBox("点动速度 / 点动方向")
+        sp_box.setStyleSheet(_group_style())
+        sp_lay = QHBoxLayout(sp_box)
+        sp_lay.setContentsMargins(12, 8, 12, 10)
+        sp_lay.setSpacing(8)
+        self._motion_btns = []
+        for fast, direction in ((True, -1), (False, -1), (False, 1), (True, 1)):
+            btn = QPushButton()
+            btn.setFixedHeight(34)
+            btn.setMinimumWidth(88)
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.setCheckable(True)
+            tip = (f"{'快速' if fast else '慢速'}·"
+                   f"{'逆时针' if direction == -1 else '顺时针'}\n"
+                   f"{'2 条' if fast else '1 条'}箭头 = 速度{'更快' if fast else '更慢'}；"
+                   f"箭头朝{'左' if direction == -1 else '右'} = "
+                   f"{'逆时针' if direction == -1 else '顺时针'}")
+            btn.setToolTip(tip)
+            btn.clicked.connect(
+                lambda _=False, f=fast, d=direction: self._set_motion(f, d))
+            self._motion_btns.append((btn, fast, direction))
+            sp_lay.addWidget(btn)
+        self._speed_tip = QLabel("")
+        self._speed_tip.setStyleSheet(
+            f"color: {COLORS['text_secondary']}; font-size: 11px; "
+            f"background-color: transparent;")
+        sp_lay.addStretch(1)
+        sp_lay.addWidget(self._speed_tip)
+        lay.addWidget(sp_box)
+
+        # —— 自动锁定元件 ——
+        lock_box = QGroupBox("元件锁定")
+        lock_box.setStyleSheet(_group_style())
+        lock_lay = QHBoxLayout(lock_box)
+        lock_lay.setContentsMargins(12, 8, 12, 10)
+        lock_lay.setSpacing(10)
+        self._btn_lock = QPushButton("自动锁定元件")
+        self._btn_lock.setFixedHeight(30)
+        self._btn_lock.setMinimumWidth(120)
+        self._btn_lock.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._btn_lock.clicked.connect(self._on_lock_clicked)
+        lock_lay.addWidget(self._btn_lock)
+        self._lock_tip = QLabel("")
+        self._lock_tip.setStyleSheet(
+            f"color: {COLORS['text_secondary']}; font-size: 11px; "
+            f"background-color: transparent;")
+        lock_lay.addStretch(1)
+        lock_lay.addWidget(self._lock_tip)
+        lay.addWidget(lock_box)
+
+        # —— 拍照工位（相机1~8）——
+        cam_box = QGroupBox("拍照工位（点击后玻璃盘自动旋转至该工位）")
+        cam_box.setStyleSheet(_group_style())
+        cam_grid = QGridLayout(cam_box)
+        cam_grid.setContentsMargins(12, 8, 12, 10)
+        cam_grid.setHorizontalSpacing(8)
+        cam_grid.setVerticalSpacing(8)
+        for i, (name, cam_key) in enumerate(self.CAM_STATIONS):
+            btn = QPushButton(name)
+            btn.setFixedHeight(28)
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.setToolTip(f"玻璃盘旋转至{name}（{cam_key}）")
+            btn.setStyleSheet(self._station_btn_style())
+            btn.clicked.connect(
+                lambda _=False, n=name, k=cam_key: self._go_station(n, k, True))
+            cam_grid.addWidget(btn, i // 4, i % 4)
+        lay.addWidget(cam_box)
+
+        # —— 剔除工位（OK / NG1 / NG2 / RST）——
+        rj_box = QGroupBox("剔除工位（点击后玻璃盘自动旋转至该工位）")
+        rj_box.setStyleSheet(_group_style())
+        rj_lay = QHBoxLayout(rj_box)
+        rj_lay.setContentsMargins(12, 8, 12, 10)
+        rj_lay.setSpacing(8)
+        for name, port_key in self.REJECT_STATIONS:
+            btn = QPushButton(name)
+            btn.setFixedHeight(28)
+            btn.setMinimumWidth(84)
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.setToolTip(f"玻璃盘旋转至{name}剔除工位")
+            btn.setStyleSheet(self._station_btn_style())
+            btn.clicked.connect(
+                lambda _=False, n=name, k=port_key: self._go_station(n, k, False))
+            rj_lay.addWidget(btn)
+        rj_lay.addStretch(1)
+        lay.addWidget(rj_box)
+
+        lay.addStretch(1)
+
+        # —— 状态提示行 ——
+        self._status = QLabel("就绪：请先选择点动速度与方向，再点击工位按钮")
+        self._status.setStyleSheet(
+            f"color: {COLORS['text_secondary']}; font-size: 12px; "
+            f"background-color: transparent;")
+        self._status.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        lay.addWidget(self._status)
+
+        # —— 底部关闭按钮 ——
+        btns = QHBoxLayout()
+        btns.addStretch(1)
+        close_btn = QPushButton("关闭")
+        close_btn.setFixedWidth(90)
+        close_btn.setStyleSheet(
+            f"background-color: {COLORS['bg_panel']}; color: {COLORS['text_primary']}; "
+            f"border: 1px solid {COLORS['border']}; border-radius: 4px; "
+            f"padding: 6px 14px; font-size: 13px;")
+        close_btn.clicked.connect(self.close)
+        btns.addWidget(close_btn)
+        lay.addLayout(btns)
+
+    # ------------------------------------------------------------------
+    # 样式
+    # ------------------------------------------------------------------
+    def _chevron_icon(self, count, direction, color, w=30, h=18):
+        """绘制点动按钮箭头图标：count 条箭头（1=慢速 2=快速），
+        direction -1 朝左（逆时针）/ 1 朝右（顺时针）。"""
+        pm = QPixmap(w, h)
+        pm.fill(Qt.GlobalColor.transparent)
+        p = QPainter(pm)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        pen = QPen(color, 3.0)
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+        p.setPen(pen)
+        dx, gap, m = 7.0, 7.0, 4.0
+        cy = h / 2.0
+        half = h / 2.0 - 3.0
+        span = dx + (count - 1) * gap
+        start = (w - span) / 2.0
+        for i in range(count):
+            tip = start + dx + i * gap          # 箭头尖端 x（朝右）
+            pts = [QPoint(int(round(tip - dx)), int(cy - half)),
+                   QPoint(int(round(tip)), int(cy)),
+                   QPoint(int(round(tip - dx)), int(cy + half))]
+            if direction == -1:                  # 朝左：整组水平镜像
+                pts = [QPoint(w - pt.x(), pt.y()) for pt in pts]
+            p.drawPolyline(pts)
+        p.end()
+        return QIcon(pm)
+
+    def _motion_btn_style(self, selected):
+        if selected:
+            return (f"QPushButton {{ background-color: {COLORS['accent_blue']}; "
+                    f"border: 1px solid {COLORS['accent_blue']}; "
+                    f"border-radius: 4px; }}"
+                    f"QPushButton:hover {{ background-color: {COLORS['accent_blue']}; }}")
+        return (f"QPushButton {{ background-color: {COLORS['bg_card']}; "
+                f"border: 1px solid {COLORS['border']}; border-radius: 4px; }}"
+                f"QPushButton:hover {{ border-color: {COLORS['accent_blue']}; }}")
+
+    def _station_btn_style(self):
+        return (f"QPushButton {{ background-color: {COLORS['bg_card']}; "
+                f"color: {COLORS['text_primary']}; "
+                f"border: 1px solid {COLORS['border']}; border-radius: 4px; "
+                f"font-size: 12px; padding: 2px 8px; }}"
+                f"QPushButton:hover {{ border-color: {COLORS['accent_blue']}; "
+                f"color: {COLORS['accent_blue']}; }}")
+
+    # ------------------------------------------------------------------
+    # 速度 / 方向 / 锁定
+    # ------------------------------------------------------------------
+    def _set_motion(self, fast, direction):
+        """4 个箭头按钮共用：一次选定 速度+方向（2条=快速 1条=慢速；左=逆时针 右=顺时针）。"""
+        self._speed_fast = fast
+        self._direction = direction
+        self._sync_motion_btns()
+        rpm = self._fast_rpm if fast else self._slow_rpm
+        text = (f"{'快速' if fast else '慢速'}（{rpm:g} RPM）· "
+                f"{'顺时针' if direction == 1 else '逆时针'}旋转")
+        self._log_op(f"点动调试：点动设为{text}")
+        self._set_status(f"点动设置：{text}")
+
+    def _sync_motion_btns(self):
+        """刷新 4 个箭头按钮的选中态（选中项蓝色底 + 白色箭头）与右侧提示。"""
+        for btn, fast, direction in self._motion_btns:
+            selected = (self._speed_fast == fast and
+                        self._direction == direction)
+            btn.setChecked(selected)
+            color = QColor("#FFFFFF") if selected else QColor("#C8CDD6")
+            btn.setIcon(self._chevron_icon(2 if fast else 1, direction, color))
+            btn.setStyleSheet(self._motion_btn_style(selected))
+        rpm = self._fast_rpm if self._speed_fast else self._slow_rpm
+        self._speed_tip.setText(
+            f"当前转速：{rpm:g} RPM　"
+            f"方向：{'顺时针' if self._direction == 1 else '逆时针'}")
+
+    def _on_lock_clicked(self):
+        self._locked = not self._locked
+        self._sync_lock_btn()
+        text = "已锁定" if self._locked else "已解锁"
+        self._log_op(f"点动调试：自动锁定元件{text}")
+        self._set_status(f"自动锁定元件：{text}")
+
+    def _sync_lock_btn(self):
+        # ⚠️ 需求：点击「自动锁定元件」后按钮名称文字不要变，仅底色变化
+        # （锁定 = 橙色底白字，未锁定 = 常态底色），锁定状态由右侧提示文字表达。
+        if self._locked:
+            self._btn_lock.setStyleSheet(
+                f"QPushButton {{ background-color: {COLORS['accent_orange']}; "
+                f"color: white; border: 1px solid {COLORS['accent_orange']}; "
+                f"border-radius: 4px; font-size: 12px; padding: 2px 12px; }}")
+            self._lock_tip.setText("元件已锁定")
+            self._lock_tip.setStyleSheet(
+                f"color: {COLORS['accent_orange']}; font-size: 11px; "
+                f"background-color: transparent;")
+        else:
+            self._btn_lock.setStyleSheet(
+                f"QPushButton {{ background-color: {COLORS['bg_card']}; "
+                f"color: {COLORS['text_primary']}; "
+                f"border: 1px solid {COLORS['border']}; border-radius: 4px; "
+                f"font-size: 12px; padding: 2px 12px; }}"
+                f"QPushButton:hover {{ border-color: {COLORS['accent_blue']}; }}")
+            self._lock_tip.setText("元件未锁定")
+            self._lock_tip.setStyleSheet(
+                f"color: {COLORS['text_secondary']}; font-size: 11px; "
+                f"background-color: transparent;")
+
+    # ------------------------------------------------------------------
+    # 工位定位：玻璃盘自动旋转至指定拍照/剔除工位
+    # ------------------------------------------------------------------
+    def _station_pulse(self, key, is_camera):
+        """按工位键取目标位置（Pulse）：拍照工位取触发设定 position，剔除工位取剔除口 position。"""
+        try:
+            if is_camera:
+                return int(self.pv.dev_cfg["trigger"][key].get("position", 0))
+            return int(self.pv.dev_cfg["reject"]["ports"][key].get("position", 0))
+        except Exception:
+            return 0
+
+    def _go_station(self, name, key, is_camera):
+        if self._moving:
+            return
+        if bool(getattr(self.pv, "_playing", False)):
+            QMessageBox.information(
+                self, "提示", "设备处于「生产运行中」，请先停止生产再进行点动调试")
+            return
+        pulse = self._station_pulse(key, is_camera)
+        cfg = self.pv.dev_cfg["dd_motor"]
+        rpm = self._fast_rpm if self._speed_fast else self._slow_rpm
+        # 按当前速度/方向启动 DD 马达（点动模式）转至目标工位
+        cfg["mode"] = "点动"
+        cfg["speed_rpm"] = rpm
+        cfg["direction"] = self._direction
+        cfg["running"] = True
+        self.pv.apply_device_settings()
+        self._moving = True
+        dir_text = "顺时针" if self._direction == 1 else "逆时针"
+        self._log_op(
+            f"点动调试：玻璃盘{dir_text}旋转（{rpm:g} RPM）转至{name}（目标 {pulse} Pulse）")
+        self._set_status(f"正在转至{name}（目标 {pulse} Pulse）…")
+        QTimer.singleShot(1500, lambda: self._arrive(name, pulse))
+
+    def _arrive(self, name, pulse):
+        cfg = self.pv.dev_cfg["dd_motor"]
+        cfg["running"] = False
+        self.pv.apply_device_settings()
+        self._moving = False
+        self._log_op(f"点动调试：已到位{name}（{pulse} Pulse）")
+        self._set_status(f"已到位：{name}（{pulse} Pulse）")
+
+    # ------------------------------------------------------------------
+    def _log_op(self, msg):
+        try:
+            self.pv.log_operation(
+                getattr(self.pv, "_op_user", "操作员"), msg)
+        except Exception:
+            pass
+
+    def _set_status(self, text):
+        self._status.setText(text)
 
 
 class ImageSaveDialog(QDialog):

@@ -73,7 +73,7 @@
     "input_filter": 5000,
     "trigger_response": 5,
     "相机1": {
-      "enable": true,
+      "enable": false,
       "position": 5112,
       "lights": [
         true,
@@ -104,7 +104,7 @@
       "max_match": 90
     },
     "相机2": {
-      "enable": true,
+      "enable": false,
       "position": 6112,
       "lights": [
         true,
@@ -135,7 +135,7 @@
       "max_match": 90
     },
     "相机3": {
-      "enable": true,
+      "enable": false,
       "position": 7112,
       "lights": [
         true,
@@ -166,7 +166,7 @@
       "max_match": 90
     },
     "相机4": {
-      "enable": true,
+      "enable": false,
       "position": 8112,
       "lights": [
         true,
@@ -197,7 +197,7 @@
       "max_match": 90
     },
     "相机5": {
-      "enable": true,
+      "enable": false,
       "position": 9112,
       "lights": [
         true,
@@ -228,7 +228,7 @@
       "max_match": 90
     },
     "相机6": {
-      "enable": true,
+      "enable": false,
       "position": 10112,
       "lights": [
         true,
@@ -259,7 +259,7 @@
       "max_match": 90
     },
     "相机7": {
-      "enable": true,
+      "enable": false,
       "position": 11112,
       "lights": [
         true,
@@ -290,7 +290,7 @@
       "max_match": 90
     },
     "相机8": {
-      "enable": true,
+      "enable": false,
       "position": 12112,
       "lights": [
         true,

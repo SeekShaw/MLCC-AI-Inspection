@@ -16,7 +16,8 @@ from PyQt6.QtWidgets import (
 )
 
 from user_manager import (
-    UserManager, CATEGORIES, PERMISSIONS,
+    UserManager, CATEGORIES, PERMISSIONS, PERMISSION_GROUPS,
+    permission_rows,
 )
 
 # 配色（与全局暗色主题 / 其它功能模块卡片一致：暗底 + 卡片 + 白字 + 橙色主操作）
@@ -142,30 +143,45 @@ def _kv(k, v):
 
 
 def _permission_breakdown(manager: "UserManager", user: dict) -> QWidget:
-    """某用户的全部权限明细（逐项列出，带 有/无 徽标），只读。"""
+    """某用户的全部权限明细，按「模块 / 功能」分组列出，带 有/无 徽标，只读。
+
+    细化后条目较多，外层用固定高度滚动区承载，避免撑破固定尺寸的用户中心 / 详情弹窗。
+    """
     box = QWidget()
     lay = QVBoxLayout(box)
     lay.setContentsMargins(0, 0, 0, 0)
-    lay.setSpacing(4)
-    for key in PERMISSIONS:
-        row = QHBoxLayout()
-        row.setSpacing(8)
-        lab = QLabel(PERMISSIONS[key])
-        lab.setFixedWidth(96)
-        lab.setFont(_yahei(10))
-        lab.setStyleSheet(f"color: {TEXT_DARK};")
-        yes = manager.can(user, key)
-        badge = QLabel("有" if yes else "无")
-        badge.setFixedWidth(40)
-        badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        badge.setStyleSheet(
-            "color: white; font-size: 11px; border-radius: 3px; padding: 1px 0;" +
-            (f"background-color: {GREEN};" if yes else f"background-color: {RED};"))
-        row.addWidget(lab)
-        row.addWidget(badge)
-        row.addStretch()
-        lay.addLayout(row)
-    return box
+    lay.setSpacing(3)
+    for group, items in PERMISSION_GROUPS:
+        title = QLabel(group)
+        title.setFont(_yahei(10, True))
+        title.setStyleSheet(f"color: {BLUE}; margin-top: 6px;")
+        lay.addWidget(title)
+        for key, label in items:
+            row = QHBoxLayout()
+            row.setSpacing(8)
+            lab = QLabel(f"　{label}")
+            lab.setFixedWidth(120)
+            lab.setFont(_yahei(10))
+            lab.setStyleSheet(f"color: {TEXT_DARK};")
+            yes = manager.can(user, key)
+            badge = QLabel("有" if yes else "无")
+            badge.setFixedWidth(40)
+            badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            badge.setStyleSheet(
+                "color: white; font-size: 11px; border-radius: 3px; padding: 1px 0;" +
+                (f"background-color: {GREEN};" if yes else f"background-color: {RED};"))
+            row.addWidget(lab)
+            row.addWidget(badge)
+            row.addStretch()
+            lay.addLayout(row)
+    lay.addStretch(1)
+    scroll = QScrollArea()
+    scroll.setWidgetResizable(True)
+    scroll.setFrameShape(QFrame.Shape.NoFrame)
+    scroll.setStyleSheet("QScrollArea { background-color: transparent; }")
+    scroll.setFixedHeight(190)
+    scroll.setWidget(box)
+    return scroll
 
 
 # ---------------------------------------------------------------------------
@@ -450,10 +466,19 @@ class UserCenterDialogA(QDialog):
         lb.addWidget(sub)
         root.addWidget(login_bar)
 
-        # 按权限显隐（设备编码仅超级管理员）
-        self.btn_user_manage.setVisible(manager.can(u, "user_manage"))
-        self.btn_perm.setVisible(manager.can(u, "perm_config"))
-        self.btn_device.setVisible(manager.can(u, "device_code"))
+        # 按权限显隐（设备编码仅超级管理员）；权限配置保存后即时刷新
+        self._refresh_permission_visibility()
+        self._perm_cb = self._refresh_permission_visibility
+        manager.add_permission_listener(self._perm_cb)
+        self.finished.connect(
+            lambda _r: manager.remove_permission_listener(self._perm_cb))
+
+    def _refresh_permission_visibility(self):
+        """按当前用户最新权限矩阵刷新本窗口的功能按钮显隐。"""
+        u, m = self.current_user, self.manager
+        self.btn_user_manage.setVisible(m.can(u, "user_manage"))
+        self.btn_perm.setVisible(m.can(u, "perm_config"))
+        self.btn_device.setVisible(m.can(u, "device_code"))
 
     def _action_btn(self, text, slot, style=None):
         btn = QPushButton(text)
@@ -586,14 +611,26 @@ class UserCenterDialogB(QDialog):
             "perm_config": 3, "device": 4,
         }
         self._active_page = "profile"
-        self._nav_map["user_manage"].setVisible(
-            manager.can(user, "user_manage"))
-        self._nav_map["perm_config"].setVisible(
-            manager.can(user, "perm_config"))
-        self._nav_map["device"].setVisible(
-            manager.can(user, "device_code")
-            or manager.can(user, "device_software_name"))
+        self._refresh_permission_visibility()
+        self._perm_cb = self._refresh_permission_visibility
+        manager.add_permission_listener(self._perm_cb)
+        self.finished.connect(
+            lambda _r: manager.remove_permission_listener(self._perm_cb))
         self._select("profile")
+
+    def _refresh_permission_visibility(self):
+        """按当前用户最新权限矩阵刷新左侧页签；当前页被撤销时退回个人信息页。"""
+        u, m = self.current_user, self.manager
+        visible = {
+            "user_manage": m.can(u, "user_manage"),
+            "perm_config": m.can(u, "perm_config"),
+            "device": (m.can(u, "device_code")
+                       or m.can(u, "device_software_name")),
+        }
+        for key, allow in visible.items():
+            self._nav_map[key].setVisible(allow)
+        if not visible.get(getattr(self, "_active_page", "profile"), True):
+            self._select("profile")
 
     # ----- 辅助 -----
     def _mini(self, text, size, color, bold=False):
@@ -679,27 +716,36 @@ class UserCenterDialogB(QDialog):
         return line
 
     def _permission_grid(self, manager, user):
+        """个人信息页权限明细：按模块分组标题 + 2 列彩色点网格。"""
         box = QWidget()
         lay = QGridLayout(box)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setHorizontalSpacing(18)
-        lay.setVerticalSpacing(9)
-        for i, key in enumerate(PERMISSIONS):
-            yes = manager.can(user, key)
-            item = QHBoxLayout()
-            item.setSpacing(6)
-            dot = QLabel("●")
-            dot.setFont(_yahei(9))
-            dot.setStyleSheet(f"color: {GREEN if yes else '#9CA3AF'};")
-            lab = QLabel(PERMISSIONS[key])
-            lab.setFont(_yahei(11))
-            lab.setStyleSheet(f"color: {TEXT_DARK if yes else '#9CA3AF'};")
-            item.addWidget(dot)
-            item.addWidget(lab)
-            item.addStretch(1)
-            w = QWidget()
-            w.setLayout(item)
-            lay.addWidget(w, i // 2, i % 2)
+        lay.setVerticalSpacing(7)
+        row = 0
+        for group, items in PERMISSION_GROUPS:
+            title = QLabel(group)
+            title.setFont(_yahei(10, True))
+            title.setStyleSheet(f"color: {BLUE}; margin-top: 4px;")
+            lay.addWidget(title, row, 0, 1, 2)
+            row += 1
+            for i, (key, label) in enumerate(items):
+                yes = manager.can(user, key)
+                item = QHBoxLayout()
+                item.setSpacing(6)
+                dot = QLabel("●")
+                dot.setFont(_yahei(9))
+                dot.setStyleSheet(f"color: {GREEN if yes else '#9CA3AF'};")
+                lab = QLabel(f"　{label}")
+                lab.setFont(_yahei(11))
+                lab.setStyleSheet(f"color: {TEXT_DARK if yes else '#9CA3AF'};")
+                item.addWidget(dot)
+                item.addWidget(lab)
+                item.addStretch(1)
+                w = QWidget()
+                w.setLayout(item)
+                lay.addWidget(w, row + i // 2, i % 2)
+            row += (len(items) + 1) // 2
         return box
 
     def _page_profile(self):
@@ -962,21 +1008,21 @@ class UserCenterDialogB(QDialog):
         n = self.manager.export_users(path)
         QMessageBox.information(self, "导出完成", f"已导出 {n} 个用户到：\n{path}")
 
-    # ---------- 权限配置（内嵌） ----------
+    # ---------- 权限配置（内嵌，按模块 / 功能分组） ----------
     def _page_perm_config(self):
         page = self._panel("权限配置")
         m = self.manager
-        note = QLabel("说明：不同用户类别的功能权限不同，由超级管理员统一配置。"
-                      "「设备设置」仅超级管理员可用，已锁定。")
+        note = QLabel("说明：权限按「模块 / 功能」两级拆解，由超级管理员统一配置。"
+                      "超级管理员列固定全开；「设备设置」仅超级管理员可用，已锁定。")
         note.setFont(_yahei(10))
         note.setWordWrap(True)
         note.setStyleSheet(f"color: {TEXT_GRAY};")
         page._body.addWidget(note)
 
-        # 行=权限功能，列=用户类别（与原先互换）
-        table = QTableWidget(len(PERMISSIONS), len(CATEGORIES))
+        rows = permission_rows()
+        # 行=模块标题行 + 功能行，列=用户类别
+        table = QTableWidget(len(rows), len(CATEGORIES))
         table.setHorizontalHeaderLabels(CATEGORIES)
-        table.setVerticalHeaderLabels([PERMISSIONS[k] for k in PERMISSIONS])
         # 表头取消底色（透明）、文字改黑色，避免蓝底白字与整体风格冲突
         _perm_header_qss = (
             "QHeaderView::section { background-color: transparent; "
@@ -988,23 +1034,41 @@ class UserCenterDialogB(QDialog):
             f"QTableWidget {{ background-color: {WHITE}; "
             f"gridline-color: #3A3E47; color: #FFFFFF; }}"
             f"QTableWidget::item {{ padding: 4px; }}")
-        # 列宽随面板自适应，避免横向被裁
         table.horizontalHeader().setSectionResizeMode(
             QHeaderView.ResizeMode.Stretch)
         table.horizontalHeader().setMinimumSectionSize(46)
+
         self._perm_checks = {}
-        for r, pk in enumerate(PERMISSIONS):
+        for r, (kind, pk, label) in enumerate(rows):
+            if kind == "group":
+                # 模块标题行：跨所有类别列，加粗高亮，不放置勾选框
+                item = QTableWidgetItem(f"  {label}")
+                item.setFlags(Qt.ItemFlag.ItemIsEnabled)
+                item.setBackground(QColor("#343A48"))
+                item.setForeground(QColor("#9EC5FF"))
+                item.setFont(_yahei(10, True))
+                table.setItem(r, 0, item)
+                table.setSpan(r, 0, 1, len(CATEGORIES))
+                table.setVerticalHeaderItem(r, QTableWidgetItem(""))
+                continue
+            table.setVerticalHeaderItem(r, QTableWidgetItem(label))
             for c, cat in enumerate(CATEGORIES):
                 cb = QCheckBox()
                 cb.setChecked(m.category_permissions[cat][pk])
                 cb.setStyleSheet(CHECK_QSS)
-                if pk == "device_code":
+                # 超级管理员整列锁定；「设备设置」仅超级管理员可用
+                if cat == "超级管理员" or pk == "device_code":
                     cb.setEnabled(False)
+                    cb.setToolTip("超级管理员权限固定" if cat == "超级管理员"
+                                  else "仅超级管理员可用")
                 self._perm_checks[(cat, pk)] = cb
                 table.setCellWidget(r, c, self._center(cb))
         table.verticalHeader().setDefaultSectionSize(34)
         page._body.addWidget(table)
-        self._fit_rows(table, 10, 34)
+        self._fit_rows(table, 12, 32)
+        for r, (kind, _pk, _label) in enumerate(rows):
+            if kind == "group":
+                table.setRowHeight(r, 26)
 
         # 「权限全部开启」切换按钮：默认关闭（红），点击后勾选所有类别的全部权限
         self._all_on = False
@@ -1030,21 +1094,18 @@ class UserCenterDialogB(QDialog):
     def _on_toggle_all_perms(self):
         self._all_on = not self._all_on
         for (cat, pk), cb in self._perm_checks.items():
-            if pk == "device_code":
+            if cat == "超级管理员" or pk == "device_code":
                 continue
             cb.setChecked(self._all_on)
         self._all_btn.setStyleSheet(_all_perm_btn_style(self._all_on))
 
     def _perm_save(self):
         m = self.manager
-        for cat in CATEGORIES:
-            for pk in PERMISSIONS:
-                if pk == "device_code":
-                    m.category_permissions[cat][pk] = (cat == "超级管理员")
-                else:
-                    m.category_permissions[cat][pk] = \
-                        self._perm_checks[(cat, pk)].isChecked()
-        m.save()
+        for (cat, pk), cb in self._perm_checks.items():
+            if cat == "超级管理员" or pk == "device_code":
+                continue
+            m.category_permissions[cat][pk] = cb.isChecked()
+        m.save()  # save 内部统一规范化：锁定项强制、补齐新增项、丢弃未知项
         QMessageBox.information(self, "已保存", "权限配置已更新。")
 
     # ---------- 设备配置（合并原「设置」的设备/软件信息） ----------
@@ -1494,8 +1555,8 @@ class PermissionConfigDialog(QDialog):
     def __init__(self, manager: UserManager, parent=None):
         super().__init__(parent)
         self.manager = manager
-        self.setWindowTitle("权限配置（按用户类别）")
-        self.setFixedSize(720, 420)
+        self.setWindowTitle("权限配置（按模块 / 功能）")
+        self.setFixedSize(720, 520)
         self.setModal(True)
         self.setStyleSheet(f"QDialog {{ background-color: {LIGHT_BG}; }}")
 
@@ -1503,16 +1564,16 @@ class PermissionConfigDialog(QDialog):
         root.setContentsMargins(16, 16, 16, 16)
         root.setSpacing(10)
 
-        note = QLabel("说明：不同用户类别的功能权限不同，由超级管理员统一配置。"
-                      "「设备设置」仅超级管理员可用，已锁定。")
+        note = QLabel("说明：权限按「模块 / 功能」两级拆解，由超级管理员统一配置。"
+                      "超级管理员列固定全开；「设备设置」仅超级管理员可用，已锁定。")
         note.setFont(_yahei(10))
+        note.setWordWrap(True)
         note.setStyleSheet(f"color: {TEXT_GRAY};")
         root.addWidget(note)
 
-        self.table = QTableWidget(len(CATEGORIES), len(PERMISSIONS))
-        self.table.setHorizontalHeaderLabels(
-            [PERMISSIONS[k] for k in PERMISSIONS])
-        self.table.setVerticalHeaderLabels(CATEGORIES)
+        rows = permission_rows()
+        self.table = QTableWidget(len(rows), len(CATEGORIES))
+        self.table.setHorizontalHeaderLabels(CATEGORIES)
         _perm_header_qss = (
             "QHeaderView::section { background-color: transparent; "
             "color: #FFFFFF; padding: 4px; font-size: 11px; font-weight: 600; "
@@ -1524,15 +1585,30 @@ class PermissionConfigDialog(QDialog):
             f"color: #FFFFFF; }}"
             f"QTableWidget::item {{ padding: 4px; }}"
         )
-        for c, w in enumerate([90, 90, 110, 90, 90, 90, 110]):
-            self.table.setColumnWidth(c, w)
+        self.table.horizontalHeader().setSectionResizeMode(
+            QHeaderView.ResizeMode.Stretch)
+        self.table.horizontalHeader().setMinimumSectionSize(60)
         self.checks = {}
-        for r, cat in enumerate(CATEGORIES):
-            for c, pk in enumerate(PERMISSIONS):
+        for r, (kind, pk, label) in enumerate(rows):
+            if kind == "group":
+                item = QTableWidgetItem(f"  {label}")
+                item.setFlags(Qt.ItemFlag.ItemIsEnabled)
+                item.setBackground(QColor("#343A48"))
+                item.setForeground(QColor("#9EC5FF"))
+                item.setFont(_yahei(10, True))
+                self.table.setItem(r, 0, item)
+                self.table.setSpan(r, 0, 1, len(CATEGORIES))
+                self.table.setVerticalHeaderItem(r, QTableWidgetItem(""))
+                self.table.setRowHeight(r, 26)
+                continue
+            self.table.setVerticalHeaderItem(r, QTableWidgetItem(label))
+            self.table.setRowHeight(r, 30)
+            for c, cat in enumerate(CATEGORIES):
                 cb = QCheckBox()
                 cb.setChecked(self.manager.category_permissions[cat][pk])
-                if pk == "device_code":
-                    cb.setEnabled(False)  # 仅超级管理员，强制锁定
+                cb.setStyleSheet(CHECK_QSS)
+                if cat == "超级管理员" or pk == "device_code":
+                    cb.setEnabled(False)
                 self.checks[(cat, pk)] = cb
                 self.table.setCellWidget(r, c, self._center(cb))
         self.table.setSizePolicy(
@@ -1578,27 +1654,17 @@ class PermissionConfigDialog(QDialog):
     def _on_toggle_all_perms(self):
         self._all_on = not self._all_on
         for (cat, pk), cb in self.checks.items():
-            if pk == "device_code":
+            if cat == "超级管理员" or pk == "device_code":
                 continue
             cb.setChecked(self._all_on)
         self._all_btn.setStyleSheet(_all_perm_btn_style(self._all_on))
 
     def _on_save(self):
-        new_perms = {}
-        for cat in CATEGORIES:
-            new_perms[cat] = {}
-            for pk in PERMISSIONS:
-                if pk == "device_code":
-                    new_perms[cat][pk] = (cat == "超级管理员")
-                else:
-                    new_perms[cat][pk] = self.checks[(cat, pk)].isChecked()
-        for cat in CATEGORIES:
-            for pk in PERMISSIONS:
-                self.manager.category_permissions[cat][pk] = new_perms[cat][pk]
-        for cat in self.manager.category_permissions:
-            self.manager.category_permissions[cat]["device_code"] = (
-                cat == "超级管理员")
-        self.manager.save()
+        for (cat, pk), cb in self.checks.items():
+            if cat == "超级管理员" or pk == "device_code":
+                continue
+            self.manager.category_permissions[cat][pk] = cb.isChecked()
+        self.manager.save()  # 统一规范化：锁定项强制、补齐新增项、丢弃未知项
         QMessageBox.information(self, "已保存", "权限配置已更新。")
         self.accept()
 

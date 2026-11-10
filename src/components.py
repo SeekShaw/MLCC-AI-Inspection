@@ -567,6 +567,7 @@ class CameraScreen(QWidget):
         self._playing = False
         self._channel = "src"        # 显示通道：src / gray / r / g / b
         self._show_elements = False  # 是否叠加显示计算元素（总开关，画布右上角眼睛）
+        self._show_crosshair = False # 是否显示画布中心十字线
         self._item_visible = {}      # 计算元素逐项显隐：{名称: bool}，缺省为显示
         self._chan_cache = {}        # (帧id, 通道) -> 转换后 QPixmap，避免每帧重算
         self.setStyleSheet("background-color: #15171B; border-radius: 4px;")
@@ -607,6 +608,17 @@ class CameraScreen(QWidget):
             return
         self._show_elements = visible
         self.update()
+
+    def set_crosshair_visible(self, visible):
+        """显示 / 隐藏画布中心十字线（横竖各一条，交点位于画布正中心）。"""
+        visible = bool(visible)
+        if visible == self._show_crosshair:
+            return
+        self._show_crosshair = visible
+        self.update()
+
+    def crosshair_visible(self):
+        return self._show_crosshair
 
     def set_item_visible(self, name, visible):
         """设置单个计算元素（如「产品外围左边直线查找」）在画布上的显隐。"""
@@ -651,6 +663,19 @@ class CameraScreen(QWidget):
             p.setPen(QColor(COLORS["border"]))
             p.setFont(QFont("Microsoft YaHei", 12))
             p.drawText(rect, Qt.AlignmentFlag.AlignCenter, self._hint)
+        # 十字线绘制在图像 / 提示文字之上，切换通道或帧数时始终跟随
+        if self._show_crosshair:
+            self._draw_crosshair(p, rect)
+
+    def _draw_crosshair(self, p, rect):
+        """画布正中心的十字线：横线 + 竖线，交点加小方框便于精确定位。"""
+        cx = rect.left() + rect.width() / 2
+        cy = rect.top() + rect.height() / 2
+        p.setPen(QPen(QColor(0, 229, 255, 210), 1))
+        p.drawLine(int(rect.left()), int(cy), int(rect.right()), int(cy))
+        p.drawLine(int(cx), int(rect.top()), int(cx), int(rect.bottom()))
+        p.setPen(QPen(QColor(0, 229, 255, 235), 1))
+        p.drawRect(int(cx) - 4, int(cy) - 4, 8, 8)
 
     def _draw_elements(self, p, rect):
         """在画布上叠加计算元素：按「计算元素精确查找」逐项显隐状态绘制。
@@ -730,12 +755,18 @@ class CameraPreview(QFrame):
     def _restyle(self):
         self._apply_style()
 
-    def add_title_button(self, widget):
-        """在卡片名称右侧（扩展区前）插入一个标题栏按钮，例如「拍照设置」。
+    def add_title_button(self, widget, index=None):
+        """在卡片名称右侧（扩展区前）插入标题栏按钮，例如「拍照设置」。
 
-        插入位置固定在点 ● 与名称之后、弹性占位之前，使按钮紧贴名称右侧显示。
+        多次调用时按调用顺序从左到右排列：第 1 个插到索引 2，第 2 个插到
+        索引 3（即第 1 个按钮的右侧），避免固定 insertWidget(2) 把后加的按钮
+        挤到先加按钮的左边。也可显式传 index 指定位置。
         """
-        self._title_row.insertWidget(2, widget)
+        if index is None:
+            count = getattr(self, "_title_btn_count", 0)
+            index = 2 + count
+            self._title_btn_count = count + 1
+        self._title_row.insertWidget(index, widget)
 
     def set_canvas_size(self, w, h):
         """动态更新画布显示尺寸（保持 4:3 时由相机网格统一调用）。"""

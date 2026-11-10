@@ -330,22 +330,26 @@ dv._playing = False
 src_dv = open("C:/Users/Lenovo/WorkBuddy/Teruo/src/debug_view.py", encoding="utf-8").read()
 # 1) 工具条顺序（运行时校验从左到右）：
 #    设置为默认 → 恢复至默认 → 恢复至出厂 → 单位设置 → 出料设置 → 全部同步
+#    → 规格自动调整（2026-10-20 新增）
 #    （「检测项全开/关」已移到「是否检测」列头右侧，不再出现在工具条）
 from PyQt6.QtWidgets import QPushButton as _QPushButton, QHBoxLayout as _QHBoxLayout
 _TOOLBAR_ORDER = ["设置为默认", "恢复至默认", "恢复至出厂",
-                  "单位设置", "出料设置", "全部同步"]
+                  "单位设置", "出料设置", "全部同步", "规格自动调整"]
 _toolbar_found = None
 for _lay in dv.findChildren(_QHBoxLayout):
     _widgets = [_lay.itemAt(i).widget() for i in range(_lay.count())]
-    _texts = [w.text() for w in _widgets if isinstance(w, _QPushButton)]
-    if _texts == _TOOLBAR_ORDER:
+    # 工具条为「图标 + 悬浮提示」按钮，text() 为空，须按 toolTip() 校验顺序
+    _tips = [w.toolTip() for w in _widgets if isinstance(w, _QPushButton)]
+    if _tips == _TOOLBAR_ORDER:
         _toolbar_found = _lay
         break
 check(_toolbar_found is not None,
-      "工具条: 运行时按钮从左到右顺序为 设置为默认→恢复至默认→恢复至出厂→单位设置→出料设置→全部同步")
-_toolbar_texts = [_toolbar_found.itemAt(i).widget().text()
-                  for i in range(_toolbar_found.count())
-                  if _toolbar_found.itemAt(i).widget() is not None]
+      "工具条: 运行时按钮从左到右顺序为 设置为默认→恢复至默认→恢复至出厂→单位设置→出料设置→全部同步→规格自动调整")
+_toolbar_texts = ([(_toolbar_found.itemAt(i).widget().text() or
+                    _toolbar_found.itemAt(i).widget().toolTip())
+                   for i in range(_toolbar_found.count())
+                   if _toolbar_found.itemAt(i).widget() is not None]
+                  if _toolbar_found is not None else [])
 check("检测项全开" not in _toolbar_texts,
       "工具条: 「检测项全开」已移出工具条（改为是否检测列头覆盖按钮）")
 # 2) 检测项表格新增「良率预警设置」列（位于「检测项操作」右侧，第 14 列）
@@ -454,8 +458,7 @@ check(_h_unit == _h_btn,
 # 列头与「全开/全关」批量开关同样统一 10px
 check(dv._table.horizontalHeader().font().pixelSize() == 10,
       f"表格列头: 字号为 10px（pixelSize={dv._table.horizontalHeader().font().pixelSize()}）")
-_ss_all = dv._detect_all_btn.styleSheet()
-check("font-size: 10px" in _ss_all,
+check("font-size: 10px" in dv._yield_all_btn.styleSheet(),
       "「全开/全关」批量开关字号为 10px")
 
 # ⚠️⚠️ 2026-10-09 回归护栏（高价值）：调列序那轮**漏改**了`_detect_spec`，
@@ -560,18 +563,21 @@ _btns = {b.text(): b for b in dv.findChildren(_QPushButton)}
 check(all(dv._table.cellWidget(r, 1).findChild(_TS) is not None
           for r in range(dv._table.rowCount())),
       "是否检测列: 全部行使用 ToggleSwitch 开关（与最后一列一致）")
-_det_all = dv._detect_all_btn
-check(_det_all.parent() is dv._table.horizontalHeader().viewport(),
-      "检测项全开: 按钮父级为列表横向表头视口（覆盖在是否检测列头上）")
-check(_det_all.text() == "全开", "检测项全开: 初始文本为「全开」")
-_det_all.click(); app.processEvents()
-check(_det_all.text() == "全关", "检测项全开→点击后变为「全关」")
-check(all(sw.is_on() for sw in dv._row_checks.values()),
-      "检测项全开→点击后所有「是否检测」开关置为开启")
-_det_all.click(); app.processEvents()
-check(_det_all.text() == "全开", "检测项全关→再点击恢复「全开」")
+# 「是否检测」批量模式已由「全开/全关」按钮改为列头下拉（全开 / 全关 / 调试）
+_det_combo = dv._detect_mode_combo
+check(_det_combo.parent() is dv._table.horizontalHeader().viewport(),
+      "检测项批量模式: 下拉父级为列表横向表头视口（覆盖在是否检测列头上）")
+check([_det_combo.itemText(i) for i in range(_det_combo.count())]
+      == ["全开", "全关", "调试"],
+      "检测项批量模式: 下拉选项为 全开 / 全关 / 调试")
+# 下拉用 textActivated 信号（仅用户主动选择时发出），setCurrentText 不触发，
+# 故直接调用处理函数验证批量联动
+dv._on_detect_mode_changed("全关"); app.processEvents()
 check(not any(sw.is_on() for sw in dv._row_checks.values()),
-      "检测项全关→点击后所有「是否检测」开关关闭")
+      "检测项批量模式→全关: 所有「是否检测」开关关闭")
+dv._on_detect_mode_changed("全开"); app.processEvents()
+check(all(sw.is_on() for sw in dv._row_checks.values()),
+      "检测项批量模式→全开: 所有「是否检测」开关开启")
 # 是否检测列：列加宽（列头文字左对齐 + 右侧全开/全关开关互不遮挡）
 check(dv._table.columnWidth(1) >= 110,
       f"是否检测列: 列宽已加宽 ≥110（实际 {dv._table.columnWidth(1)}）")
@@ -633,16 +639,17 @@ check(src_app.index("缺陷图查看") < src_app.index("显示所有图像"),
       "底部信息栏: 「缺陷图查看」位于「显示所有图像」左侧")
 check("_open_defect_images" in src_app and "DefectImageWindow" in src_app,
       "底部信息栏: 「缺陷图查看」点击打开 DefectImageWindow 窗口")
-check("DEFECT_COUNT = 50" in open("C:/Users/Lenovo/WorkBuddy/Teruo/src/defect_image_window.py", encoding="utf-8").read(),
-      "缺陷图查看: 窗口展示最新 50 张缺陷图（DEFECT_COUNT=50）")
 from defect_image_window import DefectImageWindow as _DIW
 _diw = _DIW()
-check(len(_diw._items) == 50, "缺陷图查看: 实际生成 50 张缺陷图")
-check(len({it["camera"] for it in _diw._items}) == 8,
-      "缺陷图查看: 缺陷图覆盖全部 8 个工位相机")
-check(all(it.get("defect") and it.get("time") and it.get("result") == "NG"
-          for it in _diw._items),
-      "缺陷图查看: 每张图均带缺陷项 / 检测时间 / NG 判定信息")
+# 现口径：8 工位 × (6 NG + 3 OK + 2 RST) = 88 张，判定与剔除口对应
+check(len(_diw._all_items) == 88,
+      f"缺陷图查看: 生成 8 工位 × 11 张 = 88 张图像（实际 {len(_diw._all_items)}）")
+check(len({it["camera"] for it in _diw._all_items}) == 8,
+      "缺陷图查看: 图像覆盖全部 8 个工位相机")
+check(all(it.get("defect") and it.get("time")
+          and it.get("result") in ("OK", "NG1", "NG2", "RST")
+          for it in _diw._all_items),
+      "缺陷图查看: 每张图均带缺陷项 / 检测时间 / 判定结果信息")
 _diw._idx = 3; _diw._list.setCurrentRow(3); app.processEvents()
 check(_diw.lbl_cam.text() == _diw._items[3]["camera"],
       "缺陷图查看: 点击缩略图后右侧显示对应工位相机与缺陷信息")
@@ -932,10 +939,17 @@ check(_brec_ng1["state_lbl"].width() <= 50,
       f"取出计时同行: 状态窗体宽度已收窄 (实际 {_brec_ng1['state_lbl'].width()}px)")
 try:
     import time as _time_mod
-    pv._playing = True
-    pv._set_bin_taken("NG1 料盒", True)
-    pv._bin_taken_since["NG1"] = _time_mod.monotonic() * 1000.0 - 839
-    pv._update_bin_taken_status()
+    # _update_bin_taken_status 内含 10% 随机翻转 NG1 料盒，固定随机数避免 flaky
+    _pvm = sys.modules["production_view"]
+    _orig_random = _pvm.random.random
+    _pvm.random.random = lambda: 1.0
+    try:
+        pv._playing = True
+        pv._set_bin_taken("NG1 料盒", True)
+        pv._bin_taken_since["NG1"] = _time_mod.monotonic() * 1000.0 - 839
+        pv._update_bin_taken_status()
+    finally:
+        _pvm.random.random = _orig_random
     check(_brec_ng1["time_lbl"].isVisible() and _brec_ng1["time_lbl"].text().endswith(" s"),
           f"取出计时同行: 取出态下计时与单位 s 显示 (实际 '{_brec_ng1['time_lbl'].text()}')")
     try:
@@ -1144,6 +1158,28 @@ pv._refresh_live_stats_ui()
 check(pv._live_yield != -1.0,
       f"统计检索: 切回「当前运行」后恢复刷新 (实际良率 {pv._live_yield})")
 
+# ============ 实时重检率（统计信息卡片标题栏） ============
+# 口径：最近 2 秒重检数 × 30（换算每分钟重检数）÷ 生产总数 × 100%，黄色显示
+import time as _time
+_rt = getattr(pv, "_rt_rechk_label", None)
+check(_rt is not None, "实时重检率: 统计信息卡片标题栏存在「实时重检率」标签")
+from styles import COLORS as _COLORS
+check(_rt is not None and _COLORS["accent_yellow"] in _rt.styleSheet(),
+      "实时重检率: 标签为黄色（与 KPI 重检率颜色一致）")
+_rt_total_bak, _rt_win_bak = pv._live_total, list(pv._rechk_win)
+pv._live_total = 50000
+pv._rechk_win = [(_time.monotonic(), 10.0)]   # 2 秒内重检 10 → 每分钟 300 → 0.60%
+pv._refresh_live_stats_ui()
+check(pv._rt_rechk_label.text() == "实时重检率: 0.60%",
+      f"实时重检率: 口径=2秒重检数×30÷总数 (实际 {pv._rt_rechk_label.text()})")
+pv._rechk_win = [(_time.monotonic() - 3.0, 10.0)]   # 超过 2 秒 → 剪枝后归零
+check(pv._realtime_rechk_rate() == 0.0,
+      "实时重检率: 窗口超过 2 秒的增量被剪枝（归零）")
+pv._rechk_win = []
+check(pv._realtime_rechk_rate() == 0.0, "实时重检率: 无增量时显示 0.00%")
+pv._live_total, pv._rechk_win = _rt_total_bak, _rt_win_bak
+pv._refresh_live_stats_ui()
+
 # ============ 新需求：检索按钮→「返回」→恢复默认「当前运行-运行开始-现在」 ============
 # 默认（当前运行）：按钮「检索」且置灰不可点
 check(pv._btn_search_stat.text() == "检索" and not pv._btn_search_stat.isEnabled(),
@@ -1275,20 +1311,24 @@ pv._playing = False
 pv._alarm_stopped = False
 pv._estop_due_ts = None
 
-# ============ 新需求：设备运行状态新增「飞料频率」（示例值 1~10 Pcs/min，位于 OK料仓误踢频率 正下方） ============
-_fly_rec = pv._status_recs.get("飞料频率")
-check(_fly_rec is not None, "飞料频率: 设备运行状态区已新增「飞料频率」行")
+# ============ 设备运行状态「飞料状态」：飞料比例（颗数÷生产总数）+ 飞料颗数，单位「颗」 ============
+_fly_rec = pv._status_recs.get("飞料状态")
+check(_fly_rec is not None, "飞料状态: 设备运行状态区已改用「飞料状态」行")
 if _fly_rec is not None:
     _fly_txt = _fly_rec["val_box"].text()
-    check(_fly_txt.isdigit() and 1 <= int(_fly_txt) <= 10,
-          f"飞料频率: 示例值在 1~10 Pcs/min 之间 (实际 {_fly_txt})")
-    _wrong_rec = pv._status_recs.get("OK料仓误踢频率")
-    check(_wrong_rec is not None
-          and _fly_rec["grid_row"] == _wrong_rec["grid_row"] + 1
-          and _fly_rec["grid_col"] == _wrong_rec["grid_col"],
-          "飞料频率: 位于「OK料仓误踢频率」正下方（同列、行号 +1）")
+    check(_fly_txt.isdigit(),
+          f"飞料状态: 数值框为飞料颗数 (实际 {_fly_txt})")
+    check(_fly_rec["unit"] is not None and _fly_rec["unit"].text() == "颗",
+          "飞料状态: 单位为「颗」")
+    check(_fly_rec["pct_box"].text().endswith("%"),
+          f"飞料状态: 百分比框显示飞料比例 (实际 {_fly_rec['pct_box'].text()})")
+    _glass_rec = pv._status_recs.get("玻璃盘使用转数")
+    check(_glass_rec is not None
+          and _fly_rec["grid_row"] == _glass_rec["grid_row"] + 1
+          and _fly_rec["grid_col"] == _glass_rec["grid_col"],
+          "飞料状态: 位于「玻璃盘使用转数」正下方（同列、行号 +1）")
 
-# ============ 新需求：设备运行状态新增「玻璃盘上下跳动」（示例值 0.01~0.06 mm，位于 飞料频率 正下方） ============
+# ============ 设备运行状态「玻璃盘上下跳动」（示例值 0.01~0.06 mm，位于 飞料状态 正下方） ============
 _gj_rec = pv._status_recs.get("玻璃盘上下跳动")
 check(_gj_rec is not None, "玻璃盘上下跳动: 设备运行状态区已新增「玻璃盘上下跳动」行")
 if _gj_rec is not None:
@@ -1301,11 +1341,11 @@ if _gj_rec is not None:
           f"玻璃盘上下跳动: 示例值在 0.01~0.06 mm 之间 (实际 {_gj_txt})")
     check(_gj_rec["unit"] is not None and _gj_rec["unit"].text() == "mm",
           f"玻璃盘上下跳动: 单位为 mm (实际 {_gj_rec['unit'].text() if _gj_rec['unit'] else None})")
-    _fly_rec_gj = pv._status_recs.get("飞料频率")
+    _fly_rec_gj = pv._status_recs.get("飞料状态")
     check(_fly_rec_gj is not None
           and _gj_rec["grid_row"] == _fly_rec_gj["grid_row"] + 1
           and _gj_rec["grid_col"] == _fly_rec_gj["grid_col"],
-          "玻璃盘上下跳动: 位于「飞料频率」正下方（同列、行号 +1）")
+          "玻璃盘上下跳动: 位于「飞料状态」正下方（同列、行号 +1）")
     _gj_draw = pv._draw_glass_jump_val()
     check(0.01 <= _gj_draw <= 0.06,
           f"玻璃盘上下跳动: 抽样方法返回值在 0.01~0.06 mm 之间 (实际 {_gj_draw:.2f})")
@@ -1642,8 +1682,9 @@ check("resolve_startup_user" in _inspect.getsource(_app.MainWindow.__init__),
       "默认登录: 主窗口启动时按默认登录用户解析账号")
 
 # ② 顶部版本信息 + 关于弹窗
-check(getattr(_app, "APP_VERSION", "") == "Ver5.0.10.34",
-      f"关于: 版本号常量 (实际 {getattr(_app, 'APP_VERSION', None)})")
+import app_meta as _meta
+check(getattr(_app, "APP_VERSION", "") == "V" + _meta.APP_VERSION,
+      f"关于: 版本号与 app_meta 一致 (实际 {getattr(_app, 'APP_VERSION', None)})")
 check(hasattr(_app.MainWindow, "_open_about"), "关于: 已定义「关于」入口")
 _adlg = __import__("nav_dialogs").AboutDialog(
     None, software_name="智感科技：MLCC外观高速检测",
@@ -1653,7 +1694,7 @@ _adlg = __import__("nav_dialogs").AboutDialog(
 _atxt = _adlg.report_text()
 check(_app.APP_VERSION in _atxt, "关于: 弹窗含软件版本")
 check("智感科技" in _atxt and "EQ-2026-0001" in _atxt, "关于: 弹窗含软件名称与设备编码")
-check(_app.COMPANY_NAME in _atxt and "ZIGAA" in _atxt,
+check(_app.COMPANY_NAME in _atxt and "智感科技" in _atxt,
       f"关于: 弹窗含公司信息 (company={_app.COMPANY_NAME})")
 check(_adlg.windowTitle() == "关于", f"关于: 窗口标题 (实际 {_adlg.windowTitle()})")
 _adlg.deleteLater()
@@ -2033,14 +2074,16 @@ check(pv._valve_used["OK"] == 0.0 and pv._valve_used["NG1"] == 120.0
 pv.reset_valve_counts()   # 全量重置后 OK 仍保持清零（初始值已被记为 0）
 check(pv._valve_used["OK"] == 0.0, "已使用次数清零: 全量重置后已清零的阀保持 0 重新计数")
 pv._valve_used = _used_bak; pv._valve_used_init = _init_bak
-# ④ 触发设定：「触发位置」右侧「自动获取」按钮，点击填入运行系统当前位置
+# ④ 触发设定：已重构为「相机参数表格 + 底部自动获取触发位置」按钮
 _tsd = _TSD(_mw)
-_auto_pos_btns = [b for b in _tsd.findChildren(_QPushButton) if b.text() == "自动获取"]
+_auto_pos_btns = [b for b in _tsd.findChildren(_QPushButton)
+                  if b.text() == "自动获取触发位置"]
 check(len(_auto_pos_btns) == 1,
-      f"触发设定: 触发位置右侧存在「自动获取」按钮 (实际 {len(_auto_pos_btns)})")
+      f"触发设定: 存在「自动获取触发位置」按钮 (实际 {len(_auto_pos_btns)})")
 _tsd._on_auto_get_position()
-check(_tsd.pos.value() == pv.get_current_pulse_position(),
-      f"触发设定: 自动获取填入当前位置 (实际 {_tsd.pos.value()} / 期望 {pv.get_current_pulse_position()})")
+_cur_pos = _tsd.positions[_tsd._current].value()
+check(_cur_pos == pv.get_current_pulse_position(),
+      f"触发设定: 自动获取填入当前相机位置 (实际 {_cur_pos} / 期望 {pv.get_current_pulse_position()})")
 _tsd.deleteLater()
 # ⑤ 剔除设定：每行「剔除位置」右侧「自动获取」按钮，点击填入该口当前位置
 _rsd = _RSD(_mw)
@@ -2247,13 +2290,21 @@ check(_doc.node_count() == _c0 + 1
       "流程设计: 删除节点同时清理其连线")
 _doc.undo()
 check(_doc.node_count() == _c0 + 2, "流程设计: 撤销删除恢复节点")
-# 工具箱折叠 / 搜索 / 缩放
-_fp.toggle_toolbox()
-check(not _fp._toolbox_holder.isVisible() or True, "流程设计: 工具箱可折叠（不抛异常）")
-_fp.toggle_toolbox()
+# 工具箱折叠 / 搜索 / 缩放（折叠入口已改为 FlowToolBox._toggle_collapse）
+_c0_box = _fp.toolbox._collapsed
+_fp.toolbox._toggle_collapse()
+check(_fp.toolbox._collapsed != _c0_box, "流程设计: 工具箱可折叠（不抛异常）")
+_fp.toolbox._toggle_collapse()
+check(_fp.toolbox._collapsed == _c0_box, "流程设计: 工具箱可再次展开")
 _fp.toolbox._search.setText("卡尺")
 QApplication.processEvents()
-check(_fp.toolbox._section_rows["测量"]["rows"][0].isVisible(),
+# 页面未 show 时 isVisible() 恒为 False，用 !isHidden() 判断显式过滤状态
+_mrows = _fp.toolbox._section_rows["测量"]["rows"]
+check(any("卡尺" in _fp.toolbox._row_text(r) and not r.isHidden() for r in _mrows)
+      and all(not r.isHidden() for r in _mrows
+              if "卡尺" in _fp.toolbox._row_text(r))
+      and all(r.isHidden() for r in _mrows
+              if "卡尺" not in _fp.toolbox._row_text(r)),
       "流程设计: 搜索「卡尺」过滤出匹配算子")
 _fp.toolbox._search.setText("")
 _fp.canvas.zoom_in()
@@ -2341,13 +2392,14 @@ if hasattr(_mw, "btn_img_filter"):
     _mf_menu = _mf.menu()
     check(_mf_menu is not None, "显示所有图像: 存在下拉菜单")
     _mf_opts = [a.text() for a in _mf_menu.actions()]
-    check(_mf_opts == ["显示所有图像", "仅显示不良品图像", "仅显示良品图像"],
+    check(_mf_opts == ["显示所有图像", "显示OK图像", "显示非OK图像", "显示NG图像",
+                       "显示NG1图像", "显示NG2图像", "显示RST图像"],
           f"显示所有图像: 选择项正确 (实际 {_mf_opts})")
     check(any(a.isChecked() for a in _mf_menu.actions()),
           "显示所有图像: 默认选中「显示所有图像」")
     _mf_menu.actions()[1].trigger()
     app.processEvents()
-    check(_mf.text() == "仅显示不良品图像",
+    check(_mf.text() == "显示OK图像",
           f"显示所有图像: 选中后按钮文本更新 (实际 '{_mf.text()}')")
     _mf_menu.actions()[0].trigger()
     app.processEvents()
@@ -2598,10 +2650,10 @@ check(pv._status_pages == 2 and pv._status_page == 0,
       f"设备状态: 共2页、默认第1页 (实际 pages={pv._status_pages}, page={pv._status_page})")
 check(pv._status_page_lbl.text() == "1/2",
       f"设备状态: 页码标签显示「1/N」格式 (实际 {pv._status_page_lbl.text()})")
-# 第 1 页 = 与加分页前一致的全部 16 项状态行 + 4 张料盒卡片全部可见
+# 第 1 页 = 两列共 15 项状态行（删除负压 / RST 电磁阀后）+ 4 张料盒卡片全部可见
 check(all(not r["frame"].isHidden() for r in pv._status_grid_recs)
-      and len(pv._status_grid_recs) == 16,
-      f"设备状态: 第1页显示全部16项状态行 (实际 {len(pv._status_grid_recs)} 项)")
+      and len(pv._status_grid_recs) == 15,
+      f"设备状态: 第1页显示全部15项状态行 (实际 {len(pv._status_grid_recs)} 项)")
 check(not pv._status_page1.isHidden() and pv._status_page2.isHidden(),
       "设备状态: 第1页显示内容容器、第2页容器隐藏")
 check(pv._status_content.parentWidget() is pv._status_page1,
@@ -3028,15 +3080,15 @@ for _tag, _recs in (("左列", _col0), ("右列", _col1)):
     check(_row_w - _max_val_right <= 24,
           f"设备状态: {_tag}数值组已右移到与行右边缘对齐"
           f"（行宽 {_row_w}，数值组最右 {_max_val_right}，间距 {_row_w - _max_val_right}）")
-    # 名称框右边缘紧邻数值组左边缘（中间不再有大空隙）。
-    # 数值组左边缘统一取「百分比框」起点：有百分比时即百分比框，
-    # 无百分比时百分比占位宽度为 0、起点即数值框位置，同样成立。
+    # 名称框与百分比框之间保留固定空隙（用户要求百分比窗体左侧留空隙）。
+    # 实现：行内 spacing 6→3 + 12px spacer，实际空隙 = 3 + 12 = 15px，
+    # 且不改变卡片整体宽度（582px）。
     _gap_max = max(
         r["pct_box"].mapTo(r["frame"], r["pct_box"].rect().topLeft()).x()
         - r["nm"].mapTo(r["frame"], r["nm"].rect().topRight()).x()
         for r in _recs)
-    check(_gap_max <= 12,
-          f"设备状态: {_tag}名称框与数值组紧邻（最大间隙 {_gap_max}px）")
+    check(12 <= _gap_max <= 20,
+          f"设备状态: {_tag}名称框与百分比框保留约15px空隙（实际 {_gap_max}px）")
 # ⚠️ 2026-10-08 需求「按内容最多的矩形框长度整体拉长对齐」推翻了旧断言。
 # 旧断言：无百分比项的百分比占位**不占宽度**（setFixedWidth(0)），
 #         目的是让名称框一路顶到数值框。
@@ -3302,19 +3354,33 @@ check(len(_vcd._quick_btns) == len(_QA)
       and _vcd._quick_btns[4].text() == "🖼 截取窗图",
       "Copilot: 对话窗快捷按钮与定义一致（5 个）")
 
-# 顶部标题栏：AI助手按钮位于「切换用户」按钮右侧（同一行，x 更大）
-check(hasattr(_mw, "btn_ai_copilot") and _mw.btn_ai_copilot.text() == "🤖 AI助手",
-      "顶部栏: 存在「🤖 AI助手」按钮")
+# 顶部标题栏：模型训练助手紧邻 AI助手 左侧；两者仅保留图标，功能文字改为悬浮显示
+check(getattr(_mw, "btn_ai_copilot", None) is not None
+      and _mw.btn_ai_copilot.text() == "🤖"
+      and _mw.btn_ai_copilot.toolTip() == "AI助手",
+      "顶部栏: AI助手按钮仅保留图标，文字改为悬浮显示")
+check(getattr(_mw, "btn_model_training", None) is not None
+      and _mw.btn_model_training.text() == "🧠"
+      and _mw.btn_model_training.toolTip() == "模型训练助手",
+      "顶部栏: 模型训练助手按钮仅保留图标，文字改为悬浮显示")
+check("background: transparent" in _mw.btn_ai_copilot.styleSheet()
+      and "background: transparent" in _mw.btn_model_training.styleSheet()
+      and "accent_blue" not in _mw.btn_ai_copilot.styleSheet()
+      and "accent_blue" not in _mw.btn_model_training.styleSheet(),
+      "顶部栏: 两个图标按钮蓝色底色已去掉（透明背景仅留图标）")
 check(hasattr(_mw, "btn_switch_user"),
       "顶部栏: 「切换用户」按钮仍存在")
 # 用布局 index 顺序断言（offscreen 下像素坐标不可靠，strip 更稳）
 _hdr = getattr(_mw, "_header_layout", None)
-if _hdr is not None and _hdr.indexOf(_mw.btn_switch_user) != -1 \
-        and _hdr.indexOf(_mw.btn_ai_copilot) != -1:
-    check(_hdr.indexOf(_mw.btn_ai_copilot) > _hdr.indexOf(_mw.btn_switch_user),
-          "顶部栏: AI助手按钮位于「切换用户」右侧（布局顺序）")
+_swb = getattr(_mw, "btn_switch_user", None)
+_mtb = getattr(_mw, "btn_model_training", None)
+_acb = getattr(_mw, "btn_ai_copilot", None)
+if _hdr is not None and all(_b is not None and _hdr.indexOf(_b) != -1
+                            for _b in (_swb, _mtb, _acb)):
+    check(_hdr.indexOf(_swb) < _hdr.indexOf(_mtb) < _hdr.indexOf(_acb),
+          "顶部栏: 模型训练助手位于「切换用户」右侧、AI助手左侧（布局顺序）")
 else:
-    check(False, "顶部栏: 找不到两个按钮在 _header_layout 中的索引")
+    check(False, "顶部栏: 找不到三个按钮在 _header_layout 中的索引")
 
 # 调试界面相机卡片标题栏不得再有「AI助手」按钮（入口已删除，仅保留顶部栏与左侧导航）
 from PyQt6.QtWidgets import QPushButton as _QPushButton2
@@ -3361,6 +3427,467 @@ _ss2 = _SS()
 check(any(_l.text() == "开发：ZY.SHAW" for _l in _ss2.findChildren(_QLabel)),
       "Splash: 显示「开发：ZY.SHAW」信息")
 _ss2.close()
+
+# ============ 新需求：权限配置按「模块 / 功能」拆解细化 ============
+from user_manager import (
+    CATEGORIES as _PCATS, PERMISSIONS as _PP, PERMISSION_GROUPS as _PGRP,
+    PERMISSION_MODULE as _PMOD, permission_rows as _prows,
+    NAV_PERMISSION_KEY as _NPK, DEFAULT_CATEGORY_PERMISSIONS as _PDEF,
+)
+check(len(_PGRP) == 12 and len(_PP) == 55,
+      f"权限细化: 12 个模块 / 55 项功能（实际 {len(_PGRP)} / {len(_PP)}）")
+check(set(_PMOD) == set(_PP), "权限细化: 每项功能都归属一个模块")
+_pkeys = [k for _g, _items in _PGRP for k, _l in _items]
+check(len(_pkeys) == len(set(_pkeys)), "权限细化: 权限 key 无重复")
+check({"create_product", "manage_product", "start_stop", "camera_debug",
+       "camera_calibration", "image_save", "user_manage", "perm_config",
+       "device_code", "device_software_name"} <= set(_PP),
+      "权限细化: 原 10 项权限 key 全部保留（兼容旧配置）")
+check("user_center" in _PP and _PP["user_center"] == "用户中心",
+      "权限细化: 新增「用户中心」入口权限")
+_prows_v = _prows()
+check(sum(1 for _k, _p, _l in _prows_v if _k == "group") == len(_PGRP)
+      and sum(1 for _k, _p, _l in _prows_v if _k == "perm") == len(_PP),
+      "权限细化: 配置界面行序列 = 模块标题行 + 全部功能行")
+check(set(_NPK) == {k for k, *_ in _app.FUNC_NAV_ITEMS},
+      "权限细化: 每个左侧功能导航键都映射到权限项")
+for _c in _PCATS:
+    check(set(_PDEF[_c]) == set(_PP),
+          f"权限细化: {_c} 默认矩阵覆盖全部细化项")
+    check(_PDEF[_c]["image_save"] is True and _PDEF[_c]["user_center"] is True,
+          f"权限细化: {_c} 默认可进用户中心 / 可保存图片")
+check(all(_PDEF["超级管理员"].values()), "权限细化: 超级管理员默认全开")
+check(all(_PDEF[_c]["device_code"] is False for _c in _PCATS
+          if _c != "超级管理员"),
+      "权限细化: 「设备设置」默认仅超级管理员")
+
+# 运行期矩阵：规范化后无僵尸 key / 无缺项；旧 users.json 自动升级
+_pnow = _mw.user_manager.category_permissions
+check(all(set(_pnow[_c]) == set(_PP) for _c in _PCATS),
+      "权限细化: 运行期矩阵已完成旧配置迁移（补齐新增项、丢弃未知项）")
+check(all(_mw.user_manager.can(_mw.user_manager.get_user("admin"), _k)
+          for _k in _PP),
+      "权限细化: 超级管理员拥有全部细化权限")
+check(not _mw.user_manager.can(_mw.user_manager.get_user("operator01"),
+                               "no_such_perm"),
+      "权限细化: 未知权限 key 一律拒绝")
+check(not _mw.user_manager.can(_mw.user_manager.get_user("operator01"),
+                               "device_code"),
+      "权限细化: 普通用户无「设备设置」权限")
+
+# 导航显隐已改为由权限矩阵实时控制（不再是硬编码双轨）
+check("image_save" in _app.NAV_VISIBILITY["设备操作员"],
+      "权限细化: 派生导航可见性保持原口径（图片保存全角色可见）")
+
+# 权限配置界面：A 版弹窗与 B 版内嵌页均为分组表格 + 锁定超级管理员列
+from user_module import PermissionConfigDialog as _PCD, UserCenterDialogB as _UCB
+from PyQt6.QtWidgets import QTableWidget as _QTW
+_pcd = _PCD(_mw.user_manager)
+check(_pcd.table.rowCount() == len(_prows_v)
+      and _pcd.table.columnCount() == len(_PCATS),
+      "权限细化: A 版权限弹窗为分组表格（行数=标题行+功能行）")
+check(all(_pcd.table.columnSpan(r, 0) == len(_PCATS)
+          for r, (_k, _p, _l) in enumerate(_prows_v) if _k == "group"),
+      "权限细化: A 版弹窗模块标题行跨所有类别列")
+check(all(not _pcd.checks[("超级管理员", _k)].isEnabled() for _k in _PP),
+      "权限细化: A 版弹窗超级管理员整列锁定")
+check(all(not _pcd.checks[(_c, "device_code")].isEnabled() for _c in _PCATS),
+      "权限细化: A 版弹窗「设备设置」整行锁定")
+_pcd.close()
+_pucb = _UCB(_mw.user_manager, _mw.current_user)
+_ptbl = None
+for _i in range(_pucb._stack.count()):
+    for _cand in _pucb._stack.widget(_i).findChildren(_QTW):
+        if _cand.rowCount() == len(_prows_v) and _cand.columnCount() == len(_PCATS):
+            _ptbl = _cand
+            break
+    if _ptbl is not None:
+        break
+check(_ptbl is not None, "权限细化: B 版内嵌权限页为分组表格")
+check(len(_pucb._perm_checks) == len(_PP) * len(_PCATS),
+      "权限细化: B 版每个功能 × 每个类别都有勾选框")
+check(all(_pucb._perm_checks[("超级管理员", _k)].isChecked()
+          and not _pucb._perm_checks[("超级管理员", _k)].isEnabled()
+          for _k in _PP),
+      "权限细化: B 版超级管理员整列锁定且全勾选")
+_pucb.close()
+
+# ============ 新需求 1：模型训练助手（导航 + 权限项 + 独立进程启动） ============
+import model_training as _MT
+import permission_ui as _PU
+import user_module as _UMod
+from pathlib import Path as _Path
+from unittest.mock import patch as _patch
+from PyQt6.QtGui import QPixmap as _QPix, QPainter as _QPtr, QColor as _QClr
+
+check("model_training" in _PP and _PP["model_training"] == "模型训练助手",
+      "模型训练助手: 权限清单新增功能项")
+check(_PMOD.get("model_training") == "模型训练"
+      and "模型训练" in dict(_PGRP),
+      "模型训练助手: 权限配置新增「模型训练」模块")
+_mt_keys = [k for k, *_ in _app.FUNC_NAV_ITEMS]
+check(_mt_keys.index("model_training") + 1 == _mt_keys.index("ai_copilot"),
+      "模型训练助手: 位于 AI 助手左侧")
+check(_NPK.get("model_training") == "model_training"
+      and "model_training" in _mw._func_nav,
+      "模型训练助手: 导航键映射权限项且按钮已创建")
+check("model_training" in _app.NAV_VISIBILITY["设备技术员"]
+      and "model_training" in _app.NAV_VISIBILITY["设备管理员"]
+      and "model_training" not in _app.NAV_VISIBILITY["设备操作员"],
+      "模型训练助手: 默认授权技术员/管理员、操作员不可见")
+check(_app.OPEN_PERMISSION.get("_open_model_training") == "model_training",
+      "模型训练助手: 功能入口纳入权限守卫")
+
+# 独立进程启动：mock Popen 与配置目录，只观察启动参数，不真的启动外部软件
+_mt_dir = tempfile.mkdtemp(prefix="smoke_mt_")
+_mt_exe = os.path.join(_mt_dir, "fake_trainer.exe")
+open(_mt_exe, "w").close()
+_mt_call = {}
+
+
+def _mt_popen(argv, **kw):
+    _mt_call["argv"], _mt_call["kw"] = argv, kw
+    return object()
+
+
+with _patch.object(_MT, "base_dir", lambda: _Path(_mt_dir)), \
+        _patch.object(_MT.subprocess, "Popen", _mt_popen):
+    _MT.write_target(_mt_exe)
+    _mt_res = _MT.open_model_training(None)
+    check(_mt_res[0] is True and _mt_call["argv"][0] == _mt_exe,
+          "模型训练助手: 点击后以独立进程启动外部软件")
+    if sys.platform == "win32":
+        import subprocess as _sp
+        _mt_flags = _mt_call["kw"].get("creationflags", 0)
+        check(bool(_mt_flags & _sp.DETACHED_PROCESS)
+              and bool(_mt_flags & _sp.CREATE_NEW_PROCESS_GROUP),
+              "模型训练助手: DETACHED_PROCESS 分离，不影响本程序运行")
+    else:
+        check(_mt_call["kw"].get("start_new_session") is True,
+              "模型训练助手: POSIX 使用新会话分离")
+    check(_MT.resolve_target() is not None,
+          "模型训练助手: 目标程序路径可持久化复用")
+
+# ============ 新需求 3：8 路相机调试界面「十字显示」 ============
+check(len(_mw.debug_views) == 8, "十字显示: 8 路相机调试界面")
+for _dv in _mw.debug_views:
+    _tr = _dv._cams[0]._title_row
+    check(_tr.indexOf(_dv._btn_crosshair)
+          == _tr.indexOf(_dv._btn_photo_settings) + 1,
+          f"十字显示: {_dv.camera_name} 按钮紧邻「拍照设置」右侧")
+    check(_dv._btn_crosshair.isCheckable()
+          and _dv._btn_crosshair.text() == "十字显示",
+          f"十字显示: {_dv.camera_name} 为可切换功能按钮")
+    _dv._btn_crosshair.setChecked(True)
+    check(_dv._cams[0].screen.crosshair_visible() is True,
+          f"十字显示: {_dv.camera_name} 点击后画布开启十字线")
+    _dv._btn_crosshair.setChecked(False)
+    check(_dv._cams[0].screen.crosshair_visible() is False,
+          f"十字显示: {_dv.camera_name} 再次点击后关闭")
+check("_show_crosshair" in _inspect.getsource(_CamScreen.paintEvent)
+      and "_draw_crosshair" in _inspect.getsource(_CamScreen.paintEvent),
+      "十字显示: paintEvent 在图像之上叠加绘制十字线")
+
+# 实际渲染一次，验证十字线「中心居中 + 横竖贯穿」
+_cs = _CamScreen()
+_cs_pm = _QPix(120, 80)
+_cs_pm.fill(_QClr(0, 0, 0))
+_cs_p = _QPtr(_cs_pm)
+_cs._draw_crosshair(_cs_p, _cs_pm.rect())
+_cs_p.end()
+_cs_img = _cs_pm.toImage()
+_bgc = _QClr(0, 0, 0)
+_hrow = sum(1 for x in range(120) if _cs_img.pixelColor(x, 40) != _bgc)
+_vcol = sum(1 for y in range(80) if _cs_img.pixelColor(60, y) != _bgc)
+_offrow = sum(1 for x in range(120) if _cs_img.pixelColor(x, 10) != _bgc)
+check(_hrow >= 110 and _vcol >= 70,
+      f"十字显示: 中心横线/竖线贯穿画布（{_hrow}/{_vcol} 像素）")
+check(_offrow <= 4,
+      f"十字显示: 非中心行无横线，交点居中（实际 {_offrow} 像素）")
+
+# ============ 新需求 2：按登录用户权限隐藏无权限的按钮 / 页面 / 窗口 / 内容 ============
+_bw = _PU.bound_widgets(_mw)
+check(len(_bw) >= 20, f"权限显隐: 受权限控制的控件覆盖全界面（{len(_bw)} 个）")
+check(_PU.perm_key_of(_mw.btn_new) == "create_product"
+      and _PU.perm_key_of(_mw.btn_ai_copilot) == "ai_copilot"
+      and _PU.perm_key_of(_mw.production.panels[3]) == "production_report"
+      and _PU.perm_key_of(_mw.production.panels[4]) == "log_manage",
+      "权限显隐: 顶部按钮与生产界面内容均已绑定权限项")
+check(getattr(_mw, "btn_model_training", None) is not None
+      and _PU.perm_key_of(_mw.btn_model_training) == "model_training",
+      "权限显隐: 顶部模型训练助手快捷按钮绑定 model_training 权限")
+check(_PU.perm_key_of(_mw.debug_views[0]._btn_crosshair) == "camera_debug"
+      and _PU.perm_key_of(_mw.debug_views[0].stats_card) == "production_report"
+      and _PU.perm_key_of(_mw.debug_views[0]._calib_btn) == "camera_calibration",
+      "权限显隐: 调试界面按钮与内容均已绑定权限项")
+check("PERMISSION_DIALOG_ATTRS" in _inspect.getsource(_app.MainWindow._apply_permissions)
+      and "dlg.hide()" in _inspect.getsource(_app.MainWindow._apply_permissions),
+      "权限显隐: 已打开但权限被撤销的窗口立即隐藏")
+check("add_permission_listener" in _inspect.getsource(_UMod.UserCenterDialogA)
+      and "add_permission_listener" in _inspect.getsource(_UCB),
+      "权限显隐: 用户中心 A/B 版注册权限变更监听，保存后即时刷新")
+
+# 观察者机制：权限矩阵真正变化才广播，且可持久化保存 + 可注销
+_lst_um = _UM(path=os.path.join(_TMP_CFG_DIR, "listener.json"))
+_lst_hits = []
+_lst_cb = lambda: _lst_hits.append(1)
+_lst_um.add_permission_listener(_lst_cb)
+_lst_um.add_permission_listener(_lst_cb)
+check(len(_lst_um._permission_listeners) == 1,
+      "权限显隐: 权限变更监听重复注册会去重")
+_lst_um.category_permissions["设备操作员"]["ai_copilot"] = True
+_lst_um.save()
+check(len(_lst_hits) == 1, "权限显隐: 权限配置修改并保存后触发一次广播")
+_lst_um.save()
+check(len(_lst_hits) == 1, "权限显隐: 无关写盘不重复广播")
+_lst_um.remove_permission_listener(_lst_cb)
+check(not _lst_um._permission_listeners, "权限显隐: 监听可注销，界面关闭不泄漏")
+
+_adm_u = _mw.user_manager.get_user("admin")
+_op_u = _mw.user_manager.get_user("operator01")
+_orig_u = _mw.current_user
+_mw._deny = lambda: None          # 离屏环境下屏蔽模态提示，避免 exec() 阻塞
+_mw._set_current_user(_adm_u)
+# 注：主窗口在回归中段已 hide()，此时子控件 isVisible() 恒为 False；
+# 统一用 isHidden() 判断「是否被权限显式隐藏」，不受祖先窗口显示状态影响。
+check(not _mw.btn_new.isHidden() and not _mw.btn_ai_copilot.isHidden()
+      and not _mw.btn_model_training.isHidden()
+      and all(not b.isHidden() for b in _mw._func_nav.values()),
+      "权限显隐: 超级管理员可见全部按钮与导航")
+_mw._set_current_user(_op_u)
+check(_mw.btn_new.isHidden() and _mw.btn_ai_copilot.isHidden(),
+      "权限显隐: 无权限按钮隐藏")
+check(_mw.btn_model_training.isHidden() == (not _mw._can("model_training")),
+      "权限显隐: 顶部模型训练助手快捷按钮按登录用户权限显隐")
+check(_mw._func_nav["model_training"].isHidden()
+      and _mw._func_nav["ai_copilot"].isHidden(),
+      "权限显隐: 无权限导航隐藏")
+check(not _mw.btn_start.isHidden(), "权限显隐: 有权限按钮保持显示")
+check((not _mw.production.panels[3].isHidden()) == _mw._can("production_report")
+      and (not _mw.production.panels[4].isHidden()) == _mw._can("log_manage"),
+      "权限显隐: 生产界面统计/日志内容可见性 == 当前用户权限")
+check((not _mw.debug_views[0].stats_card.isHidden()) == _mw._can("production_report")
+      and (not _mw.debug_views[0]._run_log.isHidden()) == _mw._can("log_manage"),
+      "权限显隐: 调试界面统计/日志内容可见性 == 当前用户权限")
+_ttabs = getattr(_mw.debug_views[0], "_target_tabs", None)
+check(_ttabs is not None
+      and _ttabs.isTabVisible(0) == _mw._can("flow_design")
+      and _ttabs.isTabVisible(2) == _mw._can("element_find"),
+      "权限显隐: 调试界面页签按细分权限显隐（QTabWidget.setTabVisible）")
+
+# 功能入口守卫：无权限调用被拦截，有权限放行
+_guard_hits = []
+with _patch.object(_MT, "open_model_training",
+                   lambda *a, **k: _guard_hits.append(1)):
+    _mw._set_current_user(_op_u)
+    _mw._open_model_training()
+    check(_guard_hits == [], "权限显隐: 无模型训练权限时入口被守卫拦截")
+    _mw._set_current_user(_adm_u)
+    _mw._open_model_training()
+    check(_guard_hits == [1], "权限显隐: 有模型训练权限时入口正常放行")
+    _mw.btn_model_training.click()
+    check(_guard_hits == [1, 1],
+          "模型训练助手: 顶部快捷按钮点击后经同一守卫启动外部软件")
+
+# 权限配置保存后无需切换用户/重开窗口即刷新；调试页同时有入口硬拦截
+_saved_path = _mw.user_manager.path
+_saved_matrix = {c: dict(p)
+                 for c, p in _mw.user_manager.category_permissions.items()}
+_mw.user_manager.path = _Path(_TMP_CFG_DIR) / "perm_broadcast.json"
+try:
+    _mw._set_current_user(_op_u)
+    _mw.user_manager.category_permissions["设备操作员"]["create_product"] = True
+    _mw.user_manager.save()
+    check(not _mw.btn_new.isHidden(),
+          "权限显隐: 权限配置保存并广播 → 新建产品立即显示")
+    _mw.user_manager.category_permissions["设备操作员"]["create_product"] = False
+    _mw.user_manager.save()
+    check(_mw.btn_new.isHidden(),
+          "权限显隐: 权限撤销保存 → 新建产品立即隐藏")
+    _mw._set_current_user(_adm_u)
+    _mw.switch_page(3)
+    check(_mw.stack.currentIndex() == 3,
+          "权限显隐: 有权限可进入相机调试页")
+    _mw._set_current_user(_op_u)
+    _mw.user_manager.category_permissions["设备操作员"]["camera_debug"] = False
+    _mw.user_manager.save()
+    check(_mw.stack.currentIndex() == 0,
+          "权限显隐: 调试权限被撤销时自动退回生产运行页")
+    _mw.switch_page(2)
+    check(_mw.stack.currentIndex() == 0,
+          "权限显隐: 无权限 switch_page 硬拦截调试页")
+finally:
+    _mw.user_manager.category_permissions.clear()
+    _mw.user_manager.category_permissions.update(_saved_matrix)
+    _mw.user_manager.path = _saved_path
+    _mw.user_manager._last_perm_snapshot = _mw.user_manager._perm_snapshot()
+    _mw._set_current_user(_orig_u)
+    if "_deny" in getattr(_mw, "__dict__", {}):
+        delattr(_mw, "_deny")
+
+# ============ 新需求：报警设置 / 设备设置 / 生产运行 / 相机调试 权限细分 ============
+from user_manager import (
+    ALARM_TAB_PERMISSIONS as _ATP, DEVICE_TAB_PERMISSIONS as _DTP,
+    DETECT_LIST_PERMISSIONS as _DLP, TARGET_TAB_PERMISSIONS as _TTP,
+)
+
+# 1) 报警设置：按 5 个子页面标题拆分
+check([_PP[k] for k in _ATP] == ["料盒满料停机", "电磁阀寿命",
+                                 "速度 / 良率", "其他报警功能", "报警方案配置"],
+      "报警设置细分: 5 个权限项标签与子页面标题逐一对应")
+check(_PMOD["alarm_settings"] == "报警设置"
+      and all(_PMOD[k] == "报警设置" for k in _ATP),
+      "报警设置细分: 入口 + 5 个子页同属「报警设置」模块")
+_asd = _ad.AlarmSettingsDialog(_mw, is_super_admin=True)
+_mw._bind_tab_permissions(_asd, _ATP)
+check(_asd.tabs.count() == len(_ATP)
+      and all(_PU.perm_key_of(_asd.tabs.widget(i)) == k
+              for i, k in enumerate(_ATP)),
+      "报警设置细分: 每个子页绑定对应权限项")
+check(all(_asd.tabs.isTabVisible(i) == _mw._can(k)
+          for i, k in enumerate(_ATP)),
+      "报警设置细分: 子页显隐 == 该子页权限")
+_asd.close()
+
+# 2) 设备设置：按 4 个子页面标题拆分
+check([_PP[k] for k in _DTP] == ["DD马达", "振动盘", "高压静电", "负压"],
+      "设备设置细分: 4 个权限项标签与子页面标题逐一对应")
+check(_PMOD["run_settings"] == "设备设置"
+      and all(_PMOD[k] == "设备设置" for k in _DTP),
+      "设备设置细分: 入口 + 4 个子页同属「设备设置」模块")
+_dsd2 = _DSD(_mw)
+_mw._bind_tab_permissions(_dsd2, _DTP)
+check(_dsd2.tabs.count() == len(_DTP)
+      and all(_PU.perm_key_of(_dsd2.tabs.widget(i)) == k
+              for i, k in enumerate(_DTP)),
+      "设备设置细分: 每个子页绑定对应权限项")
+check(all(_dsd2.tabs.isTabVisible(i) == _mw._can(k)
+          for i, k in enumerate(_DTP)),
+      "设备设置细分: 子页显隐 == 该子页权限")
+_dsd2.close()
+
+# 3) 生产运行：三项功能归属该模块并各自独立授权
+check(all(_PMOD[k] == "生产运行" for k in
+          ("simulate_production", "glass_clean", "jog_debug")),
+      "生产运行细分: 模拟生产 / 玻璃清洁 / 点动调试归属「生产运行」模块")
+_pv = _mw.production
+check(_PU.perm_key_of(_pv._btn_simulate) == "simulate_production"
+      and _PU.perm_key_of(_pv._btn_jog) == "jog_debug"
+      and _PU.perm_key_of(_pv._btn_glass_clean) == "glass_clean",
+      "生产运行细分: 三个按钮各自独立绑定（玻璃清洁已纳入权限控制）")
+check(all(_PDEF[_c]["glass_clean"] is True for _c in _PCATS),
+      "生产运行细分: 玻璃清洁拆分前一直可见，默认全角色可用")
+
+# 4) 相机调试：8 项细分 + 检测列表 7 项再细分
+check(all(_PMOD[k] == "相机与图像" for k in
+          ("camera_work_mode", "flow_design", "target_search",
+           "element_find", "image_effect", "detect_list")),
+      "相机调试细分: 6 个新功能项归属「相机与图像」模块")
+check([_PP[k] for k in _TTP] == ["检测流程设计", "产品目标检索",
+                                 "计算元素精确查找", "图像效果调节"],
+      "相机调试细分: 4 个目标页签权限标签与功能名对应")
+check(len(_DLP) == 7 and all(_PMOD[k] == "检测列表设置" for k in _DLP),
+      "检测列表细分: 7 个操作归属独立「检测列表设置」模块")
+check([_PP[k] for k in _DLP] == ["设置为默认", "恢复至默认", "恢复至出厂",
+                                 "单位设置", "出料设置", "全部同步",
+                                 "规格自动调整"],
+      "检测列表细分: 7 个权限项标签与工具条按钮提示逐一对应")
+_dv0 = _mw.debug_views[0]
+check(_PU.perm_key_of(_dv0._mode_label) == "camera_work_mode"
+      and _PU.perm_key_of(_dv0._trigger_mode) == "camera_work_mode",
+      "相机调试细分: 工作模式标签 + 下拉绑定 camera_work_mode")
+check(_PU.perm_key_of(_dv0._btn_photo_settings) == "photo_settings"
+      and _PU.perm_key_of(_dv0._calib_btn) == "camera_calibration",
+      "相机调试细分: 拍照设置 / 相机标定沿用独立权限项")
+check(all(_PU.perm_key_of(_dv0._target_tabs.widget(i)) == k
+          for i, k in enumerate(_TTP)),
+      "相机调试细分: 4 个目标页签各自独立绑定")
+check(all(_dv0._target_tabs.isTabVisible(i) == _mw._can(k)
+          for i, k in enumerate(_TTP)),
+      "相机调试细分: 页签显隐 == 对应细分权限")
+check(_PU.perm_key_of(_dv0._tb_hint) == "detect_list"
+      and all(_PU.perm_key_of(b) == "detect_list+" + k
+              for b, k in zip(_dv0._toolbar_buttons, _DLP)),
+      "检测列表细分: 父权限 + 7 个子操作组合绑定")
+check(all((not b.isHidden()) == (_mw._can("detect_list") and _mw._can(k))
+          for b, k in zip(_dv0._toolbar_buttons, _DLP)),
+      "检测列表细分: 按钮显隐 == 父权限 AND 子权限")
+
+# 检测项列表按 8 个列头细分权限（标称值 / 补偿值 / 规格下限 / 规格上限 /
+# 单位 / 收料位置 / 检测项操作 / 良率预警设置）：列始终可见，无权限时只读
+from user_manager import DETECT_COL_PERMISSIONS as _DCP
+from PyQt6.QtCore import Qt as _Qt
+check([_PP[k] for _h, k in _DCP] == [_h for _h, _k in _DCP],
+      "检测项列表细分: 8 个列头权限标签与列头名逐一对应")
+check(all(_PMOD[k] == "检测项列表" for _h, k in _DCP),
+      "检测项列表细分: 8 个列头权限归属独立「检测项列表」模块")
+_dtbl = _dv0._table
+_hdrs = [_dtbl.horizontalHeaderItem(i).text()
+         for i in range(_dtbl.columnCount())]
+# 列级权限不再隐藏列，8 个列头始终可见（与「无权限也显示、仅不让编辑」一致）
+check(all(not _dtbl.isColumnHidden(_hdrs.index(_h)) for _h, _k in _DCP),
+      "检测项列表细分: 8 个列头始终可见（无权限也显示）")
+# 控件级权限回调与登录用户权限一致
+check(_dv0._col_can is not None
+      and all(_dv0._col_can(_k) == _mw._can(_k) for _h, _k in _DCP),
+      "检测项列表细分: 列权限回调与登录用户权限一致")
+# 默认（超级管理员）下文本列可编辑
+_TEXT_COLS = {"标称值", "补偿值", "规格下限", "规格上限", "收料位置"}
+check(all(bool(_dtbl.item(0, _hdrs.index(_h)).flags()
+               & _Qt.ItemFlag.ItemIsEditable)
+          for _h in _TEXT_COLS),
+      "检测项列表细分: 有权限时文本列可编辑")
+# 撤销某项列权限后：该列仍可见但文本只读（点击编辑的「无权限」提示由运行期交互触发）
+_orig_can = _dv0._col_can
+_dv0._apply_col_permissions(
+    lambda k, _o=_orig_can: _o(k) if k != "dcol_nominal" else False)
+_c_nom = _hdrs.index("标称值")
+check(not _dtbl.isColumnHidden(_c_nom),
+      "检测项列表细分: 撤销标称值权限后该列仍可见")
+check(not bool(_dtbl.item(0, _c_nom).flags() & _Qt.ItemFlag.ItemIsEditable),
+      "检测项列表细分: 撤销标称值权限后该列文本只读")
+_dv0._apply_col_permissions(_orig_can)
+check(bool(_dtbl.item(0, _c_nom).flags() & _Qt.ItemFlag.ItemIsEditable),
+      "检测项列表细分: 恢复权限后文本列恢复可编辑")
+check(all(_PDEF[_c][_k] == _PDEF[_c]["camera_debug"]
+          for _c in _PCATS for _h, _k in _DCP),
+      "权限细分兼容: 列头权限默认继承相机调试权限")
+
+# 细分项默认授权继承拆分前绑定的原权限，保证细化不改变既有角色可见性
+for _c in _PCATS:
+    check(all(_PDEF[_c][k] == _PDEF[_c]["alarm_settings"] for k in _ATP),
+          f"权限细分兼容: {_c} 报警子页默认继承入口权限")
+    check(all(_PDEF[_c][k] == _PDEF[_c]["run_settings"] for k in _DTP),
+          f"权限细分兼容: {_c} 设备子页默认继承入口权限")
+    check(all(_PDEF[_c][k] == _PDEF[_c]["camera_debug"] for k in _DLP),
+          f"权限细分兼容: {_c} 检测列表子项默认继承相机调试权限")
+check(_PDEF["设备工程师"]["element_find"]
+      == _PDEF["设备工程师"]["camera_calibration"],
+      "权限细分兼容: 计算元素精确查找默认继承相机标定权限")
+check(_PDEF["设备工程师"]["simulate_production"]
+      == _PDEF["设备工程师"]["run_settings"],
+      "权限细分兼容: 模拟生产默认继承运行设置权限")
+
+# 「模拟生产」按钮文案状态机：未运行/模拟生产中/模拟生产结束/正常生产中
+_pv = _mw.production
+_orig_sim, _orig_play = _pv._sim_run, _pv._playing
+_pv._sim_run, _pv._playing = True, True
+_pv._refresh_simulate_btn_label()
+check(_pv._btn_simulate.text() == "模拟生产中",
+      "模拟生产按钮: 模拟生产运行中显示「模拟生产中」")
+_pv._on_sim_end_timeout()
+check(_pv._btn_simulate.text() == "模拟生产结束",
+      "模拟生产按钮: 批次完成后转「模拟生产结束」")
+_pv._sim_run = False
+_pv._refresh_simulate_btn_label()
+check(_pv._btn_simulate.text() == "正常生产中",
+      "模拟生产按钮: 正常生产显示「正常生产中」")
+_pv._playing = False
+_pv._refresh_simulate_btn_label()
+check(_pv._btn_simulate.text() == "模拟生产",
+      "模拟生产按钮: 停止/未运行时恢复默认「模拟生产」")
+_pv._sim_run, _pv._playing = _orig_sim, _orig_play
+_pv._refresh_simulate_btn_label()
 
 # ============ 收尾：确认未污染 src/ 下的工程配置（写盘已重定向到临时目录） ============
 check(all((open(_p, "rb").read() if os.path.exists(_p) else None) == _o

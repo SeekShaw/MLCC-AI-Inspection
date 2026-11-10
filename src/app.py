@@ -18,7 +18,11 @@ from production_view import ProductionView, CAMERA_NAMES
 from debug_view import DebugView
 from new_product_dialog import NewProductDialog
 from product_manager_dialog import ProductManagerDialog, _make_template_products
-from user_manager import UserManager
+from user_manager import (
+    UserManager, CATEGORIES, DEFAULT_CATEGORY_PERMISSIONS,
+    NAV_PERMISSION_KEY, ALARM_TAB_PERMISSIONS, DEVICE_TAB_PERMISSIONS,
+)
+from permission_ui import bind, apply_permissions
 from device_settings_dialog import (
     DeviceSettingsDialog, TriggerSettingsDialog, RejectSettingsDialog,
 )
@@ -222,6 +226,7 @@ FUNC_NAV_ITEMS = [
     ("sort_settings", "🗑️", "分选设置", "_open_reject_settings"),
     ("alarm_settings", "🔔", "报警设置", "_open_alarm_settings"),
     ("advanced_settings", "🧩", "高级设置", "_open_advanced_settings"),
+    ("model_training", "🧠", "模型训练助手", "_open_model_training"),
     ("ai_copilot", "🤖", "AI助手", "_open_ai_copilot"),
     ("production_report", "📊", "生产报表", "_open_production_report"),
     ("log_manage", "📝", "日志管理", "_open_log_manager"),
@@ -229,16 +234,15 @@ FUNC_NAV_ITEMS = [
     ("user_manage", "👤", "用户管理", "_open_user_center"),
 ]
 
-# 各用户类别可见的「功能按钮」key 集合（不在集合内的按钮隐藏）
+# 各用户类别默认可见的「功能按钮」key 集合。
+# 由权限矩阵的出厂默认值派生（单一事实源见 user_manager.DEFAULT_CATEGORY_PERMISSIONS）：
+# 运行期实际可见性以用户在「权限配置」中保存的矩阵为准，见 _is_allowed()。
 NAV_VISIBILITY = {
-    "超级管理员": {k for k, *_ in FUNC_NAV_ITEMS},
-    "设备管理员": {"production_report", "log_manage", "image_save", "user_manage", "ai_copilot"},
-    "设备工程师": {"alarm_settings", "production_report", "log_manage", "image_save",
-                   "user_manage", "photo_settings", "sort_settings",
-                   "box_monitor", "run_settings", "ai_copilot"},
-    "设备技术员": {"alarm_settings", "production_report", "log_manage", "image_save",
-                   "user_manage", "photo_settings", "sort_settings", "ai_copilot"},
-    "设备操作员": {"alarm_settings", "production_report", "log_manage", "image_save", "user_manage"},
+    cat: {
+        nav_key for nav_key, perm_key in NAV_PERMISSION_KEY.items()
+        if DEFAULT_CATEGORY_PERMISSIONS[cat].get(perm_key, False)
+    }
+    for cat in CATEGORIES
 }
 
 
@@ -248,6 +252,54 @@ HEADER_PERM = {
     "manage": "manage_product",
     "start": "start_stop",
     "stop": "start_stop",
+}
+
+# ---------------------------------------------------------------------------
+# 界面可见性单一事实源：登录用户没有权限的按钮 / 页面 / 窗口 / 内容全部隐藏。
+# 键 = MainWindow 属性名，值 = 权限项 key。由 _bind_permission_ui() 统一打标记，
+# _apply_permissions() 一次递归刷新，登录 / 切换用户 / 权限配置保存三条路径共用。
+# ---------------------------------------------------------------------------
+UI_PERMISSION_MAP = {
+    "btn_new": "create_product",
+    "btn_manage": "manage_product",
+    "btn_start": "start_stop",
+    "btn_stop": "start_stop",
+    "btn_ai_copilot": "ai_copilot",
+    "btn_model_training": "model_training",
+    "lbl_defect_view": "image_save",
+    "btn_img_filter": "image_save",
+}
+
+# 各功能窗口打开入口所需权限（堵住顶部按钮 / 卡片导出 / 日志详情等绕过路径）
+OPEN_PERMISSION = {
+    "_open_system_config": "sys_config",
+    "_open_box_monitor": "box_monitor",
+    "_open_device_settings": "run_settings",
+    "_open_trigger_settings": "photo_settings",
+    "_open_reject_settings": "sort_settings",
+    "_open_alarm_settings": "alarm_settings",
+    "_open_advanced_settings": "advanced_settings",
+    "_open_model_training": "model_training",
+    "_open_ai_copilot": "ai_copilot",
+    "_open_production_report": "production_report",
+    "_open_log_manager": "log_manage",
+    "_open_image_save": "image_save",
+    "_open_defect_images": "image_save",
+    "_open_user_center": "user_center",
+    "_open_new_product": "create_product",
+    "_open_manage_product": "manage_product",
+}
+
+# 已打开的非模态窗口属性 -> 权限项；权限被撤销时立即关闭
+PERMISSION_DIALOG_ATTRS = {
+    "_dlg_copilot": "ai_copilot",
+    "_dlg_log": "log_manage",
+    "_dlg_img_save": "image_save",
+    "_dlg_box": "box_monitor",
+    "_dlg_device": "run_settings",
+    "_dlg_trigger": "photo_settings",
+    "_dlg_reject": "sort_settings",
+    "_defect_image_window": "image_save",
 }
 
 
@@ -342,6 +394,10 @@ class MainWindow(QMainWindow):
         self.user_manager = UserManager()
         self.current_user, self.default_login_username = \
             resolve_startup_user(self.user_manager)
+        # 所有功能窗口入口统一加权限守卫（在按钮绑定信号之前安装）
+        self._install_permission_guards()
+        # 权限配置保存后即时刷新主界面（登录/切换用户走 _set_current_user）
+        self.user_manager.add_permission_listener(self._apply_permissions)
         self._splash(22, "正在加载用户与产品配置…")
         self._playing = False
         # 高级设置（会话级开关，存于主窗口）；开机自启动 / 抽盒剔除逻辑 / 密码确认周期为持久化项
@@ -510,14 +566,31 @@ class MainWindow(QMainWindow):
         self.btn_switch_user = QPushButton("切换用户")
         self.btn_switch_user.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_switch_user.clicked.connect(self._switch_user)
-        self._style_switch_user_btn()
         header_layout.addWidget(self.btn_switch_user)
 
-        # 「切换用户」右侧：AI助手入口（打开视觉助手对话窗，与左侧导航同一功能）
-        self.btn_ai_copilot = QPushButton("🤖 AI助手")
+        # 「切换用户」右侧：模型训练助手快捷入口，紧邻 AI助手 左侧。
+        # 仅保留图标，功能文字改为 toolTip 悬浮显示；与左侧导航同一功能，
+        # 共用 _open_model_training 及其权限守卫。
+        self.btn_model_training = QPushButton("🧠")
+        self.btn_model_training.setToolTip("模型训练助手")
+        self.btn_model_training.setCursor(Qt.CursorShape.PointingHandCursor)
+        # clicked 信号会携带 checked 参数，而权限守卫包装后的入口不接受该参数，
+        # 必须用 lambda 丢弃，否则点击会抛 TypeError；AI助手 同理（避免把 False
+        # 误当作 image 参数传入对话窗）。左侧导航按钮已是同样的处理方式。
+        self.btn_model_training.clicked.connect(
+            lambda _checked=False: self._open_model_training())
+        header_layout.addWidget(self.btn_model_training)
+
+        # 最右侧：AI助手入口（仅保留图标，功能文字改为 toolTip 悬浮显示）
+        self.btn_ai_copilot = QPushButton("🤖")
+        self.btn_ai_copilot.setToolTip("AI助手")
         self.btn_ai_copilot.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.btn_ai_copilot.clicked.connect(self._open_ai_copilot)
+        self.btn_ai_copilot.clicked.connect(
+            lambda _checked=False: self._open_ai_copilot())
         header_layout.addWidget(self.btn_ai_copilot)
+
+        # 三个按钮全部创建后再统一套样式（构造早期调用时后两个尚未存在）
+        self._style_switch_user_btn()
 
         content.addWidget(header)
 
@@ -628,14 +701,17 @@ class MainWindow(QMainWindow):
         self.lbl_defect_view.setStyleSheet(
             f"color: {COLORS['text_secondary']}; font-size: 11px;")
         self.lbl_defect_view.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.lbl_defect_view.setToolTip("查看所有工位最新的 50 张缺陷图")
+        self.lbl_defect_view.setToolTip("查看各工位缓存的图像（可按显示方式、工位筛选）")
         self.lbl_defect_view.mousePressEvent = lambda e: self._open_defect_images()
         footer_layout.addWidget(self.lbl_defect_view)
         self._placeholders.append(self.lbl_defect_view)
-        # 「显示所有图像」下拉：选择项（单选）——显示所有图像 / 仅显示不良品图像 / 仅显示良品图像
-        # 点击向上展开选择项；默认显示「显示所有图像」，选中后按钮文本即显示为当前选择。
+        # 「显示所有图像」下拉：选择项（单选）——显示所有图像 / 显示OK图像 / 显示非OK图像 /
+        # 显示NG图像 / 显示NG1图像 / 显示NG2图像 / 显示RST图像（OK/NG1/NG2/RST 对应剔除口判定结果）。
+        # 「非OK」= 除 OK 外的全部判定（NG1+NG2+RST）；点击向上展开选择项；
+        # 默认显示「显示所有图像」，选中后按钮文本即显示为当前选择。
         self.btn_img_filter = self._make_footer_dropdown(
-            ["显示所有图像", "仅显示不良品图像", "仅显示良品图像"],
+            ["显示所有图像", "显示OK图像", "显示非OK图像", "显示NG图像",
+             "显示NG1图像", "显示NG2图像", "显示RST图像"],
             "显示所有图像", self._on_img_filter_selected)
         footer_layout.addWidget(self.btn_img_filter)
         self._placeholders.append(self.btn_img_filter)
@@ -698,9 +774,10 @@ class MainWindow(QMainWindow):
         main_layout.addLayout(content, 1)
 
         self._splash(92, "正在加载界面组件…")
+        self._bind_permission_ui()  # 所有控件创建完成后统一打权限标记
         self.switch_page(0)
         self._update_button_states(False)  # 初始：启动绿色（可点）、停止常规灰
-        self._apply_permissions()  # 按当前用户权限门控各功能入口
+        self._apply_permissions()  # 按当前用户权限统一刷新全部页面/窗口/内容
         self.production.set_scan_locked(False)  # 初始未运行：料号/批号可录入、扫码按钮可用
         register_restyle(self._restyle_self)
         self._splash(98, "正在准备启动…")
@@ -832,35 +909,98 @@ class MainWindow(QMainWindow):
             self.lbl_user_footer.setText(
                 f"当前用户：{self._display_user_name(u)}" if u else "当前用户：未登录")
 
-    def _apply_permissions(self):
-        """按当前登录用户的权限门控各功能入口。
+    def _can(self, perm_key):
+        """当前登录用户是否拥有某权限（统一判定入口）。"""
+        return self.user_manager.can(self.current_user, perm_key)
 
-        左侧「功能按钮」（FUNC_NAV_ITEMS）：按当前用户对该功能的操作权限显隐——
-        无权限则不显示，有权限才显示（可见集合见 NAV_VISIBILITY）。
-        顶部操作按钮（新建/管理/启动/停止）保持可见可点，无权限时点击弹窗提示
-        「当前用户无操作权限，请联系厂商开通或切换账号登录」（见 _guarded*）。
-        仅保留与「生产运行」状态强相关的禁用（运行中不可管理、未运行不可停止）。
+    def _bind_permission_ui(self):
+        """给所有受权限控制的界面元素打标记（控件创建完成后调用一次）。
+
+        生产 / 调试界面是 QStackedWidget 的页面，页面内已绑定的控件由
+        apply_permissions 递归刷新，无需在每个页面里重复写刷新逻辑。
         """
-        # 新建产品：始终可点，无权限时由点击拦截弹窗
-        self.btn_new.setEnabled(True)
-        # 「管理产品」运行中强制禁用（底色变灰）；停止后按权限保持可点（无权限点击弹窗）
-        if self._playing:
-            self.btn_manage.setEnabled(False)
-            self.btn_manage.setStyleSheet(self._manage_style(True))
-        else:
-            self.btn_manage.setEnabled(True)
-            self.btn_manage.setStyleSheet(self._manage_style(False))
-        # 启动/停止：始终可点，无权限时点击拦截弹窗
-        self.btn_start.setEnabled(True)
-        self.btn_stop.setEnabled(getattr(self, "_playing", False))
-        # 相机调试入口：始终可点，无权限时由 _guarded_switch 拦截弹窗
-        for i in range(len(CAMERA_NAMES)):
-            idx = getattr(self, "cam_start", 1) + i
-            if 0 <= idx < len(self.nav_buttons):
-                self.nav_buttons[idx].setEnabled(True)
-        # 左侧功能按钮：按当前用户对该功能的操作权限显隐（无权限隐藏、有权限显示）
+        for attr, perm in UI_PERMISSION_MAP.items():
+            bind(getattr(self, attr, None), perm)
+        pv = getattr(self, "production", None)
+        if pv is not None and hasattr(pv, "bind_permission_ui"):
+            pv.permission_check = self._can   # 卡片导出 / 日志详情等绕过入口
+            pv.bind_permission_ui()
+        for dv in getattr(self, "debug_views", []):
+            if hasattr(dv, "bind_permission_ui"):
+                dv.bind_permission_ui()
+
+    def _install_permission_guards(self):
+        """给所有 _open_* 入口加权限守卫，堵住顶部按钮 / 卡片导出等绕过路径。"""
+        for name, perm in OPEN_PERMISSION.items():
+            fn = getattr(self, name, None)
+            if fn is None:
+                continue
+
+            def _make(orig, key):
+                def guarded(*args, **kwargs):
+                    if not self._can(key):
+                        self._deny()
+                        return None
+                    return orig(*args, **kwargs)
+                return guarded
+            setattr(self, name, _make(fn, perm))
+
+    def _apply_permissions(self):
+        """统一刷新全部按钮 / 页面 / 窗口 / 内容的可见性。
+
+        可见性只由当前登录用户的权限矩阵决定（UserManager.can）。
+        登录、切换用户、权限配置保存三条路径共用本入口，权限配置一旦保存
+        会由 UserManager 广播即时刷新，无需关闭用户中心。
+        """
+        apply_permissions(self, self._can)
+
+        # 检测项列表「按列头细分权限」：整列只读/编辑拦截随权限刷新；
+        # 同时重贴合可见调试页的检测表列头覆盖按钮（全开/全关、是否检测下拉）。
+        for _dv in getattr(self, "debug_views", []):
+            _fn = getattr(_dv, "_apply_col_permissions", None)
+            if _fn is not None:
+                _fn(self._can)
+            if _dv.isVisible():
+                _dv._reposition_overlay_buttons()
+
+        # 左侧功能按钮：沿用导航键 -> 权限项映射（user_manage 打开的是用户中心）
         for key, btn in getattr(self, "_func_nav", {}).items():
             btn.setVisible(self._is_allowed(key))
+        # 左侧相机调试按钮：无 camera_debug 权限时连入口一起隐藏
+        cam_ok = self._can("camera_debug")
+        cam_start = getattr(self, "cam_start", 1)
+        for i in range(len(CAMERA_NAMES)):
+            idx = cam_start + i
+            if 0 <= idx < len(self.nav_buttons):
+                self.nav_buttons[idx].setVisible(cam_ok)
+        # 页面：正在调试页而权限已被撤销时，退回生产运行首页
+        stack = getattr(self, "stack", None)
+        if stack is not None and cam_start <= stack.currentIndex() < cam_start + len(CAMERA_NAMES) \
+                and not cam_ok:
+            self.switch_page(0)
+        # 已打开但权限被撤销的窗口立即隐藏
+        for attr, perm in PERMISSION_DIALOG_ATTRS.items():
+            dlg = getattr(self, attr, None)
+            if dlg is not None and not self._can(perm):
+                try:
+                    dlg.hide()
+                except Exception:
+                    pass
+
+        # 运行态相关的启用/禁用（仅对已显示的按钮有意义）
+        if getattr(self, "btn_new", None) is not None:
+            self.btn_new.setEnabled(True)
+        if getattr(self, "btn_manage", None) is not None:
+            if self._playing:
+                self.btn_manage.setEnabled(False)
+                self.btn_manage.setStyleSheet(self._manage_style(True))
+            else:
+                self.btn_manage.setEnabled(True)
+                self.btn_manage.setStyleSheet(self._manage_style(False))
+        if getattr(self, "btn_start", None) is not None:
+            self.btn_start.setEnabled(True)
+        if getattr(self, "btn_stop", None) is not None:
+            self.btn_stop.setEnabled(getattr(self, "_playing", False))
         self._refresh_user_labels()
         # 权限切换后同步窗口标题中的软件名称（软件名称由超级管理员在「设备设置」中修改）
         self._sync_software_name()
@@ -874,14 +1014,23 @@ class MainWindow(QMainWindow):
             self.production.set_current_user(user["name"], user["username"])
 
     def _style_switch_user_btn(self):
-        """顶部「切换用户」/「AI助手」按钮样式（随主题刷新）。"""
-        for btn in (getattr(self, "btn_switch_user", None),
-                    getattr(self, "btn_ai_copilot", None)):
-            if btn is None:
-                continue
-            btn.setStyleSheet(
+        """顶部「切换用户」文字按钮 + 「模型训练助手 / AI助手」图标按钮样式（随主题刷新）。"""
+        sw = getattr(self, "btn_switch_user", None)
+        if sw is not None:
+            sw.setStyleSheet(
                 f"background-color: {COLORS['accent_blue']}; color: #FFFFFF; "
                 f"border: none; border-radius: 4px; padding: 4px 12px; font-size: 12px;")
+        # 两个图标按钮仅显示 emoji，功能文字通过 toolTip 悬浮显示；
+        # 2026-11-10 需求：去掉窗底蓝色底色，改为透明背景只保留图标本体，
+        # 仍与「切换用户」等高，不改动 header 其它布局参数。
+        icon_style = (
+            "background: transparent; color: #FFFFFF; "
+            "border: none; padding: 3px 6px; font-size: 15px;"
+        )
+        for btn in (getattr(self, "btn_model_training", None),
+                    getattr(self, "btn_ai_copilot", None)):
+            if btn is not None:
+                btn.setStyleSheet(icon_style)
 
     def _switch_user(self):
         """切换用户：直接弹出登录框，登录成功后切换当前账号。
@@ -897,14 +1046,18 @@ class MainWindow(QMainWindow):
     def _is_allowed(self, key):
         """判断当前用户是否可使用 key 对应的功能入口。
 
-        key 为 HEADER_PERM 中的顶部按钮键时按权限项判断；
-        否则（左侧功能导航键）按 NAV_VISIBILITY 角色可见性判断。
+        顶部按钮按 HEADER_PERM 映射权限项；左侧功能导航键按
+        NAV_PERMISSION_KEY 映射到细化后的权限项，统一走 UserManager.can()，
+        使「权限配置」中的勾选能实时控制导航显隐（NAV_VISIBILITY 仅为出厂默认）。
         """
         u = self.current_user
         if not u:
             return False
         if key in HEADER_PERM:
             return self.user_manager.can(u, HEADER_PERM[key])
+        perm_key = NAV_PERMISSION_KEY.get(key)
+        if perm_key is not None:
+            return self.user_manager.can(u, perm_key)
         return key in NAV_VISIBILITY.get(u["category"], set())
 
     def _deny(self):
@@ -1035,7 +1188,7 @@ class MainWindow(QMainWindow):
             self.production.log_operation(self.current_user["name"], "修改了设备设置（设备编码/软件名称）")
 
     def _open_alarm_settings(self):
-        """打开「报警设备」阈值设置窗口（满料停机阈值 / 电磁阀寿命阈值）。"""
+        """打开「报警设备」阈值设置窗口；5 个子页按细分权限单独显隐。"""
         is_super = bool(self.current_user and self.current_user.get("category") == "超级管理员")
         dlg = AlarmSettingsDialog(
             self,
@@ -1044,12 +1197,14 @@ class MainWindow(QMainWindow):
             is_super_admin=is_super,
             get_valve_counts=self.production.get_valve_counts,
         )
+        self._bind_tab_permissions(dlg, ALARM_TAB_PERMISSIONS)
         if dlg.exec() == QDialog.DialogCode.Accepted:
             self.production.log_operation(self.current_user["name"], "修改了报警设备参数")
 
     def _open_device_settings(self):
         """打开「设备设置」非模态浮窗（DD马达 / 振动盘 / 高压静电 / 负压）。"""
-        self._show_modeless("_dlg_device", DeviceSettingsDialog)
+        self._show_modeless("_dlg_device", DeviceSettingsDialog,
+                            tab_perms=DEVICE_TAB_PERMISSIONS)
         self.production.log_operation(self.current_user["name"], "打开了设备设置")
 
     def _open_trigger_settings(self):
@@ -1195,6 +1350,11 @@ class MainWindow(QMainWindow):
         self._dlg_img_save = ImageSaveDialog(self)
         self._dlg_img_save.show()
 
+    def _open_model_training(self):
+        """启动「模型训练助手」外部软件（独立分离进程，本程序不受影响）。"""
+        import model_training
+        model_training.open_model_training(self)
+
     def _open_ai_copilot(self, image=None):
         """打开「AI助手」(Vision Copilot) 非模态对话窗。
         image 可为 QImage/QPixmap/路径：由调试界面「AI助手」按钮把当前画面带入。"""
@@ -1282,7 +1442,21 @@ class MainWindow(QMainWindow):
         layout.addWidget(btn)
         return btn
 
-    def _show_modeless(self, attr, dlg_cls):
+    def _bind_tab_permissions(self, dlg, keys):
+        """给弹窗 QTabWidget 的每个子页绑定细分权限，并按当前用户即时刷新。
+
+        弹窗在打开时才创建，必须显式刷新一次；之后权限配置保存触发的
+        apply_permissions(self, ...) 会递归覆盖已打开的非模态窗口。
+        """
+        tabs = getattr(dlg, "tabs", None)
+        if tabs is None:
+            return
+        for i, key in enumerate(keys):
+            if i < tabs.count():
+                bind(tabs.widget(i), key)
+        apply_permissions(dlg, self._can)
+
+    def _show_modeless(self, attr, dlg_cls, tab_perms=None):
         """打开（或前置）一个非模态对话框：已打开则置顶，否则新建并 show()。"""
         dlg = getattr(self, attr, None)
         if dlg is not None and dlg.isVisible():
@@ -1291,9 +1465,17 @@ class MainWindow(QMainWindow):
             return
         dlg = dlg_cls(self)
         setattr(self, attr, dlg)
+        if tab_perms:
+            self._bind_tab_permissions(dlg, tab_perms)
         dlg.show()
 
     def switch_page(self, index):
+        # 无 camera_debug 权限时禁止进入任何相机调试页面（含直接调用绕过入口）
+        cam_start = getattr(self, "cam_start", 1)
+        if cam_start <= index < cam_start + len(CAMERA_NAMES) \
+                and not self._can("camera_debug"):
+            self._deny()
+            index = 0
         self.stack.setCurrentIndex(index)
         for i, btn in enumerate(self.nav_buttons):
             btn.setChecked(i == index)
