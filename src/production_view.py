@@ -201,7 +201,8 @@ def _load_camera_frames(cam_name, w, h, count_per=12):
     """为某路相机加载样张帧（按文件名自然顺序轮番显示）：
 
     - 仅 1 张图：生成漂移帧拼成序列，模拟真实相机动态刷新。
-    - 多张图：直接在这些图片之间轮番切换（每张重复若干帧以稳定停留，再切下一张）。
+    - 多张图：每张图只占 1 帧，按文件名顺序逐拍切换，使每一拍都换一张图，
+      刷新帧率严格等于「主界面最小刷新间隔」设置的 fps（默认 10 张/秒）。
     无匹配样张时返回 None（调用方回退到示例帧）。"""
     files = _camera_frame_files().get(cam_name)
     if not files:
@@ -210,11 +211,11 @@ def _load_camera_frames(cam_name, w, h, count_per=12):
         return _make_user_frames(files[0], w, h, count=count_per)
     frames = []
     for fp in files:
-        # 多张图：取每图的覆盖裁剪单帧（含轻微居中，无漂移），重复 count_per 帧
-        # 稳定停留后再切到下一张，形成「轮番刷新」效果
+        # 多张图：每图取覆盖裁剪单帧直拼（不可重复占帧，否则 10fps 下每张
+        # 会停留 1.2 秒，看起来远慢于设置的刷新帧率）
         one = _make_user_frames(fp, w, h, count=1)
         if one:
-            frames.extend(one * count_per)
+            frames.extend(one)
     return frames if frames else None
 
 
@@ -7294,6 +7295,26 @@ class ProductionView(_ReportExportMixin, QWidget):
             saved = data.get(top)
             if isinstance(saved, dict):
                 _merge(self.dev_cfg[top], saved)
+
+    def enforce_reject_debug_permission(self, allowed):
+        """按当前用户权限约束「剔除位置调试」（默认仅超级管理员可用）。
+
+        无权限时强制复位为「按剔除设置剔除」并清空两个附加选项（写回配置），
+        保证普通用户登录、或由超级管理员切换账号过来后不遗留非默认调试方式。
+        返回是否发生了复位，供回归断言使用。
+        """
+        if allowed:
+            return False
+        rj = self.dev_cfg["reject"]
+        changed = (rj.get("debug_mode", "by_settings") != "by_settings"
+                   or bool(rj.get("debug_filter_recheck", False))
+                   or bool(rj.get("debug_skip_feed", False)))
+        rj["debug_mode"] = "by_settings"
+        rj["debug_filter_recheck"] = False
+        rj["debug_skip_feed"] = False
+        if changed:
+            self.save_device_config()
+        return changed
 
     def save_device_config(self):
         """把当前 dev_cfg（含 DD马达高级参数）写回 device_config.json，重启后保留。"""

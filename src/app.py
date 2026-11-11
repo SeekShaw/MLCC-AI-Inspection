@@ -1002,9 +1002,34 @@ class MainWindow(QMainWindow):
             self.btn_start.setEnabled(True)
         if getattr(self, "btn_stop", None) is not None:
             self.btn_stop.setEnabled(getattr(self, "_playing", False))
+        # 「剔除位置调试」可配置权限：登录 / 切换账号 / 权限配置保存后统一复位与刷新
+        self._sync_reject_debug_state()
         self._refresh_user_labels()
         # 权限切换后同步窗口标题中的软件名称（软件名称由超级管理员在「设备设置」中修改）
         self._sync_software_name()
+
+    def _sync_reject_debug_state(self):
+        """「剔除位置调试」权限统一刷新：复位模式 + 刷新已打开窗口 + 刷新收料位置列。
+
+        登录、切换账号、权限配置保存三条路径都会进入 _apply_permissions，故
+        超级管理员选中非默认方式后切换到普通账号，会在此强制回到「按剔除设置剔除」。
+        """
+        allowed = bool(self.current_user and self._can("reject_debug"))
+        pv = getattr(self, "production", None)
+        if pv is not None:
+            pv.enforce_reject_debug_permission(allowed)
+        dlg = getattr(self, "_dlg_reject", None)
+        fn = getattr(dlg, "apply_debug_permission", None)
+        if fn is not None:
+            fn(allowed)
+        self.on_reject_debug_mode_changed()
+
+    def on_reject_debug_mode_changed(self):
+        """位置调试模式或权限变化后，刷新所有调试界面检测项列表的列权限。"""
+        for _dv in getattr(self, "debug_views", []):
+            _fn = getattr(_dv, "_apply_col_permissions", None)
+            if _fn is not None:
+                _fn(self._can)
 
     def _set_current_user(self, user):
         self.current_user = user

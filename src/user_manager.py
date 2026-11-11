@@ -90,6 +90,7 @@ PERMISSION_GROUPS = [
     ("检测与分选", [
         ("sort_settings", "分选设置"),
         ("box_monitor", "盒子监控"),
+        ("reject_debug", "剔除位置调试"),
     ]),
     ("设备与系统设置", [
         ("sys_config", "系统配置"),

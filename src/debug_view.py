@@ -4595,6 +4595,17 @@ class DebugView(QWidget):
             if _c >= 0:
                 self._col_perm[_c] = _k
 
+    def _reject_pos_editable(self):
+        """检测项列表「收料位置」仅在剔除位置调试为「按剔除设置剔除」时可设置。
+
+        处于全踢某料盒的位置调试模式时，收料位置由该调试方式统一接管，
+        故列仍可见但只读，双击 / 出料设置入口一并拦截。
+        """
+        mw = getattr(self, "main_window", None)
+        pv = getattr(mw, "production", None) if mw is not None else None
+        rj = getattr(pv, "dev_cfg", {}).get("reject", {}) if pv is not None else {}
+        return rj.get("debug_mode", "by_settings") == "by_settings"
+
     def _apply_col_permissions(self, can):
         """检测项列表「按列头细分权限」：列始终显示，无权限时整列只读。
 
@@ -4602,10 +4613,21 @@ class DebugView(QWidget):
           无权限时把 QTableWidgetItem 的 ItemIsEditable 去掉（保留可见与选中）；
         - 非文本列（单位 / 检测项操作 / 良率预警设置）的编辑入口在各回调里
           统一用 self._col_can(对应权限键) 拦截，无权限时弹「无权限」提示并回退。
+        - 「收料位置」额外受剔除位置调试模式约束（非默认模式时只读）。
         """
         self._col_can = can
         table = getattr(self, "_table", None)
-        if table is None or not getattr(self, "_col_perm", None):
+        if table is None:
+            return
+        # 列映射通常由 bind_permission_ui 建立；若尚未绑定（如独立创建的调试页），
+        # 这里按表头名惰性补齐，保证模式/权限刷新不会因映射为空而整体失效。
+        if not getattr(self, "_col_perm", None):
+            self._col_perm = {}
+            for _h, _k in DETECT_COL_PERMISSIONS:
+                _c = self._col_by_header(_h)
+                if _c >= 0:
+                    self._col_perm[_c] = _k
+        if not self._col_perm:
             return
         # 这些列是纯文本单元格，用 ItemFlag 控制可否双击编辑
         _TEXT_COLS = {"标称值", "补偿值", "规格下限", "规格上限", "收料位置"}
@@ -4614,6 +4636,8 @@ class DebugView(QWidget):
             if head is None or head.text() not in _TEXT_COLS:
                 continue
             permitted = bool(can(key))
+            if key == "dcol_pos" and not self._reject_pos_editable():
+                permitted = False
             for r in range(table.rowCount()):
                 it = table.item(r, c)
                 if it is None:
@@ -4628,6 +4652,11 @@ class DebugView(QWidget):
     def _on_table_cell_double_clicked(self, r, c):
         """文本列双击即编辑手势：无对应列权限时拦截并提示「当前用户无权限」。"""
         key = getattr(self, "_col_perm", {}).get(c)
+        if key == "dcol_pos" and not self._reject_pos_editable():
+            QMessageBox.warning(
+                self, "不可设置",
+                "当前处于剔除位置调试模式，「收料位置」仅在「按剔除设置剔除」时可设置")
+            return
         if key is None or self._col_can(key):
             return
         head = self._table.horizontalHeaderItem(c) if hasattr(self, "_table") else None
@@ -4933,6 +4962,11 @@ class DebugView(QWidget):
         ⚠️ 2026-10-21 需求：此窗口内容改为检测表收料位置列的批量设置，
         不再打开「剔除设定」（设备剔除口硬件配置）窗口。
         """
+        if not self._reject_pos_editable():
+            QMessageBox.warning(
+                self, "不可设置",
+                "当前处于剔除位置调试模式，「收料位置」仅在「按剔除设置剔除」时可设置")
+            return
         if not self._col_can("dcol_pos"):
             QMessageBox.warning(self, "无权限", "当前用户无权限修改「收料位置」")
             return

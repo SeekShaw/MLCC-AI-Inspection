@@ -1195,6 +1195,19 @@ class RejectSettingsDialog(QDialog):
         self.setStyleSheet(f"QDialog {{ background-color: {COLORS['bg_panel']}; }}")
         self._build()
         self._load()
+        # 「剔除位置调试」为可配置权限项（默认仅超级管理员）；对话框创建时按当前
+        # 登录用户判定，无权限则强制回默认并禁用控件（保持可见但不可操作）。
+        self._debug_allowed = True
+        try:
+            um = getattr(self.mw, "user_manager", None)
+            cu = getattr(self.mw, "current_user", None)
+            if um is not None and cu is not None:
+                self._debug_allowed = bool(um.can(cu, "reject_debug"))
+        except Exception:
+            self._debug_allowed = True
+        self._last_debug_mode = self.pv.dev_cfg["reject"].get(
+            "debug_mode", "by_settings")
+        self.apply_debug_permission(self._debug_allowed)
 
     def _build(self):
         self._loading = True
@@ -1450,6 +1463,33 @@ class RejectSettingsDialog(QDialog):
             f"border: 1px solid {COLORS['border']}; border-radius: 4px; padding: 4px 8px; font-size: 12px; }}"
             f"QComboBox::drop-down {{ width: 16px; border: none; }}")
 
+    def apply_debug_permission(self, allowed):
+        """按权限启用 / 禁用「剔除位置调试」5 个单选与 2 个附加项。
+
+        无权限时控件仍然可见（不隐藏），但置灰不可操作；并强制选中
+        「按剔除设置剔除」、两个附加项取消勾选，写回运行系统与配置文件。
+        """
+        self._debug_allowed = bool(allowed)
+        for rb in self._debug_radios.values():
+            rb.setEnabled(self._debug_allowed)
+        self.debug_filter_recheck.setEnabled(self._debug_allowed)
+        self.debug_skip_feed.setEnabled(self._debug_allowed)
+        if not self._debug_allowed:
+            prev_loading = getattr(self, "_loading", False)
+            self._loading = True       # 回填期间禁止 _apply 递归写回
+            try:
+                self._debug_radios["by_settings"].setChecked(True)
+                self.debug_filter_recheck.setChecked(False)
+                self.debug_skip_feed.setChecked(False)
+            finally:
+                self._loading = prev_loading
+            rj = self.pv.dev_cfg["reject"]
+            rj["debug_mode"] = "by_settings"
+            rj["debug_filter_recheck"] = False
+            rj["debug_skip_feed"] = False
+            self._last_debug_mode = "by_settings"
+            self.pv.save_device_config()
+
     def _on_debug_mode_changed(self, checked):
         """位置调试模式切换：仅在新模式被选中时写回一次（toggled 会成对触发）。"""
         if checked:
@@ -1472,6 +1512,12 @@ class RejectSettingsDialog(QDialog):
     def _apply(self):
         if getattr(self, "_loading", False):
             return
+        # 无「剔除位置调试」权限时，任何控件改动都不允许写入非默认调试方式
+        if not getattr(self, "_debug_allowed", True):
+            _rj = self.pv.dev_cfg["reject"]
+            _rj["debug_mode"] = "by_settings"
+            _rj["debug_filter_recheck"] = False
+            _rj["debug_skip_feed"] = False
         p = self.pv.dev_cfg["reject"]["ports"]
         for key, (ck, pos, blow, pri, test_btn) in self._port_rows.items():
             p[key]["enable"] = bool(ck.isChecked())
@@ -1485,11 +1531,19 @@ class RejectSettingsDialog(QDialog):
         for key, sp in self._def_port_spins.items():
             self.pv.dev_cfg["reject"][key] = int(sp.value())
         rj = self.pv.dev_cfg["reject"]
-        rj["debug_mode"] = next(
+        mode = next(
             (k for k, rb in self._debug_radios.items() if rb.isChecked()), "by_settings")
+        rj["debug_mode"] = mode
         rj["debug_filter_recheck"] = bool(self.debug_filter_recheck.isChecked())
         rj["debug_skip_feed"] = bool(self.debug_skip_feed.isChecked())
         self.pv.save_device_config()
+        # 模式变化后刷新所有调试界面检测项列表「收料位置」列的可编辑性
+        if getattr(self, "_last_debug_mode", None) != mode:
+            self._last_debug_mode = mode
+            fn = getattr(getattr(self, "mw", None),
+                         "on_reject_debug_mode_changed", None)
+            if fn is not None:
+                fn()
 
     def _load(self):
         r = self.pv.dev_cfg["reject"]

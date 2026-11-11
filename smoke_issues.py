@@ -1194,8 +1194,8 @@ try:
     check(_order == ["下表面.png", "下表面2.png", "下表面10.png"],
           f"相机样张: 文件名自然排序(下表面<下表面2<下表面10) (实际 {_order})")
     _fr2 = _pvm._load_camera_frames("下表面", 100, 100)
-    check(_fr2 is not None and len(_fr2) == 36,   # 3 张 × count=12 → 轮番加载
-          f"相机样张: 多张样张轮播(3张×12帧=36) (实际 {None if _fr2 is None else len(_fr2)})")
+    check(_fr2 is not None and len(_fr2) == 3,   # 每图仅 1 帧 → 每拍换一张，严格等于设置 fps
+          f"相机刷新: 多图每拍一张(3图→3帧) (实际 {None if _fr2 is None else len(_fr2)})")
     # 无匹配样张 → 返回 None，由调用方回退示例帧
     _fr_empty = _tempfile.mkdtemp(prefix="camfr_empty_")
     _pvm._camera_frame_dir = lambda: _fr_empty
@@ -2013,6 +2013,15 @@ _vis = {k: b.isVisible() for k, b in _mw._func_nav.items()}
 check(_vis == {k: (k in _app.NAV_VISIBILITY["设备操作员"]) for k in _mw._func_nav},
       f"权限显隐: 设备操作员仅显示其有权限的功能按钮 (可见={sorted(k for k,v in _vis.items() if v)})")
 _mw._set_current_user(_orig_user)  # 还原启动用户，保持状态整洁
+# 剔除位置调试权限：超级管理员选了非默认方式后切到普通账号，必须强制复位
+_mw.production.dev_cfg["reject"]["debug_mode"] = "all_ng1"
+_mw.production.dev_cfg["reject"]["debug_filter_recheck"] = True
+_mw._set_current_user(_op)
+check(_mw.production.dev_cfg["reject"]["debug_mode"] == "by_settings"
+      and _mw.production.dev_cfg["reject"]["debug_filter_recheck"] is False
+      and _mw.production.dev_cfg["reject"]["debug_skip_feed"] is False,
+      "位置调试权限: 超级管理员切到普通账号后强制按剔除设置剔除")
+_mw._set_current_user(_orig_user)
 
 
 class _OkPwdDlg:
@@ -2130,6 +2139,9 @@ check(_cur_pos == pv.get_current_pulse_position(),
       f"触发设定: 自动获取填入当前相机位置 (实际 {_cur_pos} / 期望 {pv.get_current_pulse_position()})")
 _tsd.deleteLater()
 # ⑤ 剔除设定：每行「剔除位置」右侧「自动获取」按钮，点击填入该口当前位置
+# 位置调试为超级管理员专属权限，本段回归显式切到超级管理员验证操作态
+_rsd_user_bak = _mw.current_user
+_mw._set_current_user(_admin)
 _rsd = _RSD(_mw)
 _auto_rej_btns = [b for b in _rsd.findChildren(_QPushButton) if b.text() == "自动获取"]
 check(len(_auto_rej_btns) == 4,
@@ -2200,7 +2212,44 @@ check(_rj["debug_mode"] == "by_settings"
       and not _rsd.debug_filter_recheck.isChecked()
       and not _rsd.debug_skip_feed.isChecked(),
       "位置调试: 可恢复默认且重新加载读回正确")
+# 无权限：5 个模式 + 2 个附加项可见但不可操作，且强制回默认
+_rsd.apply_debug_permission(False)
+check(all(not rb.isHidden() and not rb.isEnabled()
+          for rb in _rsd._debug_radios.values())
+      and not _rsd.debug_filter_recheck.isHidden()
+      and not _rsd.debug_skip_feed.isHidden()
+      and not _rsd.debug_filter_recheck.isEnabled()
+      and not _rsd.debug_skip_feed.isEnabled(),
+      "位置调试权限: 无权限时 5 模式/2 附加项可见但不可操作")
+check(_rj["debug_mode"] == "by_settings"
+      and _rsd._debug_radios["by_settings"].isChecked()
+      and _rj["debug_filter_recheck"] is False
+      and _rj["debug_skip_feed"] is False,
+      "位置调试权限: 无权限时强制按剔除设置剔除且附加项清空")
+_rsd.apply_debug_permission(True)
+check(all(rb.isEnabled() for rb in _rsd._debug_radios.values()),
+      "位置调试权限: 恢复超级管理员权限后 5 模式可操作")
 _rsd.deleteLater()
+_mw._set_current_user(_rsd_user_bak)
+
+# 收料位置：仅在「按剔除设置剔除」时可设置，全踢调试模式下整列只读
+from PyQt6.QtCore import Qt as _QtPos
+_col_can_bak = getattr(dv, "_col_can", None)
+_c_pos = dv._col_by_header("收料位置")
+check(dv._reject_pos_editable() is True, "收料位置: 按剔除设置剔除时可设置")
+pv3.dev_cfg["reject"]["debug_mode"] = "all_ng1"
+dv._apply_col_permissions(lambda k: True)
+_it_pos = dv._table.item(0, _c_pos) if _c_pos >= 0 else None
+check(_it_pos is not None
+      and not bool(_it_pos.flags() & _QtPos.ItemFlag.ItemIsEditable),
+      "收料位置: 全踢调试模式下整列只读")
+pv3.dev_cfg["reject"]["debug_mode"] = "by_settings"
+dv._apply_col_permissions(lambda k: True)
+check(bool(dv._table.item(0, _c_pos).flags()
+           & _QtPos.ItemFlag.ItemIsEditable),
+      "收料位置: 恢复默认模式后重新可编辑")
+if _col_can_bak is not None:
+    dv._col_can = _col_can_bak
 
 # ④ 急停报警行：下拉左侧「报警方案」标签
 _dlg_estop = _ad2.AlarmSettingsDialog(is_super_admin=True)
@@ -3540,8 +3589,15 @@ from user_manager import (
     PERMISSION_MODULE as _PMOD, permission_rows as _prows,
     NAV_PERMISSION_KEY as _NPK, DEFAULT_CATEGORY_PERMISSIONS as _PDEF,
 )
-check(len(_PGRP) == 12 and len(_PP) == 55,
-      f"权限细化: 12 个模块 / 55 项功能（实际 {len(_PGRP)} / {len(_PP)}）")
+check(len(_PGRP) == 12 and len(_PP) == 56,
+      f"权限细化: 12 个模块 / 56 项功能（实际 {len(_PGRP)} / {len(_PP)}）")
+check(_PP.get("reject_debug") == "剔除位置调试"
+      and _PMOD["reject_debug"] == "检测与分选",
+      "权限细化: 新增「剔除位置调试」可配置权限项")
+check(_PDEF["超级管理员"]["reject_debug"] is True
+      and all(_PDEF[_c]["reject_debug"] is False for _c in _PCATS
+              if _c != "超级管理员"),
+      "权限细化: 剔除位置调试默认仅超级管理员有权限")
 check(set(_PMOD) == set(_PP), "权限细化: 每项功能都归属一个模块")
 _pkeys = [k for _g, _items in _PGRP for k, _l in _items]
 check(len(_pkeys) == len(set(_pkeys)), "权限细化: 权限 key 无重复")
