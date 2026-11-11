@@ -4276,6 +4276,12 @@ class DebugView(QWidget):
         _interval = self._play_interval_ms()
         if self._play_timer.interval() != _interval:
             self._play_timer.start(_interval)
+        # 2026-11-11：有模态对话框（切换用户登录 / 单位·出料·方案等设置弹窗）打开时
+        # 跳过本拍重活——8 路调试页的节拍刷新（相机帧推进 + 109 项检测值/结果刷新
+        # + 统计联动）会持续抢占主线程，导致「设备运行中切换用户登录明显卡顿」。
+        # 跳过后弹窗内操作流畅，关闭弹窗后下一拍自动恢复刷新（定时器保持运行）。
+        if QApplication.activeModalWidget() is not None:
+            return
         self._tick_count += 1
         # 冻结时不推进相机帧（画布停留在当前画面，不再刷新），统计仍按节拍更新
         if not self._frozen:
@@ -4687,12 +4693,53 @@ class DebugView(QWidget):
             self._table_data[row][0] = bool(on)
 
     def _set_unit(self, row, text):
-        """单位列右键选择后：更新底层数据中的单位字段（row[8]）。"""
+        """单位列右键选择后：更新底层数据中的单位字段（row[8]）。
+
+        ⚠️ 2026-11-11 需求：单位设置改为**全局联动**——本工位修改后按检测项
+        编号同步到所有其它相机工位的同名检测项（各工位共用 109 项清单）。
+        """
         if not self._col_can("dcol_unit"):
             QMessageBox.warning(self, "无权限", "当前用户无权限修改「单位」")
             return
         if 0 <= row < len(self._table_data):
             self._table_data[row][8] = str(text)
+            self._sync_units_global(row, str(text))
+
+    def _sibling_debug_views(self):
+        """其它相机工位的 DebugView 列表（单位 / 出料设置全局联动用）。"""
+        mw = getattr(self, "main_window", None)
+        views = getattr(mw, "debug_views", None) or []
+        return [v for v in views
+                if v is not self and hasattr(v, "_table_data")]
+
+    def _sync_units_global(self, row, unit):
+        """按检测项编号把单位同步到所有其它相机工位（单位设置全局联动）。"""
+        if not (0 <= row < len(self._table_data)):
+            return
+        code = str(self._table_data[row][1])
+        for v in self._sibling_debug_views():
+            for r2, row2 in enumerate(v._table_data):
+                if str(row2[1]) == code and str(row2[8]) != unit:
+                    row2[8] = unit
+                    cell = getattr(v, "_unit_cells", {}).get(r2)
+                    if cell is not None:
+                        cell.set_unit(unit)
+                    v._refresh_row_display(r2)
+
+    def _sync_ports_global(self, code_ports):
+        """按检测项编号把收料位置同步到所有其它相机工位（出料设置全局联动）。
+
+        code_ports: {检测项编号: 收料位置}；返回同步修改的单元格数。
+        """
+        n = 0
+        for v in self._sibling_debug_views():
+            for r2, row2 in enumerate(v._table_data):
+                port = code_ports.get(str(row2[1]))
+                if port is not None and str(row2[9]) != port:
+                    row2[9] = port
+                    v._refresh_row_display(r2)
+                    n += 1
+        return n
 
     def _on_yield_warn_toggled(self, row, on):
         """良率预警「启用开关」状态变化：更新该行预警启用标记。"""
@@ -5244,9 +5291,10 @@ class DebugView(QWidget):
                 if cell is not None:
                     cell.set_unit(unit)
                 n += 1
-        self._dv_log(f"检测项设置：单位设置已更新（{n} 项）")
+        self._dv_log(f"检测项设置：单位设置已更新（{n} 项，全局联动所有工位）")
         if n:
-            QMessageBox.information(self, "单位设置", f"已更新 {n} 项单位。")
+            QMessageBox.information(self, "单位设置",
+                                    f"已更新 {n} 项单位（全局联动，所有工位同步生效）。")
 
     def _on_output_settings(self):
         """出料设置：对应检测表「收料位置」列——列出检测表中的所有检测项，
@@ -5341,17 +5389,24 @@ class DebugView(QWidget):
         if dlg.exec() != QDialog.DialogCode.Accepted:
             return
         n = 0
+        code_ports = {}
         for r, cb in combos:
             port = cb.currentText().strip()
-            if 0 <= r < len(self._table_data) \
-                    and str(self._table_data[r][9]) != port:
-                self._table_data[r][9] = port
-                self._refresh_row_display(r)     # 同步「收料位置」列显示
-                n += 1
-        self._dv_log(f"检测项设置：出料设置已更新（{n} 项收料位置）")
+            if 0 <= r < len(self._table_data):
+                code_ports[str(self._table_data[r][1])] = port
+                if str(self._table_data[r][9]) != port:
+                    self._table_data[r][9] = port
+                    self._refresh_row_display(r)     # 同步「收料位置」列显示
+                    n += 1
+        # 2026-11-11 需求：出料设置全局联动——收料位置按检测项编号同步到
+        # 所有其它相机工位（与单位设置同一联动口径）
+        n_sync = self._sync_ports_global(code_ports)
+        self._dv_log(f"检测项设置：出料设置已更新（{n} 项收料位置，"
+                     f"全局联动同步 {n_sync} 处）")
         if n:
-            QMessageBox.information(self, "出料设置",
-                                    f"已更新 {n} 项收料位置。")
+            QMessageBox.information(
+                self, "出料设置",
+                f"已更新 {n} 项收料位置（全局联动，所有工位同步生效）。")
 
     def _on_scheme_sync(self):
         """方案同步：弹窗选择目标工位后，只把本相机检测项方案同步到勾选工位。
@@ -5451,23 +5506,35 @@ class DebugView(QWidget):
         fv = _to_float(new_val)
         if fv is None or lo is None or hi is None:
             return "待定"
+        if lo == 0 and hi == 0:
+            # 中性出厂默认规格（0/0）视为未设置：示例演示值不判 NG（2026-11-11）
+            return "OK"
         if lo <= fv <= hi:
             return "OK"
         return "NG"
 
     def refresh_detection_values(self, image_index=None):
-        """本地图像窗口切换 / 运行一张图时调用：把各检测项的『检测值』按默认值
-        上下浮动生成新值（每运行一张图均会变化，用于示例演示），并据其相对规格
+        """本地图像窗口切换 / 运行一张图时调用：把各检测项的『检测值』按示例
+        基准波动生成新值（每运行一张图均会变化，用于示例演示），并据其相对规格
         上下限的实际结果刷新『检测结果』列（OK / NG / 待定）。
 
-        - 已勾选（是否检测）且默认检测值为数值的项：围绕默认值浮动后取整
+        - 已勾选且默认检测值为非 0 数值的项：围绕默认值浮动后取整
           （整数类项目 ±25%、带小数类项目 ±12%，保证每次都有可见变化）。
-        - 未勾选或非数值项：检测值保持默认，结果记为『待定』。
+        - 默认值为 0 / 空（中性出厂默认）的项：生成**非 0 示例演示值**（2026-11-11）：
+          ① 已设有效规格（下限<上限）→ 围绕规格中值 ±12% 波动（大概率 OK、偶发 NG）；
+          ② 规格仍为中性默认 → 按（检测项编号, 相机序号）生成 1.00~9.99 的确定性
+          基准（同一检测项各相机略有差异），每次刷新 ±12% 波动，保留 2 位小数。
+        - 未勾选：检测值保持默认，结果记为『待定』。
         """
         table = getattr(self, "_table", None)
         if table is None:
             return
         rnd = random.Random()
+        # 相机序号：相机名中的数字（相机1~8 → 1~8，无数字则 0），
+        # 使同一检测项在不同相机工位的示例基准略有差异
+        _digits = "".join(ch for ch in str(getattr(self, "camera_name", ""))
+                          if ch.isdigit())
+        cam_no = int(_digits) if _digits else 0
         for r in range(table.rowCount()):
             raw = self._table_data[r]
             chk = self._row_checks.get(r)
@@ -5476,15 +5543,26 @@ class DebugView(QWidget):
             center = _to_float(default_val)
             lo = _to_float(raw[6])        # 规格下限
             hi = _to_float(raw[7])        # 规格上限
-            if (not checked) or center is None:
-                # 未勾选或非数值：检测值维持默认，结果=待定
+            if not checked:
+                # 未勾选：检测值维持默认，结果=待定
                 new_val = default_val
-            else:
+            elif center is not None and center != 0:
                 s = str(default_val)
                 dec = len(s.split(".")[-1]) if "." in s else 0
                 amp = 0.25 if dec == 0 else 0.12
                 noise = rnd.uniform(-amp, amp)
                 new_val = _round_like(center * (1.0 + noise), default_val)
+            else:
+                # 中性默认（0/空）：生成非 0 示例演示值，各相机略异、范围波动
+                if lo is not None and hi is not None and hi > lo:
+                    base = (lo + hi) / 2.0
+                else:
+                    try:
+                        num = int(str(raw[1]).strip() or r)
+                    except ValueError:
+                        num = r
+                    base = 1.0 + ((num * 37 + cam_no * 53) % 900) / 100.0
+                new_val = f"{base * (1.0 + rnd.uniform(-0.12, 0.12)):.2f}"
             # 更新『检测值』列（**列号 9**，位于『检测结果』左侧）：为
             # 「数值标签 + 值分布按钮」组合控件，
             # 同步刷新底层数据（self._table_data[r][4]），供分布样本/中心值读取。

@@ -292,7 +292,7 @@ check(len(rows3b) == 8, f"详情: 切换时段后详情表仍 8 行（实际 {le
 pv3._reset_live(); pv3._playing = False
 
 # ============ 功能验证：调试界面 StatsPanel 实时镜像生产运行界面 ============
-from debug_view import DebugView
+from debug_view import DebugView, _to_float
 class _FakeMW:
     def __init__(self, prod):
         self.production = prod
@@ -4296,7 +4296,68 @@ else:
               and str(_dv._table_data[r][10]).strip() != ""
               for r in range(109)),
           "模拟生产: 109 项检测项均带示例检测值与结果（OK/NG/待定）")
+    _nz_bad = [(r, _dv._table_data[r][4])
+               for r in range(109)
+               if (_dv._row_checks.get(r) is None or _dv._row_checks[r].is_on())
+               and _to_float(_dv._table_data[r][4]) in (None, 0)]
+    check(not _nz_bad,
+          f"示例值非 0: 启用检测项均生成非 0 示例演示值（异常 {_nz_bad[:3]}）")
+    _okn = sum(1 for r in range(109) if str(_dv._table_data[r][10]) in ("OK", "NG", "待定"))
+    check(_okn == 109 and all(str(_dv._table_data[r][10]) == "OK" for r in range(109)),
+          "示例值非 0: 中性规格（0/0）下示例演示值判 OK（不误报 NG）")
 _dv.close()
+
+# 示例值各相机略有差异：同一检测项在相机1/相机2 的演示基准不同（2026-11-11）
+_dv1 = _dvmod.DebugView(camera_name="相机1")
+_dv2 = _dvmod.DebugView(camera_name="相机2")
+for _d in (_dv1, _dv2):
+    _d._accepted_mode = "模拟生产"
+    _d._playing = True
+    for _ in range(3):
+        _d._on_play_tick()
+_diff_n = sum(1 for r in range(109)
+              if str(_dv1._table_data[r][4]) != str(_dv2._table_data[r][4]))
+check(_diff_n >= 100,
+      f"示例值各机差异: 同一检测项在相机1/相机2 的示例值不同（差异 {_diff_n}/109 项）")
+check(all(0.85 <= _to_float(_dv1._table_data[r][4]) <= 11.3 for r in range(109)),
+      "示例值范围: 中性默认项示例值在 1.00~9.99 基准 ±12% 内波动")
+_dv1.close(); _dv2.close()
+
+# 运行中切换用户不卡顿：模态弹窗（登录/设置）打开时节拍刷新跳过，关闭后恢复
+from PyQt6.QtWidgets import QDialog as _QDialogCls
+_dvg = _dvmod.DebugView()
+_t0 = _dvg._tick_count
+_mdl = _QDialogCls()
+_mdl.setModal(True)
+_mdl.show()
+_dvg._on_play_tick()
+check(_dvg._tick_count == _t0,
+      "运行卡顿: 模态弹窗（切换用户登录等）打开时节拍刷新跳过（主线程不被抢占）")
+_mdl.close()
+_dvg._on_play_tick()
+check(_dvg._tick_count == _t0 + 1,
+      "运行卡顿: 弹窗关闭后下一拍自动恢复节拍刷新（定时器保持运行）")
+_dvg.close()
+
+# 单位设置 / 出料设置全局联动：本工位修改 → 其它工位同编号检测项同步生效（2026-11-11）
+_gd0, _gd1, _gd2 = (_mw.debug_views[0], _mw.debug_views[1], _mw.debug_views[2])
+_cu_r = next(r for r in range(109) if str(_gd0._table_data[r][1]) == "106")
+_gd0._sync_units_global(_cu_r, "mm")
+_cu_r1 = next(r for r in range(109) if str(_gd1._table_data[r][1]) == "106")
+_cu_r2 = next(r for r in range(109) if str(_gd2._table_data[r][1]) == "106")
+check(str(_gd1._table_data[_cu_r1][8]) == "mm"
+      and str(_gd2._table_data[_cu_r2][8]) == "mm",
+      "单位全局联动: 工位1 改 106 元件长度单位 → 工位2/工位3 同编号项同步生效")
+_gd0._sync_units_global(_cu_r, "Dec")     # 还原默认
+_cp_r = next(r for r in range(109) if str(_gd0._table_data[r][1]) == "103")
+_gd0._sync_ports_global({"103": "NG2"})
+_cp_r1 = next(r for r in range(109) if str(_gd1._table_data[r][1]) == "103")
+_cp_r2 = next(r for r in range(109) if str(_gd2._table_data[r][1]) == "103")
+check(str(_gd1._table_data[_cp_r1][9]) == "NG2"
+      and str(_gd2._table_data[_cp_r2][9]) == "NG2",
+      "出料全局联动: 工位1 改 103 连料收料位置 → 工位2/工位3 同编号项同步生效")
+_gd0._sync_ports_global({"103": "RST"})   # 还原默认口
+check(str(_gd1._table_data[_cp_r1][9]) == "RST", "出料全局联动: 收料位置改回 RST 仍全局同步")
 
 # 飞料监测相机：纳入样张文件关键字，按目录前缀读取并同帧率刷新（2026-11-11）
 _tmpf = tempfile.mkdtemp(prefix="smoke_fly_")
