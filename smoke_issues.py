@@ -4127,6 +4127,32 @@ for _v in _views_all:
     _v._detect_mode_combo.setCurrentText("全开")
 dv._on_detect_mode_changed("全开", broadcast=False)
 
+# ============ 2026-11-11：发布文档同步到 output/ 与便携版 zip ============
+# 需求：权威文档随 exe 一同交付；build_b.py 每次打包自动同步到 output/，
+# make_portable_zip.py 整体复制 output/ 后压缩包顶层即含同一份 md。
+_ROOT = os.path.dirname(os.path.abspath(__file__))
+_DOC_REL = "docs/软件功能规格与测试用例设计.md"
+_DOC_SRC = os.path.join(_ROOT, _DOC_REL)
+_DOC_OUT = os.path.join(_ROOT, "output", "软件功能规格与测试用例设计.md")
+_DOC_ZIP = os.path.join(_ROOT, "EcompVision Inspector 便携版.zip")
+_DOC_ARC = "EcompVision Inspector 便携版/软件功能规格与测试用例设计.md"
+_doc_bytes = open(_DOC_SRC, "rb").read() if os.path.isfile(_DOC_SRC) else None
+check(bool(_doc_bytes),
+      "发布文档同步: 权威文档 docs/软件功能规格与测试用例设计.md 存在且非空")
+_build_src = (open(os.path.join(_ROOT, "build_b.py"), "r", encoding="utf-8").read()
+              if os.path.isfile(os.path.join(_ROOT, "build_b.py")) else "")
+check("DOCS_TO_SHIP" in _build_src and _DOC_REL in _build_src,
+      "发布文档同步: build_b.py 已通过 DOCS_TO_SHIP 自动同步权威文档到 output/")
+check(not os.path.isfile(_DOC_OUT) or open(_DOC_OUT, "rb").read() == _doc_bytes,
+      "发布文档同步: output/ 内 md 与 docs/ 权威文档字节一致")
+_doc_zip_ok = True
+if os.path.isfile(_DOC_ZIP):
+    import zipfile as _zipfile
+    with _zipfile.ZipFile(_DOC_ZIP) as _z:
+        _doc_zip_ok = _DOC_ARC in _z.namelist() and _z.read(_DOC_ARC) == _doc_bytes
+check(_doc_zip_ok,
+      "发布文档同步: 便携版 zip 顶层含同名 md 且字节一致（zip 不存在时跳过）")
+
 # ============ 收尾：确认未污染 src/ 下的工程配置（写盘已重定向到临时目录） ============
 check(all((open(_p, "rb").read() if os.path.exists(_p) else None) == _o
           for _p, _o in _CFG_GUARD.items()),

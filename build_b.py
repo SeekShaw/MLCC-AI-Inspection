@@ -35,6 +35,12 @@ DIST_EXE = f"dist/{NAME}.exe"
 OUT_EXE = f"output/{NAME}.exe"
 VERSION_FILE = "_exe_version.txt"      # PyInstaller 版本资源（每次构建重新生成）
 
+# 随发布产物一同交付的权威文档：构建时同步到 output/，随后由
+# make_portable_zip.py 整体打包 output/ 时自动进入便携版 zip 顶层。
+DOCS_TO_SHIP = (
+    "docs/软件功能规格与测试用例设计.md",
+)
+
 
 def _load_meta():
     """读取 src/app_meta.py 的唯一版本信息。"""
@@ -102,6 +108,24 @@ def bump_version():
     with open(path, "w", encoding="utf-8") as f:
         f.write(src)
     print(f">> 版本号已递增: {maj}.{mi}.{pa}.{bu}（下一次发布生效）")
+
+
+def sync_docs(root=None):
+    """把 DOCS_TO_SHIP 同步到 output/ 根目录（与 exe 同级）。
+
+    单独成函数便于不重新打包 exe 时也能刷新发布文档：
+    `python -c "import build_b; build_b.sync_docs()"` 后再重新生成便携版 zip。
+    """
+    root = root or os.path.dirname(os.path.abspath(__file__))
+    out_dir = os.path.join(root, "output")
+    for doc in DOCS_TO_SHIP:
+        src = os.path.join(root, doc)
+        if not os.path.isfile(src):
+            print("   !! 文档不存在，跳过同步:", src)
+            continue
+        dst = os.path.join(out_dir, os.path.basename(doc))
+        shutil.copy2(src, dst)
+        print("   同步发布文档 ->", dst)
 
 
 def install_exe(src, dst, tries=12, wait=3.0):
@@ -225,6 +249,11 @@ def main():
 
     # 3.2) output/README.md 为发布说明唯一基准，由人工在其中直接维护，
     #   构建时不再从仓库根同步覆盖（2026-10-21 决定：以 output 下版本为准）。
+
+    # 3.3) 同步权威文档到 output/ 根目录（与 exe 同级），使交付目录与
+    #      便携版 zip 都带上同一份最新 md。make_portable_zip.py 整体复制
+    #      output/，故压缩包内的顶层文件夹会自动包含该文件，无需二次处理。
+    sync_docs(root)
 
     # 4) build_backup_* 中的旧 exe 一并移走
     for d in os.listdir("."):
