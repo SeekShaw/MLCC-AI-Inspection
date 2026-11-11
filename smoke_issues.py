@@ -4366,7 +4366,8 @@ check(all(0.85 <= _to_float(_dv1._table_data[r][4]) <= 11.3 for r in range(109))
       "示例值范围: 中性默认项示例值在 1.00~9.99 基准 ±12% 内波动")
 _dv1.close(); _dv2.close()
 
-# 运行中切换用户不卡顿：模态弹窗（登录/设置）打开时节拍刷新跳过，关闭后恢复
+# 运行中切换用户：刷新不再停止（2026-11-11 二次修订）——模态弹窗（登录/设置）打开时
+# 仅暂停相机帧推进，检测值/效果/统计仍按节拍刷新；关闭后相机帧推进自动恢复。
 from PyQt6.QtWidgets import QDialog as _QDialogCls
 _dvg = _dvmod.DebugView()
 _t0 = _dvg._tick_count
@@ -4374,13 +4375,44 @@ _mdl = _QDialogCls()
 _mdl.setModal(True)
 _mdl.show()
 _dvg._on_play_tick()
-check(_dvg._tick_count == _t0,
-      "运行卡顿: 模态弹窗（切换用户登录等）打开时节拍刷新跳过（主线程不被抢占）")
+check(_dvg._tick_count == _t0 + 1,
+      "运行卡顿: 模态弹窗（切换用户登录等）打开时刷新不停止（节拍计数继续推进）")
 _mdl.close()
 _dvg._on_play_tick()
-check(_dvg._tick_count == _t0 + 1,
-      "运行卡顿: 弹窗关闭后下一拍自动恢复节拍刷新（定时器保持运行）")
+check(_dvg._tick_count == _t0 + 2,
+      "运行卡顿: 弹窗关闭后刷新持续（仅相机帧推进在模态期间暂停）")
 _dvg.close()
+
+# 检测列表「设置为默认 / 恢复至默认」仅对当前工位有效（2026-11-11）：
+# 各工位默认配置按相机名存独立文件，互不影响。
+_gd_a = _mw.debug_views[0]
+_gd_b = _mw.debug_views[1]
+_pa = _gd_a._detect_defaults_path()
+_pb = _gd_b._detect_defaults_path()
+check(_pa != _pb and "detect_defaults_" in _pa
+      and _gd_a.camera_name.replace(" ", "") in _pa,
+      f"默认设置: 各工位默认配置按相机名区分（仅作用于当前工位），{_pa} vs {_pb}")
+
+# 单位设置「设置为默认」：应用到所有相机工位并持久化（2026-11-11）
+class _FakeCombo:
+    def __init__(self, t): self._t = t
+    def currentText(self): return self._t
+_gd0u, _gd1u, _gd2u = (_mw.debug_views[0], _mw.debug_views[1], _mw.debug_views[2])
+_r106u = next(r for r in range(109) if str(_gd0u._table_data[r][1]) == "106")
+_gd0u._unit_set_default_global([(_r106u, _FakeCombo("mm"))], show_msg=False)
+_r106_1 = next(r for r in range(109) if str(_gd1u._table_data[r][1]) == "106")
+_r106_2 = next(r for r in range(109) if str(_gd2u._table_data[r][1]) == "106")
+check(str(_gd1u._table_data[_r106_1][8]) == "mm"
+      and str(_gd2u._table_data[_r106_2][8]) == "mm",
+      "单位设置-设为默认: 应用到所有相机工位（工位2/工位3 同编号项变 mm）")
+_gd0u._unit_set_default_global([(_r106u, _FakeCombo("Dec"))], show_msg=False)
+check(str(_gd1u._table_data[_r106_1][8]) == "Dec",
+      "单位设置-设为默认: 还原后所有工位同编号项同步回 Dec")
+import os as _os
+try:
+    _os.remove(_gd0u._unit_defaults_path())
+except OSError:
+    pass
 
 # 单位设置 / 出料设置全局联动：本工位修改 → 其它工位同编号检测项同步生效（2026-11-11）
 _gd0, _gd1, _gd2 = (_mw.debug_views[0], _mw.debug_views[1], _mw.debug_views[2])

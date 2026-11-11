@@ -4287,22 +4287,23 @@ class DebugView(QWidget):
         _interval = self._play_interval_ms()
         if self._play_timer.interval() != _interval:
             self._play_timer.start(_interval)
-        # 2026-11-11：有模态对话框（切换用户登录 / 单位·出料·方案等设置弹窗）打开时
-        # 跳过本拍重活——8 路调试页的节拍刷新（相机帧推进 + 109 项检测值/结果刷新
-        # + 统计联动）会持续抢占主线程，导致「设备运行中切换用户登录明显卡顿」。
-        # 跳过后弹窗内操作流畅，关闭弹窗后下一拍自动恢复刷新（定时器保持运行）。
-        if QApplication.activeModalWidget() is not None:
-            return
         self._tick_count += 1
+        # 2026-11-11（二次修订）：登录 / 单位·出料·方案等模态弹窗打开时，**不再整拍
+        # 跳过刷新**——此前整拍跳过会让切换用户登录期间画面完全冻结、关闭后才恢复，
+        # 用户感知为卡顿。现改为「仅暂停相机帧推进（最重且被弹窗遮挡在画布之上）与分布
+        # 样本累积」，保留检测值 / 效果示例 / 统计的实时刷新，使弹窗期间界面仍正常刷新；
+        # 暂停相机帧推进即可释放主线程、让登录框操作流畅，关闭弹窗后下一拍自动恢复。
+        _modal = QApplication.activeModalWidget() is not None
         # 冻结时不推进相机帧（画布停留在当前画面，不再刷新），统计仍按节拍更新
         if not self._frozen:
-            # 仅推进主相机，再把主画布的帧序号同步到 R/G/B 三通道，
-            # 确保右侧 R/G/B 画面与主画布始终一致。
-            main = self._cams[0]
-            main.advance_frame(self._cam_speed[0])
-            idx = main.current_frame_index()
-            for cam in self._cams[1:]:
-                cam.set_frame_index(idx)
+            if not _modal:
+                # 仅推进主相机，再把主画布的帧序号同步到 R/G/B 三通道，
+                # 确保右侧 R/G/B 画面与主画布始终一致。
+                main = self._cams[0]
+                main.advance_frame(self._cam_speed[0])
+                idx = main.current_frame_index()
+                for cam in self._cams[1:]:
+                    cam.set_frame_index(idx)
             # 图像效果调节：相机有图像刷新时，已启用检测项的示例数值按节拍随机刷新
             if self._tick_count % 4 == 0:
                 self._refresh_effect_values()
@@ -4315,7 +4316,8 @@ class DebugView(QWidget):
                     and getattr(self, "_production_running", False)):
                 if self._tick_count % 3 == 0:
                     self.refresh_detection_values()
-                    self._accumulate_distribution_samples()
+                    if not _modal:
+                        self._accumulate_distribution_samples()
         # 统计刷新降频（每 2 拍一次）：调试界面生产信息镜像生产运行界面，随节拍同步。
         # 与生产运行界面的 _refresh_every=2 保持一致，避免调试界面刷新偏慢。
         if self._tick_count % 2 == 0:
@@ -5080,12 +5082,20 @@ class DebugView(QWidget):
             pass
 
     def _detect_defaults_path(self):
-        """检测项默认配置落盘路径：与 exe 或脚本同目录（frozen 跟随可执行文件）。"""
+        """检测项默认配置落盘路径：与 exe 或脚本同目录（frozen 跟随可执行文件）。
+
+        2026-11-11：按相机工位名区分文件名（``detect_defaults_<相机名>.json``），
+        使「设置为默认 / 恢复至默认」仅作用于**当前工位**，不影响其它相机工位。
+        """
         if getattr(sys, "frozen", False) and getattr(sys, "executable", ""):
             base = os.path.dirname(os.path.abspath(sys.executable))
         else:
             base = os.path.dirname(os.path.abspath(__file__))
-        return os.path.join(base, "detect_defaults.json")
+        cam = "".join(ch for ch in str(getattr(self, "camera_name", ""))
+                      if ch.isalnum() or ch in "-_")
+        if not cam:
+            cam = "default"
+        return os.path.join(base, f"detect_defaults_{cam}.json")
 
     def _collect_detect_settings(self):
         """收集当前检测项设置（按检测编号为键，供存盘 / 跨相机同步）。
@@ -5300,6 +5310,14 @@ class DebugView(QWidget):
             f"padding:6px 18px; font-size:12px;")
         ok_btn.clicked.connect(dlg.accept)
         cancel_btn.clicked.connect(dlg.reject)
+        setdef_btn = QPushButton("设置为默认")
+        setdef_btn.setStyleSheet(
+            f"background-color:{COLORS['bg_card']}; color:{COLORS['text_primary']}; "
+            f"border:1px solid {COLORS['border']}; border-radius:4px; "
+            f"padding:6px 18px; font-size:12px;")
+        setdef_btn.clicked.connect(
+            lambda _=None, c=combos: self._unit_set_default_global(c))
+        btns.addWidget(setdef_btn)
         btns.addWidget(ok_btn)
         btns.addWidget(cancel_btn)
         v.addLayout(btns)
@@ -5319,6 +5337,60 @@ class DebugView(QWidget):
         if n:
             QMessageBox.information(self, "单位设置",
                                     f"已更新 {n} 项单位（全局联动，所有工位同步生效）。")
+
+    def _unit_defaults_path(self):
+        """单位默认配置落盘路径：与 exe 或脚本同目录（frozen 跟随可执行文件）。"""
+        if getattr(sys, "frozen", False) and getattr(sys, "executable", ""):
+            base = os.path.dirname(os.path.abspath(sys.executable))
+        else:
+            base = os.path.dirname(os.path.abspath(__file__))
+        return os.path.join(base, "unit_defaults.json")
+
+    def _unit_set_default_global(self, combos, show_msg=True):
+        """单位设置弹窗「设置为默认」：把当前各检测项单位选择应用到**所有相机工位**
+        （按检测项编号同步），并持久化为全局单位默认配置（``unit_defaults.json``）。
+
+        与「确定」的区别：「确定」仅把当前弹窗的选择按编号全局联动到其它工位；
+        「设置为默认」额外把这些单位存为默认，便于后续恢复。
+        """
+        if not self._col_can("dcol_unit"):
+            QMessageBox.warning(self, "无权限", "当前用户无权限修改「单位」")
+            return
+        code_unit = {}
+        for r, cb in combos:
+            if 0 <= r < len(self._table_data):
+                code_unit[str(self._table_data[r][1])] = cb.currentText()
+        if not code_unit:
+            return
+        views = [self] + [
+            v for v in (getattr(getattr(self, "main_window", None),
+                               "debug_views", []) or [])
+            if v is not self]
+        n = 0
+        for v in views:
+            for r in range(len(v._table_data)):
+                u = code_unit.get(str(v._table_data[r][1]))
+                if u and str(v._table_data[r][8]) != u:
+                    v._table_data[r][8] = u
+                    cell = getattr(v, "_unit_cells", {}).get(r)
+                    if cell is not None:
+                        cell.set_unit(u)
+                    v._refresh_row_display(r)
+                    n += 1
+        self._persist_unit_defaults(code_unit)
+        self._dv_log(f"单位设置：设置为默认（全局生效，{n} 处单位同步）")
+        if show_msg:
+            QMessageBox.information(
+                self, "单位设置",
+                f"已设为默认并同步到所有相机工位（{n} 处单位）。")
+
+    def _persist_unit_defaults(self, code_unit):
+        """把单位默认配置写到 ``unit_defaults.json``（供恢复/跨会话复用）。"""
+        try:
+            with open(self._unit_defaults_path(), "w", encoding="utf-8") as f:
+                json.dump({"units": code_unit}, f, ensure_ascii=False, indent=2)
+        except Exception:
+            pass
 
     def _on_output_settings(self):
         """出料设置：对应检测表「收料位置」列——列出检测表中的所有检测项，
