@@ -5016,23 +5016,34 @@ class DebugView(QWidget):
             return
         # 这些列是纯文本单元格，用 ItemFlag 控制可否双击编辑
         _TEXT_COLS = {"标称值", "补偿值", "规格下限", "规格上限", "收料位置"}
-        for c, key in self._col_perm.items():
-            head = table.horizontalHeaderItem(c)
-            if head is None or head.text() not in _TEXT_COLS:
-                continue
-            permitted = bool(can(key))
-            if key == "dcol_pos" and not self._reject_pos_editable():
-                permitted = False
-            for r in range(table.rowCount()):
-                it = table.item(r, c)
-                if it is None:
+        # 2026-11-11 性能优化：把每个列权限键的 can 结果缓存（避免每行重复构造
+        # 权限字典），并在批量 setFlags 期间关闭表格重绘，减少万级次重绘开销
+        # （切换用户时 8 个工位各做一次，原实现逐单元格触发重绘导致卡顿）。
+        _perm_cache = {}
+        for _k in set(self._col_perm.values()):
+            _perm_cache[_k] = bool(can(_k))
+        _pos_editable = self._reject_pos_editable()
+        table.setUpdatesEnabled(False)
+        try:
+            for c, key in self._col_perm.items():
+                head = table.horizontalHeaderItem(c)
+                if head is None or head.text() not in _TEXT_COLS:
                     continue
-                flags = it.flags()
-                if permitted:
-                    flags |= Qt.ItemFlag.ItemIsEditable
-                else:
-                    flags &= ~Qt.ItemFlag.ItemIsEditable
-                it.setFlags(flags)
+                permitted = _perm_cache.get(key, False)
+                if key == "dcol_pos" and not _pos_editable:
+                    permitted = False
+                for r in range(table.rowCount()):
+                    it = table.item(r, c)
+                    if it is None:
+                        continue
+                    flags = it.flags()
+                    if permitted:
+                        flags |= Qt.ItemFlag.ItemIsEditable
+                    else:
+                        flags &= ~Qt.ItemFlag.ItemIsEditable
+                    it.setFlags(flags)
+        finally:
+            table.setUpdatesEnabled(True)
 
     def _on_table_cell_double_clicked(self, r, c):
         """文本列双击即编辑手势：无对应列权限时拦截并提示「当前用户无权限」。"""

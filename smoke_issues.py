@@ -4682,6 +4682,34 @@ _ucb.close()
 check(_mw._nav_frame.layout().contentsMargins().bottom() == 12,
       "导航栏: 底部功能按钮组整体上移 12px，与底部状态栏同一高度")
 
+# apply_permissions 重写（单次 findChildren + 父子索引 DFS）的功能正确性回归：
+# 防止性能优化改坏可见性语义（切换用户卡顿优化不能改变行为）。
+# 说明：offscreen 下合成控件树的 isVisible() 受父链/布局影响不可靠，故直接校验
+# apply_permissions 设置的 WA_WState_Visible 标志（setVisible 的落点）。
+from PyQt6.QtWidgets import (QWidget as _QW, QTabWidget as _QTab,
+                             QPushButton as _QPB)
+from PyQt6.QtCore import Qt as _Qt
+_VIS = _Qt.WidgetAttribute.WA_WState_Visible
+_root = _QW()
+_child = _QW(_root)
+_top = _QPB("top", _root); _PU.bind(_top, "perm_A")
+_leaf = _QPB("leaf", _child); _PU.bind(_leaf, "perm_B")
+_combo = _QPB("combo", _child); _PU.bind(_combo, "perm_A+perm_B")  # 父+子组合
+_tab = _QTab(_root); _tp = _QW(); _tab.addTab(_tp, "t"); _PU.bind(_tp, "perm_C")
+_root.show(); app.processEvents()   # 构建完再 show，使 setVisible 能真正置位可见标志
+_PU.apply_permissions(_root, lambda k: True)
+check(_top.testAttribute(_VIS) and _leaf.testAttribute(_VIS)
+      and _combo.testAttribute(_VIS) and _tab.isTabVisible(0),
+      "权限DFS: 全授权时嵌套控件（含父+子组合）与 QTab 页均置为可见")
+_PU.apply_permissions(_root, lambda k: False)
+check((not _top.testAttribute(_VIS)) and (not _leaf.testAttribute(_VIS))
+      and (not _combo.testAttribute(_VIS)) and (not _tab.isTabVisible(0)),
+      "权限DFS: 撤销后嵌套控件与 QTab 页均隐藏（行为不变）")
+_PU.apply_permissions(_root, lambda k: k != "perm_B")
+check((not _combo.testAttribute(_VIS)) and _top.testAttribute(_VIS),
+      "权限DFS: 父+子组合键两级都授权才显示（子拒绝→隐藏）")
+_root.close()
+
 # ============ 收尾：确认未污染 src/ 下的工程配置（写盘已重定向到临时目录） ============
 check(all((open(_p, "rb").read() if os.path.exists(_p) else None) == _o
           for _p, _o in _CFG_GUARD.items()),

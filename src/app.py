@@ -966,12 +966,11 @@ class MainWindow(QMainWindow):
         """
         apply_permissions(self, self._can)
 
-        # 检测项列表「按列头细分权限」：整列只读/编辑拦截随权限刷新；
-        # 同时重贴合可见调试页的检测表列头覆盖按钮（全开/全关、是否检测下拉）。
+        # 检测项列表「按列头细分权限」的整列只读/编辑拦截，由下方
+        # ``_sync_reject_debug_state`` → ``on_reject_debug_mode_changed`` 统一刷新
+        # （每工位只刷一次）；此处若再刷一遍会与它重复，切换用户时放大卡顿，故不重复。
+        # 这里仅对可见调试页重贴合列头覆盖按钮（全开/全关、是否检测下拉）。
         for _dv in getattr(self, "debug_views", []):
-            _fn = getattr(_dv, "_apply_col_permissions", None)
-            if _fn is not None:
-                _fn(self._can)
             if _dv.isVisible():
                 _dv._reposition_overlay_buttons()
 

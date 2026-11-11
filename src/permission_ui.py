@@ -10,6 +10,8 @@
 """
 from __future__ import annotations
 
+from collections import defaultdict
+
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import QWidget, QStackedWidget, QTabWidget
 
@@ -45,6 +47,12 @@ def apply_permissions(root: QWidget, can) -> dict:
     - QStackedWidget 的页面本身不做显隐（由 switch_page 硬拦截进入），
       但会递归刷新**所有**页面的内部控件，切换页面时无需再手动刷新；
     - 幂等：同一权限反复刷新结果一致，权限被撤销 / 重新授予都能正确恢复。
+
+    2026-11-11 性能优化：原实现在 ``walk`` 递归中对**每个控件**都调用一次
+    ``findChildren(FindDirectChildrenOnly)``——运行时控件树约万级节点，意味着
+    万级次跨语言边界的 ``findChildren`` 调用；切换用户在主线程同步执行时会造成
+    明显卡顿。现改为**仅一次** ``root.findChildren(QWidget)`` 收集整树，再自建
+    父子索引做单次 DFS，复杂度从「节点数 × 平均子节点数」降到「节点数」。
     """
     state = {}
 
@@ -54,6 +62,17 @@ def apply_permissions(root: QWidget, can) -> dict:
             # 用于「检测列表设置」及其 7 个细分操作这类父子层级。
             state[key] = all(bool(can(part)) for part in key.split("+") if part)
         return state[key]
+
+    # 一次性收集整棵控件树（含 QStackedWidget 内所有隐藏页——它们未被销毁，
+    # 首次构建就 bind 过权限，需一并刷新）。万级节点也只做这一次遍历。
+    all_widgets = root.findChildren(QWidget)
+
+    # 自建父子索引：id(parent) -> [直接子控件]，供后续 DFS 使用，避免每节点重复 findChildren
+    children = defaultdict(list)
+    for w in all_widgets:
+        p = w.parent()
+        if p is not None:
+            children[id(p)].append(w)
 
     # QTabWidget 的页由 tabBar 管理，收集后跳过普通 setVisible
     tab_pages = set()
@@ -70,8 +89,7 @@ def apply_permissions(root: QWidget, can) -> dict:
         key = perm_key_of(w)
         if key and id(w) not in tab_pages:
             w.setVisible(allowed(key))
-        for child in w.findChildren(
-                QWidget, options=Qt.FindChildOption.FindDirectChildrenOnly):
+        for child in children.get(id(w), ()):
             if isinstance(child, QStackedWidget):
                 # 页面本身不显隐，但内部控件（工具条 / 页签 / 按钮）全部刷新
                 for i in range(child.count()):
