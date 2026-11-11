@@ -506,12 +506,12 @@ dv._table_data[_r6][6], dv._table_data[_r6][7] = "0.70", "0.90"
 dv._refresh_row_display(_r6)   # 同步表格单元格文本（_detect_spec 优先读单元格）
 _lo6, _hi6 = dv._detect_spec(_r6)
 check(_lo6 is not None and _hi6 is not None and _lo6 < _hi6,
-      f"值分布: 产品长度规格上下限有效且下限<上限（lo={_lo6} / hi={_hi6}）")
+      f"值分布: 元件长度规格上下限有效且下限<上限（lo={_lo6} / hi={_hi6}）")
 from PyQt6.QtWidgets import QDoubleSpinBox as _QDoubleSpinBoxCls
 import sys as _sys
 _dbgmod = _sys.modules[type(dv).__module__]
 _dd = _dbgmod.DistributionDialog(
-    dv, "产品长度", _r6, dv.get_distribution_samples(_r6),
+    dv, "元件长度", _r6, dv.get_distribution_samples(_r6),
     lo=_lo6, hi=_hi6, prod_start=dv._prod_start_time)
 _dd.setModal(False)
 app.processEvents()
@@ -2634,8 +2634,8 @@ check(_isd._defect_combo.checked_items() == [],
 _isd._strategy.setCurrentText("指定检测项不良")
 check(not _isd._defect_widget.isHidden(),
       "图片保存: 选「指定检测项不良」后显示检测项行")
-_isd._defect_combo.set_checked(["产品长度", "瓷体缺损"])
-check(sorted(_isd._defect_combo.checked_items()) == ["产品长度", "瓷体缺损"],
+_isd._defect_combo.set_checked(["元件长度", "瓷体崩缺"])
+check(sorted(_isd._defect_combo.checked_items()) == ["元件长度", "瓷体崩缺"],
       f"图片保存: 检测项可勾选多项 (实际 {_isd._defect_combo.checked_items()})")
 _isd._defect_combo.set_checked([])
 _isd._strategy.setCurrentText("所有图像")
@@ -2756,7 +2756,7 @@ check(_isd._path_edit.text().strip() != "",
 
 # —— 配置保存（落临时目录，不污染工程）——
 _isd._strategy.setCurrentText("指定检测项不良")
-_isd._defect_combo.set_checked(["产品长度", "瓷体缺损"])
+_isd._defect_combo.set_checked(["元件长度", "瓷体崩缺"])
 _isd._days.setValue(15)
 _isd._disk.setValue(20)
 _isd._full_action.setCurrentText("覆盖存储")
@@ -2765,13 +2765,13 @@ with open(_tmp_img, "r", encoding="utf-8") as _f:
     _img_cfg = _json.load(_f)
 check(_img_cfg.get("enabled") is True and _img_cfg.get("days") == 15
       and _img_cfg.get("disk_gb") == 20 and _img_cfg.get("full_action") == "覆盖存储"
-      and sorted(_img_cfg.get("defects", [])) == ["产品长度", "瓷体缺损"],
+      and sorted(_img_cfg.get("defects", [])) == ["元件长度", "瓷体崩缺"],
       f"图片保存: 保存后配置已持久化 (实际 {_img_cfg})")
 # 重新构造 → 配置回填
 _isd2 = ImageSaveDialog(_mw)
 check(_isd2._days.value() == 15 and _isd2._disk.value() == 20
       and _isd2._full_action.currentText() == "覆盖存储"
-      and sorted(_isd2._defect_combo.checked_items()) == ["产品长度", "瓷体缺损"]
+      and sorted(_isd2._defect_combo.checked_items()) == ["元件长度", "瓷体崩缺"]
       and not _isd2._defect_widget.isHidden(),
       "图片保存: 重新打开窗口配置正确回填（策略/检测项/天数/磁盘/存满动作）")
 _isd2._strategy.setCurrentText("所有图像")
@@ -4307,6 +4307,19 @@ _pvm_paths._camera_frame_dir = lambda: _tmpf
 _fly = _pvm_paths._camera_frame_files().get("飞料监测")
 _pvm_paths._camera_frame_dir = _orig_dir
 check(bool(_fly), "飞料监测: 文件目录前缀『飞料监测』样张正确归集到飞料监测一路（与其它 6 路一致）")
+
+# 统计信息-按缺陷项统计：示例检测项名称与最新检测项出厂清单一致（仅改名称、数值不变，2026-11-11）
+_list_names = {n for _, n in _dvmod.FACTORY_DETECT_ITEMS}
+_stat_names = (set(_pvm_paths._DEFECT_TYPES) | set(_pvm_paths._DEFECT_SPEC)
+               | set(_pvm_paths._DEFECT_SPLIT) | set(_pvm_paths._DEFECT_BASE)
+               | {l for l, _, _ in _pvm_paths._BASE_DONUT["按缺陷项统计"]})
+check(_stat_names <= _list_names,
+      f"统计示例改名: 按缺陷项统计示例名称均在最新检测项清单内（越界 {sorted(_stat_names - _list_names)}）")
+check(len(_pvm_paths._DEFECT_TYPES) == 13
+      and set(_pvm_paths._DEFECT_SPEC) == set(_pvm_paths._DEFECT_TYPES)
+      and set(_pvm_paths._DEFECT_SPLIT) == set(_pvm_paths._DEFECT_TYPES)
+      and set(_pvm_paths._DEFECT_BASE) == set(_pvm_paths._DEFECT_TYPES),
+      "统计示例改名: _DEFECT_TYPES/_SPEC/_SPLIT/_BASE 四表键一致（13 项，示例数值未变）")
 
 _dv0 = _mw.debug_views[0]
 check(len(_dv0._table_data) == 109

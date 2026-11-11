@@ -3062,7 +3062,7 @@ class DebugView(QWidget):
     def _build_effect_tab(self):
         """『图像效果调节』标签页：与「产品定位及区域分割 / 计算元素精确查找」同级。
 
-        无顶部总开关；每个检测项（清晰度 / 产品长度）左侧带独立启用开关
+        无顶部总开关；每个检测项（清晰度 / 元件长度）左侧带独立启用开关
         （默认开启），右侧展示示例数值、OK/NG 判定与合格范围（示例值区间）。
         真实引擎接入时，把示例值与合格范围替换为实时计算结果即可。
         """
@@ -3082,12 +3082,12 @@ class DebugView(QWidget):
         tip.setStyleSheet(f"color: {COLORS['text_secondary']};")
         vbox.addWidget(tip)
 
-        # 指标行（清晰度 / 产品长度 / 垂直度），范围为随机刷新区间
+        # 指标行（清晰度 / 元件长度 / 垂直度），范围为随机刷新区间
         metrics = _V()
         metrics.setContentsMargins(0, 0, 0, 0)
         metrics.setSpacing(8)
         metrics.addLayout(self._effect_metric_row("清晰度", "85.33", "OK", "80-100", 80.0, 100.0))
-        metrics.addLayout(self._effect_metric_row("产品长度", "359.55", "OK", "350-370", 350.0, 370.0))
+        metrics.addLayout(self._effect_metric_row("元件长度", "359.55", "OK", "350-370", 350.0, 370.0))
         # 亮度差异（2026-10-09 新增）：示例值在 30-100 内随机波动，
         # 合格范围 30-225（上限 225 > 刷新区间上限 100，故恒为 OK）。
         metrics.addLayout(self._effect_metric_row(
