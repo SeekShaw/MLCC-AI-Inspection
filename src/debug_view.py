@@ -3062,8 +3062,9 @@ class DebugView(QWidget):
     def _build_effect_tab(self):
         """『图像效果调节』标签页：与「产品定位及区域分割 / 计算元素精确查找」同级。
 
-        无顶部总开关；每个检测项（清晰度 / 元件长度）左侧带独立启用开关
-        （默认开启），右侧展示示例数值、OK/NG 判定与合格范围（示例值区间）。
+        无顶部总开关；每个检测项（产品居中度 / 产品清晰度 / 元件长度 / 亮度差异 /
+        相机垂直度 / 玻璃盘跳动）左侧带独立启用开关（默认开启，玻璃盘跳动默认关闭），
+        右侧展示示例数值、OK/NG 判定与合格范围（示例值区间）。
         真实引擎接入时，把示例值与合格范围替换为实时计算结果即可。
         """
         from PyQt6.QtWidgets import (
@@ -3082,41 +3083,51 @@ class DebugView(QWidget):
         tip.setStyleSheet(f"color: {COLORS['text_secondary']};")
         vbox.addWidget(tip)
 
-        # 指标行（清晰度 / 元件长度 / 垂直度），范围为随机刷新区间
+        # 指标行（产品居中度 / 产品清晰度 / 元件长度 / 亮度差异 / 相机垂直度 / 玻璃盘跳动）
+        # 范围为随机刷新区间；行左侧启用开关：产品居中度等默认开启，玻璃盘跳动默认关闭。
         metrics = _V()
         metrics.setContentsMargins(0, 0, 0, 0)
         metrics.setSpacing(8)
-        metrics.addLayout(self._effect_metric_row("清晰度", "85.33", "OK", "80-100", 80.0, 100.0))
+        # 产品居中度（2026-11-11 新增，第一行）：合格范围 -5~5 像素，示例值在范围内波动
+        metrics.addLayout(self._effect_metric_row(
+            "产品居中度", "1.50", "OK", "-5~5", -5.0, 5.0,
+            qual_lo=-5.0, qual_hi=5.0))
+        metrics.addLayout(self._effect_metric_row("产品清晰度", "85.33", "OK", "80-100", 80.0, 100.0))
         metrics.addLayout(self._effect_metric_row("元件长度", "359.55", "OK", "350-370", 350.0, 370.0))
         # 亮度差异（2026-10-09 新增）：示例值在 30-100 内随机波动，
         # 合格范围 30-225（上限 225 > 刷新区间上限 100，故恒为 OK）。
         metrics.addLayout(self._effect_metric_row(
             "亮度差异", "46.20", "OK", "30-225", 30.0, 100.0,
             qual_lo=30.0, qual_hi=225.0))
-        # 垂直度：示例范围 0.01-0.25；80% 概率落在 0.01-0.2、20% 概率落在 0.20-0.25；
-        # 合格范围为 0-0.2（落在区间外记为 NG，用于演示超限判定）。
+        # 相机垂直度（原『垂直度』重命名，2026-11-11）：示例范围 0.01-0.25；
+        # 80% 概率落在 0.01-0.2、20% 概率落在 0.20-0.25；合格范围为 0-0.2
+        # （落在区间外记为 NG，用于演示超限判定）。
         metrics.addLayout(self._effect_metric_row(
-            "垂直度", "0.13", "OK", "0-0.2", 0.01, 0.25,
+            "相机垂直度", "0.13", "OK", "0-0.2", 0.01, 0.25,
             dist="vdist", qual_lo=0.0, qual_hi=0.2))
+        # 玻璃盘跳动（2026-11-11 新增，默认关闭）：合格范围 0-0.05mm，示例值在范围内波动
+        metrics.addLayout(self._effect_metric_row(
+            "玻璃盘跳动", "0.020", "OK", "0-0.05", 0.0, 0.05,
+            qual_lo=0.0, qual_hi=0.05, on=False))
         vbox.addLayout(metrics)
         vbox.addStretch()
         return tab
 
     def _effect_metric_row(self, name, value, status, qual_range, lo, hi,
-                           dist=None, qual_lo=None, qual_hi=None):
+                           dist=None, qual_lo=None, qual_hi=None, on=True):
         """单行：启用开关 | 名称 | 示例值 | OK/NG | 合格范围（示例区间）。
 
         lo/hi 为该指标随机刷新区间，登记引用供实时刷新；
         合格判定区间由 qual_lo/qual_hi 决定（默认等于刷新区间）。
-        dist="vdist" 时使用垂直度专用分布（0.01-0.2 占 80%、0.20-0.25 占 20%）。
-        行左侧启用开关默认开启，关闭后该行示例数值暂停随机刷新。
+        dist="vdist" 时使用相机垂直度专用分布（0.01-0.2 占 80%、0.20-0.25 占 20%）。
+        行左侧启用开关由 on 控制（默认开启）；关闭后该行示例数值暂停随机刷新。
         """
         from PyQt6.QtWidgets import QHBoxLayout as _H, QLabel as _L
 
         row = _H()
         row.setSpacing(8)
-        # 行左侧启用开关（iOS 风格，默认开启）
-        sw = ToggleSwitch(on=True)
+        # 行左侧启用开关（iOS 风格，默认开启，玻璃盘跳动等可默认关闭）
+        sw = ToggleSwitch(on=on)
         sw.setToolTip(f"启用{name}检测")
         row.addWidget(sw)
         name_lbl = _L(name)
@@ -3152,7 +3163,7 @@ class DebugView(QWidget):
             "val": val_lbl, "badge": badge, "lo": lo, "hi": hi,
             "qual_lo": qual_lo if qual_lo is not None else lo,
             "qual_hi": qual_hi if qual_hi is not None else hi,
-            "dist": dist, "enabled": True, "sw": sw,
+            "dist": dist, "enabled": bool(on), "sw": sw,
         }
 
         def _on_toggle(on):
@@ -3168,7 +3179,7 @@ class DebugView(QWidget):
         """相机正在刷新图像时，把已启用检测项的示例数值随机刷新，并按各自的合格区间
         更新 OK/NG；关闭开关的行不刷新。
 
-        垂直度（dist="vdist"）使用专用分布：80% 概率落在 0.01-0.2、20% 概率落在
+        相机垂直度（dist="vdist"）使用专用分布：80% 概率落在 0.01-0.2、20% 概率落在
         0.20-0.25（其合格区间为 0-0.2，落在 0.20-0.25 时记为 NG，用于演示超限）。
         真实引擎接入后，把随机值替换为实时测量值即可。
         """
@@ -3178,7 +3189,7 @@ class DebugView(QWidget):
                 continue
             lo, hi = m["lo"], m["hi"]
             if m.get("dist") == "vdist":
-                # 垂直度专用分布：0.01-0.2 占 80%、0.20-0.25 占 20%
+                # 相机垂直度专用分布：0.01-0.2 占 80%、0.20-0.25 占 20%
                 if random.random() < 0.8:
                     val = random.uniform(0.01, 0.20)
                 else:

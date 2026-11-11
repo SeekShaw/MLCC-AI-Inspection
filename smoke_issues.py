@@ -541,6 +541,39 @@ if _bm is not None:
           f"图像效果调节: 亮度差异 8 次刷新值均在 30-100 内（{_bv}）")
     check(_bm["badge"].text() == "OK",
           f"图像效果调节: 亮度差异结果为 OK（实际 {_bm['badge'].text()}）")
+
+# 图像效果调节：新增产品居中度（首行/默认开）、玻璃盘跳动（默认关），清晰度→产品清晰度、垂直度→相机垂直度（2026-11-11）
+_em = getattr(dv, "_eff_metrics", {})
+_check_eff = [
+    ("产品居中度", True), ("产品清晰度", True), ("元件长度", True),
+    ("亮度差异", True), ("相机垂直度", True), ("玻璃盘跳动", False),
+]
+check(list(_em.keys()) == [n for n, _ in _check_eff],
+      f"图像效果调节: 6 项指标顺序正确（首行产品居中度、末行玻璃盘跳动，实际 {list(_em.keys())}）")
+check("清晰度" not in _em and "垂直度" not in _em,
+      "图像效果调节: 旧名「清晰度/垂直度」已重命名为「产品清晰度/相机垂直度」")
+_cc = _em.get("产品居中度")
+if _cc is not None:
+    check(_cc["enabled"] and _em["相机垂直度"]["enabled"],
+          "图像效果调节: 产品居中度/相机垂直度默认开启")
+    check(_cc["qual_lo"] == -5.0 and _cc["qual_hi"] == 5.0,
+          f"图像效果调节: 产品居中度合格范围 -5~5（实际 {_cc['qual_lo']}~{_cc['qual_hi']}）")
+    _cvs = []
+    for _ in range(8):
+        dv._refresh_effect_values()
+        _cvs.append(float(_cc["val"].text()))
+    check(all(-5.0 <= v <= 5.0 for v in _cvs) and _cc["badge"].text() == "OK",
+          f"图像效果调节: 产品居中度 8 次刷新值均在 -5~5 内且判 OK（{_cvs}）")
+_gc = _em.get("玻璃盘跳动")
+if _gc is not None:
+    check(not _gc["enabled"] and not _gc["sw"].is_on(),
+          "图像效果调节: 玻璃盘跳动默认关闭（开关 off）")
+    check(_gc["qual_lo"] == 0.0 and _gc["qual_hi"] == 0.05,
+          f"图像效果调节: 玻璃盘跳动合格范围 0-0.05（实际 {_gc['qual_lo']}~{_gc['qual_hi']}）")
+    _gv0 = float(_gc["val"].text())
+    dv._refresh_effect_values()   # 关闭态应跳过刷新，值保持不变
+    check(float(_gc["val"].text()) == _gv0,
+          f"图像效果调节: 玻璃盘跳动关闭态不刷新（保持 {_gv0}）")
 # 数值分布列已移除：现表头序列中不存在「数值分布」
 _all_headers = [dv._table.horizontalHeaderItem(c).text()
                 for c in range(dv._table.columnCount())]
