@@ -4051,6 +4051,82 @@ check(_pv._btn_simulate.text() == "模拟生产",
 _pv._sim_run, _pv._playing = _orig_sim, _orig_play
 _pv._refresh_simulate_btn_label()
 
+# ============ 新需求：检测项批量模式「调试」全局联动；全开 / 全关仅当前工位 ============
+_views_all = list(_mw.debug_views)
+check(len(_views_all) == 8,
+      f"检测项调试联动: 参与联动的相机调试界面共 8 个（实际 {len(_views_all)}）")
+check("_broadcast_debug_detect_mode" in src_dv
+      and "mode == \"调试\" and broadcast" in src_dv,
+      "检测项调试联动: 源码含「调试」广播分支与 broadcast 防递归开关")
+
+def _pick_mode(_v, _m):
+    """模拟用户从列头下拉主动选择：先更新显示，再发出 textActivated。"""
+    _v._detect_mode_combo.setCurrentText(_m)
+    _v._detect_mode_combo.textActivated.emit(_m)
+    app.processEvents()
+
+def _in_debug_mode(_v):
+    """该工位是否处于「调试」模式：仅 102 产品歪料 / 104 产品连料 启用。"""
+    _flags = []
+    for _r, _sw in _v._row_checks.items():
+        _row = _v._table_data[_r]
+        _expect = (str(_row[1]) in ("102", "104")
+                   or str(_row[2]) in ("产品歪料", "产品连料"))
+        _flags.append(_sw.is_on() == _expect)
+    return bool(_flags) and all(_flags)
+
+# 初始态统一为全开（不广播）
+for _v in _views_all:
+    _v._on_detect_mode_changed("全开", broadcast=False)
+    _v._detect_mode_combo.setCurrentText("全开")
+
+# 1) 从工位 1 选择「调试」→ 8 个工位全部进入调试
+_pick_mode(_views_all[0], "调试")
+check(all(_in_debug_mode(_v) for _v in _views_all),
+      "检测项调试联动: 工位1 选「调试」→ 全部 8 个相机工位检测项均只启用 102/104")
+check(all(_v._detect_mode_combo.currentText() == "调试" for _v in _views_all),
+      "检测项调试联动: 全部工位列头下拉同步显示「调试」")
+
+# 2) 工位 1 选择「全关」→ 仅工位 1 全关，其它工位保持调试
+_pick_mode(_views_all[0], "全关")
+check(not any(_sw.is_on() for _sw in _views_all[0]._row_checks.values()),
+      "检测项全关仅当前工位: 工位1 全部检测项停用")
+check(all(_in_debug_mode(_v) for _v in _views_all[1:]),
+      "检测项全关仅当前工位: 其余 7 个工位仍保持「调试」模式")
+
+# 3) 工位 4 选择「全开」→ 仅工位 4 全开，其它工位不受影响
+_pick_mode(_views_all[3], "全开")
+check(all(_sw.is_on() for _sw in _views_all[3]._row_checks.values()),
+      "检测项全开仅当前工位: 工位4 全部检测项启用")
+check(not any(_sw.is_on() for _sw in _views_all[0]._row_checks.values()),
+      "检测项全开仅当前工位: 工位1 仍保持「全关」")
+check(all(_in_debug_mode(_v) for _i, _v in enumerate(_views_all)
+          if _i not in (0, 3)),
+      "检测项全开仅当前工位: 其余 6 个工位仍保持「调试」模式")
+
+# 4) 从任意工位（非工位 1）再次选「调试」→ 依旧全局联动
+_pick_mode(_views_all[5], "调试")
+check(all(_in_debug_mode(_v) for _v in _views_all),
+      "检测项调试联动: 从任意工位（工位6）选「调试」同样联动全部工位")
+check(all(_v._detect_mode_combo.currentText() == "调试" for _v in _views_all),
+      "检测项调试联动: 再次联动后全部工位下拉均为「调试」")
+
+# 5) 独立创建、无主窗口 debug_views 的调试页选择「调试」不应抛异常
+dv._on_detect_mode_changed("调试")
+check(_in_debug_mode(dv),
+      "检测项调试联动: 无其它工位时本机位仍正常进入调试（广播安全降级）")
+
+# 6) 提示文案明确区分联动范围
+check("仅当前相机工位" in _views_all[0]._detect_mode_combo.toolTip()
+      and "联动全部相机工位" in _views_all[0]._detect_mode_combo.toolTip(),
+      "检测项调试联动: 下拉提示区分「仅当前工位」与「联动全部工位」")
+
+# 恢复为全开，避免影响后续断言
+for _v in _views_all:
+    _v._on_detect_mode_changed("全开", broadcast=False)
+    _v._detect_mode_combo.setCurrentText("全开")
+dv._on_detect_mode_changed("全开", broadcast=False)
+
 # ============ 收尾：确认未污染 src/ 下的工程配置（写盘已重定向到临时目录） ============
 check(all((open(_p, "rb").read() if os.path.exists(_p) else None) == _o
           for _p, _o in _CFG_GUARD.items()),

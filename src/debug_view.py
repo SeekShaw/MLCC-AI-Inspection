@@ -3343,6 +3343,8 @@ class DebugView(QWidget):
 
         # 「是否检测」列头右侧的下拉批量模式：全开 / 全关 / 调试。
         # 调试：仅勾选「产品歪料」(102) 与「产品连料」(104)，其余检测项均不检测。
+        # ⚠️ 2026-11-11 需求：任意工位选「调试」→ 联动全部相机工位；
+        #    「全开 / 全关」只作用于当前相机工位。
         self._detect_mode_combo = QComboBox(h.viewport())
         self._detect_mode_combo.addItems(["全开", "全关", "调试"])
         self._detect_mode_combo.setFixedHeight(20)
@@ -3350,9 +3352,10 @@ class DebugView(QWidget):
         self._detect_mode_combo.setFixedWidth(52)
         self._detect_mode_combo.setCursor(Qt.CursorShape.PointingHandCursor)
         self._detect_mode_combo.setToolTip(
-            "全开：全部检测项启用检测\n"
-            "全关：全部检测项停用检测\n"
-            "调试：仅启用 102 产品歪料、104 产品连料")
+            "全开：全部检测项启用检测（仅当前相机工位）\n"
+            "全关：全部检测项停用检测（仅当前相机工位）\n"
+            "调试：仅启用 102 产品歪料、104 产品连料，\n"
+            "　　　并联动全部相机工位一起进入调试")
         # 下拉选项文字居中：QComboBox 的弹出项由 delegate 读取 TextAlignmentRole，
         # 非编辑态控件本体则用左内边距把当前项文字视觉居中。
         _cm = self._detect_mode_combo.model()
@@ -4473,12 +4476,14 @@ class DebugView(QWidget):
     _DEBUG_DETECT_CODES = {"102", "104"}
     _DEBUG_DETECT_NAMES = {"产品歪料", "产品连料"}
 
-    def _on_detect_mode_changed(self, mode):
+    def _on_detect_mode_changed(self, mode, broadcast=True):
         """「是否检测」列头下拉的批量模式：全开 / 全关 / 调试。
 
-        - 全开：全部检测项启用检测；
-        - 全关：全部检测项停用检测；
-        - 调试：仅启用 102 产品歪料、104 产品连料，其余检测项停用。
+        - 全开：全部检测项启用检测（仅作用于当前相机工位）；
+        - 全关：全部检测项停用检测（仅作用于当前相机工位）；
+        - 调试：仅启用 102 产品歪料、104 产品连料，其余检测项停用；
+          ⚠️ 2026-11-11 需求：任意相机工位选择「调试」时，联动**全部**相机工位，
+          其它工位的检测项与列头下拉同步变为「调试」。
         开关 set_on() 不发信号，故同时手动同步底层 _table_data 的「是否检测」
         标记并按新状态重判「检测结果」（停用 → 待定）。
         """
@@ -4513,6 +4518,39 @@ class DebugView(QWidget):
                     self._apply_result_color(it, result)
         # 「显示已选」筛选模式下，勾选状态变化后立即同步可见行
         self._apply_filter_state()
+        # 「全开 / 全关」到此为止，不再联动其它工位
+        if mode == "调试" and broadcast:
+            self._broadcast_debug_detect_mode()
+
+    def _broadcast_debug_detect_mode(self):
+        """把「调试」批量模式同步到其它所有相机工位的调试界面。
+
+        - 每个工位复用 ``_on_detect_mode_changed("调试", broadcast=False)``，
+          避免二次广播造成递归；
+        - 同步其它工位列头下拉显示为「调试」（blockSignals 屏蔽，避免重复触发）；
+        - 「全开 / 全关」不会进入本方法，只作用于用户当前操作的工位。
+        """
+        mw = self.main_window
+        views = ([v for v in getattr(mw, "debug_views", []) if v is not self]
+                 if mw is not None else [])
+        synced = 0
+        for v in views:
+            if getattr(v, "_table", None) is None:
+                continue
+            try:
+                v._on_detect_mode_changed("调试", broadcast=False)
+            except Exception:
+                continue
+            combo = getattr(v, "_detect_mode_combo", None)
+            if combo is not None:
+                combo.blockSignals(True)
+                combo.setCurrentText("调试")
+                combo.blockSignals(False)
+            synced += 1
+        if synced:
+            self._dv_log(
+                f"检测项设置：调试模式已联动 {synced + 1} 个相机工位"
+                "（全开 / 全关 仅作用于当前工位）")
 
     def _reposition_overlay_buttons(self):
         """把列头的两个覆盖控件分别贴到对应列头的右侧并置顶。
