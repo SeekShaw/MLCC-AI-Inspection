@@ -4245,6 +4245,31 @@ check("class SyncSchemeDialog" in src_dv and "全部同步" not in src_dv
       and "_on_scheme_sync" in src_dv,
       "方案同步: 源码已无「全部同步」字样，工具条指向新弹窗处理函数")
 
+# 2026-11-11：文本列手动编辑必须回写 _table_data（修复「上表面改规格/标称值后方案同步到下表面未生效」）
+_gdx = _mw.debug_views[0]
+_c_lo = _gdx._col_by_header("规格下限")
+_c_nom = _gdx._col_by_header("标称值")
+_it_lo = _gdx._table.item(0, _c_lo)
+_it_nom = _gdx._table.item(0, _c_nom)
+_orig_lo = _gdx._table_data[0][6]
+_orig_nom = _gdx._table_data[0][3]
+_it_lo.setText("123.45")          # 模拟用户在「规格下限」单元格手动编辑
+_it_nom.setText("55.5")           # 模拟用户在「标称值」单元格手动编辑
+check(str(_gdx._table_data[0][6]) == "123.45" and str(_gdx._table_data[0][3]) == "55.5",
+      "文本列编辑: 规格下限/标称值手动编辑回写 _table_data（方案同步数据源）")
+_done, _tot, _fail = _gdx._sync_scheme_to(_mw.debug_views[1:])
+check(str(_mw.debug_views[1]._table_data[0][6]) == "123.45"
+      and str(_mw.debug_views[1]._table_data[0][3]) == "55.5",
+      "方案同步: 手动编辑的规格下限/标称值随方案同步到目标工位（修复未生效）")
+# 还原数据与显示，避免影响后续用例
+_it_lo.setText(str(_orig_lo)); _it_nom.setText(str(_orig_nom))
+_gdx._table_data[0][6] = _orig_lo; _gdx._table_data[0][3] = _orig_nom
+_gdx._refresh_row_display(0)
+for _v in _mw.debug_views[1:]:
+    _v._table_data[0][6] = _orig_lo; _v._table_data[0][3] = _orig_nom
+    _v._refresh_row_display(0)
+
+
 # ============ 2026-11-11：发布文档同步到 output/ 与程序压缩包 ============
 # 需求：权威文档随 exe 一同交付；build_b.py 每次打包自动同步到 output/，
 # make_portable_zip.py 整体复制 output/ 后压缩包顶层即含同一份 md。
@@ -4380,7 +4405,7 @@ check(_dvg._tick_count == _t0 + 1,
 _mdl.close()
 _dvg._on_play_tick()
 check(_dvg._tick_count == _t0 + 2,
-      "运行卡顿: 弹窗关闭后刷新持续（仅相机帧推进在模态期间暂停）")
+      "运行卡顿: 弹窗关闭后刷新持续（与生产运行界面一致的无感切换，全程不冻结）")
 _dvg.close()
 
 # 检测列表「设置为默认 / 恢复至默认」仅对当前工位有效（2026-11-11）：

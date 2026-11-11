@@ -3573,6 +3573,11 @@ class DebugView(QWidget):
         table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         table.setHorizontalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
         self._table = table
+        # 2026-11-11：文本列（标称值/补偿值/规格下限/规格上限/收料位置）手动编辑后
+        # 回写底层 _table_data，并重判检测结果——否则编辑只停留在单元格显示、底层数据
+        # 不变，导致「方案同步」「恢复至默认」「检测结果判定」均读到旧值（2026-11-11 反馈）。
+        self._cell_commit_suppress = False
+        table.cellChanged.connect(self._on_cell_changed)
 
         # 列头字体 10px（2026-10-09 需求：红框内所有字号统一 10px；
         # 原 `QFont(name, 8)` 为 8磅≈10.67px，改用 setPixelSize(10) 精确 10px）。
@@ -4288,22 +4293,19 @@ class DebugView(QWidget):
         if self._play_timer.interval() != _interval:
             self._play_timer.start(_interval)
         self._tick_count += 1
-        # 2026-11-11（二次修订）：登录 / 单位·出料·方案等模态弹窗打开时，**不再整拍
-        # 跳过刷新**——此前整拍跳过会让切换用户登录期间画面完全冻结、关闭后才恢复，
-        # 用户感知为卡顿。现改为「仅暂停相机帧推进（最重且被弹窗遮挡在画布之上）与分布
-        # 样本累积」，保留检测值 / 效果示例 / 统计的实时刷新，使弹窗期间界面仍正常刷新；
-        # 暂停相机帧推进即可释放主线程、让登录框操作流畅，关闭弹窗后下一拍自动恢复。
-        _modal = QApplication.activeModalWidget() is not None
+        # 2026-11-11（三次修订）：切换用户登录等模态弹窗期间刷新**全程不停止、不冻结**，
+        # 与生产运行界面一致的无感切换——相机帧推进 / 检测值 / 效果示例 / 统计 全部照常刷新。
+        # 此前两版分别「整拍跳过」「仅暂停相机帧推进」，均被反馈为卡顿/冻结，故彻底去掉
+        # 任何弹窗相关的刷新门禁；仅「冻结」(_frozen) 时停相机帧。
         # 冻结时不推进相机帧（画布停留在当前画面，不再刷新），统计仍按节拍更新
         if not self._frozen:
-            if not _modal:
-                # 仅推进主相机，再把主画布的帧序号同步到 R/G/B 三通道，
-                # 确保右侧 R/G/B 画面与主画布始终一致。
-                main = self._cams[0]
-                main.advance_frame(self._cam_speed[0])
-                idx = main.current_frame_index()
-                for cam in self._cams[1:]:
-                    cam.set_frame_index(idx)
+            # 仅推进主相机，再把主画布的帧序号同步到 R/G/B 三通道，
+            # 确保右侧 R/G/B 画面与主画布始终一致。
+            main = self._cams[0]
+            main.advance_frame(self._cam_speed[0])
+            idx = main.current_frame_index()
+            for cam in self._cams[1:]:
+                cam.set_frame_index(idx)
             # 图像效果调节：相机有图像刷新时，已启用检测项的示例数值按节拍随机刷新
             if self._tick_count % 4 == 0:
                 self._refresh_effect_values()
@@ -4316,8 +4318,7 @@ class DebugView(QWidget):
                     and getattr(self, "_production_running", False)):
                 if self._tick_count % 3 == 0:
                     self.refresh_detection_values()
-                    if not _modal:
-                        self._accumulate_distribution_samples()
+                    self._accumulate_distribution_samples()
         # 统计刷新降频（每 2 拍一次）：调试界面生产信息镜像生产运行界面，随节拍同步。
         # 与生产运行界面的 _refresh_every=2 保持一致，避免调试界面刷新偏慢。
         if self._tick_count % 2 == 0:
@@ -5151,54 +5152,86 @@ class DebugView(QWidget):
             n += 1
         return n
 
+    def _on_cell_changed(self, row, col):
+        """文本列手动编辑后回写底层数据并重判结果（2026-11-11 修复方案同步未生效）。
+
+        仅提交可编辑文本列（标称值/补偿值/规格下限/规格上限/收料位置）；
+        检测编号/检测项目/检测结果 为只读或系统计算，不回写。程序化刷新经
+        ``_cell_commit_suppress`` 屏蔽，避免递归。
+        """
+        if getattr(self, "_cell_commit_suppress", False):
+            return
+        if not (0 <= row < len(self._table_data)):
+            return
+        table = getattr(self, "_table", None)
+        head = table.horizontalHeaderItem(col) if table is not None else None
+        if head is None:
+            return
+        name = head.text()
+        if name not in ("标称值", "补偿值", "规格下限", "规格上限", "收料位置"):
+            return
+        di = self._data_index_for_col(col)
+        if di is None or di >= len(self._table_data[row]):
+            return
+        item = table.item(row, col)
+        if item is None:
+            return
+        # 规格/标称/补偿/收料位置统一以字符串存储，与 _collect_detect_settings 约定一致
+        self._table_data[row][di] = item.text()
+        self._refresh_row_display(row)
+
     def _refresh_row_display(self, r):
         """按底层数据刷新一行的控件与单元格显示（开关/单位/预警/规格/结果）。"""
         if not (0 <= r < len(self._table_data)):
             return
-        row = self._table_data[r]
-        table = self._table
-        # 1) 是否检测开关（set_on 不发信号，数据已由调用方写入）
-        chk = self._row_checks.get(r)
-        if chk is not None:
-            chk.set_on(bool(row[0]))
-        # 2) 单位单元格
-        cell = self._unit_cells.get(r)
-        if cell is not None:
-            cell.set_unit(str(row[8]))     # 回调写同值，幂等
-        # 3) 文本列（表头查列，避免与列序耦合）
-        for name, idx in (("检测编号", 1), ("检测项目", 2), ("标称值", 3),
-                          ("补偿值", 5), ("规格下限", 6), ("规格上限", 7),
-                          ("收料位置", 9), ("检测结果", 10)):
-            c = self._col_by_header(name)
-            if c < 0:
-                continue
-            it = table.item(r, c)
-            if it is not None:
-                it.setText(str(row[idx]))
-        # 4) 检测值列（cellWidget 内的数值标签）
-        lbl = self._val_labels.get(r)
-        if lbl is not None:
-            lbl.setText(str(row[4]))
-        # 5) 良率预警控件（开关 + 阈值）
-        cw = table.cellWidget(r, self._col_by_header("良率预警设置"))
-        if cw is not None:
-            warn = self._yield_warn.get(r, {"enabled": True, "threshold": 50})
-            for c in cw.children():
-                if isinstance(c, ToggleSwitch):
-                    c.set_on(bool(warn["enabled"]))
-                elif isinstance(c, QSpinBox):
-                    c.setValue(int(warn["threshold"]))
-        # 6) 规格变化后按新限重判检测结果
-        lo, hi = _to_float(row[6]), _to_float(row[7])
-        if lo is not None and hi is not None and lo <= hi:
-            result = self._judge_result(bool(row[0]), row[4], lo, hi)
-            row[10] = result
-            c = self._col_by_header("检测结果")
-            if c >= 0:
+        self._cell_commit_suppress = True
+        try:
+            row = self._table_data[r]
+            table = self._table
+            # 1) 是否检测开关（set_on 不发信号，数据已由调用方写入）
+            chk = self._row_checks.get(r)
+            if chk is not None:
+                chk.set_on(bool(row[0]))
+            # 2) 单位单元格
+            cell = self._unit_cells.get(r)
+            if cell is not None:
+                cell.set_unit(str(row[8]))     # 回调写同值，幂等
+            # 3) 文本列（表头查列，避免与列序耦合）
+            for name, idx in (("检测编号", 1), ("检测项目", 2), ("标称值", 3),
+                              ("补偿值", 5), ("规格下限", 6), ("规格上限", 7),
+                              ("收料位置", 9), ("检测结果", 10)):
+                c = self._col_by_header(name)
+                if c < 0:
+                    continue
                 it = table.item(r, c)
                 if it is not None:
-                    it.setText(result)
-                    self._apply_result_color(it, result)
+                    it.setText(str(row[idx]))
+            # 4) 检测值列（cellWidget 内的数值标签）
+            lbl = self._val_labels.get(r)
+            if lbl is not None:
+                lbl.setText(str(row[4]))
+            # 5) 良率预警控件（开关 + 阈值）
+            cw = table.cellWidget(r, self._col_by_header("良率预警设置"))
+            if cw is not None:
+                warn = self._yield_warn.get(r, {"enabled": True, "threshold": 50})
+                for c in cw.children():
+                    if isinstance(c, ToggleSwitch):
+                        c.set_on(bool(warn["enabled"]))
+                    elif isinstance(c, QSpinBox):
+                        c.setValue(int(warn["threshold"]))
+            # 6) 规格变化后按新限重判检测结果
+            lo, hi = _to_float(row[6]), _to_float(row[7])
+            if lo is not None and hi is not None and lo <= hi:
+                result = self._judge_result(bool(row[0]), row[4], lo, hi)
+                row[10] = result
+                c = self._col_by_header("检测结果")
+                if c >= 0:
+                    it = table.item(r, c)
+                    if it is not None:
+                        it.setText(result)
+                        self._apply_result_color(it, result)
+        finally:
+            self._cell_commit_suppress = False
 
     def _on_set_default(self):
         """设置为默认：把当前检测项设置存盘，供『恢复至默认』调用。"""
@@ -5316,7 +5349,7 @@ class DebugView(QWidget):
             f"border:1px solid {COLORS['border']}; border-radius:4px; "
             f"padding:6px 18px; font-size:12px;")
         setdef_btn.clicked.connect(
-            lambda _=None, c=combos: self._unit_set_default_global(c))
+            lambda _=None, c=combos: self._unit_set_default_global(c, msg_parent=dlg))
         btns.addWidget(setdef_btn)
         btns.addWidget(ok_btn)
         btns.addWidget(cancel_btn)
@@ -5346,7 +5379,7 @@ class DebugView(QWidget):
             base = os.path.dirname(os.path.abspath(__file__))
         return os.path.join(base, "unit_defaults.json")
 
-    def _unit_set_default_global(self, combos, show_msg=True):
+    def _unit_set_default_global(self, combos, show_msg=True, msg_parent=None):
         """单位设置弹窗「设置为默认」：把当前各检测项单位选择应用到**所有相机工位**
         （按检测项编号同步），并持久化为全局单位默认配置（``unit_defaults.json``）。
 
@@ -5381,7 +5414,7 @@ class DebugView(QWidget):
         self._dv_log(f"单位设置：设置为默认（全局生效，{n} 处单位同步）")
         if show_msg:
             QMessageBox.information(
-                self, "单位设置",
+                msg_parent or self, "单位设置",
                 f"已设为默认并同步到所有相机工位（{n} 处单位）。")
 
     def _persist_unit_defaults(self, code_unit):
@@ -5565,34 +5598,38 @@ class DebugView(QWidget):
         table = getattr(self, "_table", None)
         if table is None:
             return 0
-        c_lo = self._col_by_header("规格下限")
-        c_hi = self._col_by_header("规格上限")
-        c_res = self._col_by_header("检测结果")
-        n = 0
-        for r, lo, hi in changes:
-            if not (0 <= r < len(self._table_data)):
-                continue
-            if lo is None or hi is None or lo > hi:
-                continue
-            # 同步底层数据（raw[6]=规格下限 raw[7]=规格上限）
-            self._table_data[r][6] = str(lo)
-            self._table_data[r][7] = str(hi)
-            for c, v in ((c_lo, lo), (c_hi, hi)):
-                if c >= 0:
-                    it = table.item(r, c)
-                    if it is not None:
-                        it.setText(str(v))
-            # 按新规格重新判定『检测结果』
-            chk = self._row_checks.get(r)
-            checked = bool(chk.is_on()) if chk else True
-            result = self._judge_result(
-                checked, self._table_data[r][4], lo, hi)
-            if c_res >= 0:
-                res_item = table.item(r, c_res)
-                if res_item is not None:
-                    res_item.setText(result)
-                    self._apply_result_color(res_item, result)
-            n += 1
+        self._cell_commit_suppress = True   # 内部 setText 触发的 cellChanged 由本方法统一写入，屏蔽回写
+        try:
+            c_lo = self._col_by_header("规格下限")
+            c_hi = self._col_by_header("规格上限")
+            c_res = self._col_by_header("检测结果")
+            n = 0
+            for r, lo, hi in changes:
+                if not (0 <= r < len(self._table_data)):
+                    continue
+                if lo is None or hi is None or lo > hi:
+                    continue
+                # 同步底层数据（raw[6]=规格下限 raw[7]=规格上限）
+                self._table_data[r][6] = str(lo)
+                self._table_data[r][7] = str(hi)
+                for c, v in ((c_lo, lo), (c_hi, hi)):
+                    if c >= 0:
+                        it = table.item(r, c)
+                        if it is not None:
+                            it.setText(str(v))
+                # 按新规格重新判定『检测结果』
+                chk = self._row_checks.get(r)
+                checked = bool(chk.is_on()) if chk else True
+                result = self._judge_result(
+                    checked, self._table_data[r][4], lo, hi)
+                if c_res >= 0:
+                    res_item = table.item(r, c_res)
+                    if res_item is not None:
+                        res_item.setText(result)
+                        self._apply_result_color(res_item, result)
+                n += 1
+        finally:
+            self._cell_commit_suppress = False
         return n
 
     def _judge_result(self, checked, new_val, lo, hi):
