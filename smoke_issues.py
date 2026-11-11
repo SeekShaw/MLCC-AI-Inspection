@@ -10,9 +10,13 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "src"))
 _TMP_CFG_DIR = tempfile.mkdtemp(prefix="smoke_cfg_")
 _TMP_SHIFT = os.path.join(_TMP_CFG_DIR, "shift_defaults.json")
 _TMP_ALARM = os.path.join(_TMP_CFG_DIR, "alarm_config.json")
-# 2026-11-11：检测方案/默认/出厂配置改存 %APPDATA%/EcompVisionInspector/config，
-# 冒烟测试重定向 APPDATA 到临时目录——既验证真实写盘/加载，又不污染真实配置、
+# 2026-11-11：检测方案/默认/出厂配置改存 Teruo/output/config（或 ECV_CONFIG_DIR），
+# 冒烟测试用 ECV_CONFIG_DIR 重定向到临时目录——既验证真实写盘/加载，又不污染真实配置、
 # 且每次运行临时目录全新（避免上次运行残留方案影响本次出厂基线断言）。
+# 同时重定向 APPDATA：_migrate_old_config 会从 %APPDATA%/EcompVisionInspector/config
+# 迁移历史配置，若保留真实 APPDATA 会把用户已保存的方案拉进测试、污染「纯净工厂」断言，
+# 故一并指向临时目录（迁移源为空）。
+os.environ["ECV_CONFIG_DIR"] = _TMP_CFG_DIR
 os.environ["APPDATA"] = _TMP_CFG_DIR
 _CFG_GUARD = {}
 for _cfg_name in ("shift_defaults.json", "alarm_config.json"):
@@ -4455,12 +4459,12 @@ except OSError:
     pass
 
 # 检测方案持久化（2026-11-11）：单位/出料/方案同步等设置写入
-# %APPDATA%/EcompVisionInspector/config（程序更新不覆盖），下次启动自动加载。
+# Teruo/output/config（ECV_CONFIG_DIR 重定向到临时目录，程序更新不覆盖），下次启动自动加载。
 _gd_p = _mw.debug_views[0]
 _sp = _gd_p._scheme_path()
-check("EcompVisionInspector" in _sp
+check(_sp.startswith(_TMP_CFG_DIR)
       and os.path.basename(_sp).startswith("scheme_"),
-      f"方案持久化: 配置存于 APPDATA 持久化目录（程序更新不覆盖），{_sp}")
+      f"方案持久化: 配置存于 output/config 持久化目录（程序更新不覆盖），{_sp}")
 _c_lo_p = _gd_p._col_by_header("规格下限")
 _orig_lo_p = str(_gd_p._table_data[0][6])
 _gd_p._table.item(0, _c_lo_p).setText("77.7")     # 手动编辑 → cellChanged 回写

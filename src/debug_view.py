@@ -5114,20 +5114,30 @@ class DebugView(QWidget):
 
     @staticmethod
     def _config_dir():
-        """检测配置持久化目录（**程序更新不覆盖**）。
+        """检测配置持久化目录。
 
         2026-11-11 需求：单位设置 / 出料设置 / 方案同步 / 设置为默认 / 设置为出厂
-        等落盘配置原先写在 exe 同目录，程序更新（整目录替换）会被删除或覆盖。
-        现统一改存 ``%APPDATA%/EcompVisionInspector/config``（无 APPDATA 时退回
-        用户主目录），并自动把旧 exe 同目录的历史配置迁移过来（旧存在且新不存在
-        才复制，避免覆盖新配置）。
+        的落盘配置统一存放于 ``Teruo\\output\\config``（项目内、随仓库，但被 .gitignore
+        排除、不入库）——程序更新（替换 exe）不影响；旧版写在 exe 同目录 / %APPDATA%
+        的历史配置会在首次启动自动迁移过来（见 ``_migrate_old_config``）。
+
+        路径推导：
+          - 打包运行（frozen）：exe 位于 ``Teruo\\output\\`` 下，取 ``<exe 目录>/config``；
+          - 开发运行：``src/debug_view.py`` 上两级为仓库根，取 ``<根>/output/config``。
+        可通过环境变量 ``ECV_CONFIG_DIR`` 强制覆盖（冒烟测试用于隔离临时目录）。
         """
-        base = os.environ.get("APPDATA") or os.path.expanduser("~")
-        d = os.path.join(base, "EcompVisionInspector", "config")
+        env = os.environ.get("ECV_CONFIG_DIR")
+        if env:
+            d = env
+        elif getattr(sys, "frozen", False) and getattr(sys, "executable", ""):
+            d = os.path.join(os.path.dirname(os.path.abspath(sys.executable)), "config")
+        else:
+            root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            d = os.path.join(root, "output", "config")
         try:
             os.makedirs(d, exist_ok=True)
         except Exception:
-            d = os.path.dirname(os.path.abspath(__file__))
+            d = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config")
         return d
 
     def _exe_side_dir(self):
@@ -5143,13 +5153,21 @@ class DebugView(QWidget):
         return cam or "default"
 
     def _migrate_old_config(self, old_name, new_path):
-        """把 exe 同目录的旧版配置迁移到持久化目录（仅当旧存在且新不存在）。"""
-        try:
-            old_p = os.path.join(self._exe_side_dir(), old_name)
-            if os.path.exists(old_p) and not os.path.exists(new_path):
-                shutil.copyfile(old_p, new_path)
-        except Exception:
-            pass
+        """把历史位置的同名配置迁移到当前持久化目录（仅当旧存在且新不存在）。
+
+        兼容 V3.7.6.0 前 exe 同目录配置 与 V3.7.7.0 的 ``%APPDATA%`` 配置；
+        首次启动自动迁入，避免用户已保存的设置因目录迁移而丢失。
+        """
+        old_dirs = [self._exe_side_dir()]
+        appdata = os.environ.get("APPDATA") or os.path.expanduser("~")
+        old_dirs.append(os.path.join(appdata, "EcompVisionInspector", "config"))
+        for od in old_dirs:
+            try:
+                op = os.path.join(od, old_name)
+                if os.path.exists(op) and not os.path.exists(new_path):
+                    shutil.copyfile(op, new_path)
+            except Exception:
+                pass
 
     def _detect_defaults_path(self):
         """「设置为默认 / 恢复至默认」配置路径（按工位区分，存持久化目录）。"""
