@@ -327,6 +327,9 @@
     "default_ok_port": 1,
     "default_pending_port": 4,
     "default_ng_port": 2,
+    "debug_mode": "by_settings",
+    "debug_filter_recheck": false,
+    "debug_skip_feed": false,
     "ports": {
       "ok": {
         "enable": true,

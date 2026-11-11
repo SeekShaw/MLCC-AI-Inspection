@@ -11,7 +11,7 @@ from PyQt6.QtWidgets import (
     QDialog, QWidget, QVBoxLayout, QHBoxLayout, QFormLayout, QLabel,
     QDoubleSpinBox, QSpinBox, QComboBox, QCheckBox, QPushButton, QTabWidget,
     QGroupBox, QFrame, QGridLayout, QLineEdit, QMessageBox, QScrollArea,
-    QStackedWidget,
+    QStackedWidget, QRadioButton, QButtonGroup,
 )
 from PyQt6.QtCore import Qt
 
@@ -1191,7 +1191,7 @@ class RejectSettingsDialog(QDialog):
         self.pv = mw.production
         self.setWindowTitle("剔除设定")
         self.setWindowFlags(self.windowFlags() | Qt.WindowType.WindowStaysOnTopHint)
-        self.setMinimumSize(760, 480)
+        self.setMinimumSize(780, 600)
         self.setStyleSheet(f"QDialog {{ background-color: {COLORS['bg_panel']}; }}")
         self._build()
         self._load()
@@ -1277,6 +1277,60 @@ class RejectSettingsDialog(QDialog):
             self._port_rows[key] = (ck, pos, blow, pri, test_btn)
         inner.addLayout(grid)
         lay.addWidget(box)
+
+        # 剔除位置调试：5 种位置剔除模式（单选，默认「按剔除设置剔除」）
+        #   + 过滤重检 / 隔料剔除 两个可选项（可多选，也可都不勾）
+        box_dbg, inner_dbg = _section_box("剔除位置调试")
+        self._debug_modes = [
+            ("by_settings", "按剔除设置剔除"),
+            ("all_ok", "全踢OK料盒"),
+            ("all_ng1", "全踢NG1料盒"),
+            ("all_ng2", "全踢NG2料盒"),
+            ("all_rst", "全踢RST料盒"),
+        ]
+        radio_style = (
+            f"QRadioButton {{ color: {COLORS['text_primary']}; font-size: 12px; spacing: 6px; }}"
+            f"QRadioButton::indicator {{ width: 14px; height: 14px; border-radius: 7px; "
+            f"border: 1px solid {COLORS['text_secondary']}; background-color: {COLORS['bg_card']}; }}"
+            f"QRadioButton::indicator:checked {{ border: 4px solid {COLORS['accent_blue']}; "
+            f"background-color: {COLORS['bg_card']}; }}")
+        cb_style = (
+            f"QCheckBox {{ color: {COLORS['text_primary']}; font-size: 12px; spacing: 6px; }}"
+            f"QCheckBox::indicator {{ width: 14px; height: 14px; border-radius: 2px; "
+            f"border: 1px solid {COLORS['text_secondary']}; background-color: {COLORS['bg_card']}; }}"
+            f"QCheckBox::indicator:checked {{ background-color: {COLORS['accent_blue']}; "
+            f"border-color: {COLORS['accent_blue']}; }}")
+        self._debug_group = QButtonGroup(self)
+        self._debug_group.setExclusive(True)   # 5 种位置剔除模式只能单选
+        self._debug_radios = {}
+        radio_row = QHBoxLayout()
+        radio_row.setSpacing(16)
+        for key, label in self._debug_modes:
+            rb = QRadioButton(label)
+            rb.setStyleSheet(radio_style)
+            rb.setToolTip(f"位置调试剔除口：{label}（点击圆圈选中，5 选 1）")
+            self._debug_group.addButton(rb)
+            self._debug_radios[key] = rb
+            radio_row.addWidget(rb)
+            rb.toggled.connect(self._on_debug_mode_changed)
+        radio_row.addStretch()
+        inner_dbg.addLayout(radio_row)
+
+        opt_row = QHBoxLayout()
+        opt_row.setSpacing(24)
+        self.debug_filter_recheck = QCheckBox("过滤重检")
+        self.debug_filter_recheck.setStyleSheet(cb_style)
+        self.debug_filter_recheck.setToolTip("位置调试时过滤重检件（可勾选，也可不勾选）")
+        self.debug_filter_recheck.toggled.connect(self._apply)
+        self.debug_skip_feed = QCheckBox("隔料剔除")
+        self.debug_skip_feed.setStyleSheet(cb_style)
+        self.debug_skip_feed.setToolTip("位置调试时隔料剔除（可勾选，也可不勾选）")
+        self.debug_skip_feed.toggled.connect(self._apply)
+        opt_row.addWidget(self.debug_filter_recheck)
+        opt_row.addWidget(self.debug_skip_feed)
+        opt_row.addStretch()
+        inner_dbg.addLayout(opt_row)
+        lay.addWidget(box_dbg)
 
         # 默认剔除口设置（含合并进来的「软件脱机/超时剔除口」）
         box4, inner4 = _section_box("默认剔除口设置")
@@ -1396,6 +1450,11 @@ class RejectSettingsDialog(QDialog):
             f"border: 1px solid {COLORS['border']}; border-radius: 4px; padding: 4px 8px; font-size: 12px; }}"
             f"QComboBox::drop-down {{ width: 16px; border: none; }}")
 
+    def _on_debug_mode_changed(self, checked):
+        """位置调试模式切换：仅在新模式被选中时写回一次（toggled 会成对触发）。"""
+        if checked:
+            self._apply()
+
     def _on_test(self, key, label):
         """剔除测试：向指定剔除口发送测试信号（演示用，记录操作日志并提示）。"""
         actor = getattr(self.pv, "_op_user", "操作员")
@@ -1425,6 +1484,11 @@ class RejectSettingsDialog(QDialog):
         self.pv.dev_cfg["reject"]["default_unchecked_port"] = uc_key if uc_key else "rst"
         for key, sp in self._def_port_spins.items():
             self.pv.dev_cfg["reject"][key] = int(sp.value())
+        rj = self.pv.dev_cfg["reject"]
+        rj["debug_mode"] = next(
+            (k for k, rb in self._debug_radios.items() if rb.isChecked()), "by_settings")
+        rj["debug_filter_recheck"] = bool(self.debug_filter_recheck.isChecked())
+        rj["debug_skip_feed"] = bool(self.debug_skip_feed.isChecked())
         self.pv.save_device_config()
 
     def _load(self):
@@ -1444,4 +1508,8 @@ class RejectSettingsDialog(QDialog):
         self.uc_combo.setCurrentIndex(uc_idx)
         for key, sp in self._def_port_spins.items():
             sp.setValue(int(r.get(key, sp.value())))
+        mode = r.get("debug_mode", "by_settings")
+        (self._debug_radios.get(mode) or self._debug_radios["by_settings"]).setChecked(True)
+        self.debug_filter_recheck.setChecked(bool(r.get("debug_filter_recheck", False)))
+        self.debug_skip_feed.setChecked(bool(r.get("debug_skip_feed", False)))
         self._loading = False

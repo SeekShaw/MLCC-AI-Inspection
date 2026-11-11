@@ -2138,6 +2138,68 @@ _rck, _rpos, _rblow, _rpri, _rtest = _rsd._port_rows["ok"]
 _rsd._on_auto_get_port(_rpos, 0)
 check(_rpos.value() == pv.get_current_pulse_position(offset=0),
       f"剔除设定: OK 口自动获取填入当前位置 (实际 {_rpos.value()})")
+
+# ⑥ 剔除位置调试：5 种位置剔除模式单选 + 过滤重检/隔料剔除可勾选
+_rj = _rsd.pv.dev_cfg["reject"]
+check([t for _, t in _rsd._debug_modes] ==
+      ["按剔除设置剔除", "全踢OK料盒", "全踢NG1料盒", "全踢NG2料盒", "全踢RST料盒"],
+      "位置调试: 5 种位置剔除模式且文案齐全")
+check(_rsd._debug_group.exclusive() is True, "位置调试: 5 种模式只能单选(QButtonGroup 互斥)")
+check(_rsd._debug_radios["by_settings"].isChecked()
+      and _rj.get("debug_mode") == "by_settings",
+      "位置调试: 默认「按剔除设置剔除」")
+check(not _rsd.debug_filter_recheck.isChecked() and not _rsd.debug_skip_feed.isChecked(),
+      "位置调试: 过滤重检/隔料剔除默认均不勾选")
+_rsd._debug_radios["all_ng1"].setChecked(True)
+check(_rj["debug_mode"] == "all_ng1"
+      and sum(rb.isChecked() for rb in _rsd._debug_radios.values()) == 1,
+      "位置调试: 选中「全踢NG1料盒」即时写入配置且其余自动取消")
+_rsd.debug_filter_recheck.setChecked(True)
+_rsd.debug_skip_feed.setChecked(True)
+check(_rj["debug_filter_recheck"] is True and _rj["debug_skip_feed"] is True,
+      "位置调试: 过滤重检/隔料剔除可同时勾选并即时写入配置")
+
+# 运行模拟数据联动：受控保存现场→全踢NG1时仅 NG1 料盒累计→隔料剔除隔拍跳过→完整恢复
+_pvdbg = _rsd.pv
+_dbg_saved = {k: (dict(getattr(_pvdbg, k)) if isinstance(getattr(_pvdbg, k, None), dict)
+                  else set(getattr(_pvdbg, k, set())))
+              for k in ("_bin_count", "_bin_count_init", "_bin_taken", "_bin_full",
+                        "_bin_alarmed", "_bin_pct_alarmed", "_bin_pct_prev")}
+_dbt = getattr(_pvdbg, "_dbg_rj_tick", 0)
+_dkeys = list(_dbg_saved["_bin_count"].keys())
+_pvdbg._bin_count = {k: 0 for k in _dkeys}
+_pvdbg._bin_count_init = {k: 0 for k in _dkeys}
+_pvdbg._bin_taken = {k: False for k in _dkeys}
+_pvdbg._bin_full = {k: False for k in _dkeys}
+_pvdbg._bin_alarmed = {k + " 料盒" for k in _dkeys}
+_pvdbg._bin_pct_alarmed = set()
+_pvdbg._bin_pct_prev = {k: 0.0 for k in _dkeys}
+_pvdbg._dbg_rj_tick = 0
+_pvdbg._update_bin_life()
+_after1 = dict(_pvdbg._bin_count)
+check(_after1.get("NG1", 0) > 0
+      and all(_after1.get(k, 0) == 0 for k in _dkeys if k != "NG1"),
+      f"位置调试: 全踢NG1时运行模拟数据仅 NG1 料盒累计 (实际 {_after1})")
+_pvdbg._update_bin_life()
+check(_pvdbg._bin_count.get("NG1") == _after1.get("NG1"),
+      "位置调试: 勾选隔料剔除时隔一拍才剔除一次")
+_pvdbg._bin_count_init = dict(_dbg_saved["_bin_count"])
+_pvdbg._update_bin_life(reset=True)   # 用原计数重绘 UI 显示
+for _k, _v in _dbg_saved.items():
+    setattr(_pvdbg, _k, _v)
+_pvdbg._dbg_rj_tick = _dbt
+
+# 恢复默认并验证重新加载读回
+_rsd.debug_filter_recheck.setChecked(False)
+_rsd.debug_skip_feed.setChecked(False)
+_rsd._debug_radios["by_settings"].setChecked(True)
+_rsd._apply()      # 确保恢复后的默认值写回并持久化
+_rsd._load()
+check(_rj["debug_mode"] == "by_settings"
+      and _rsd._debug_radios["by_settings"].isChecked()
+      and not _rsd.debug_filter_recheck.isChecked()
+      and not _rsd.debug_skip_feed.isChecked(),
+      "位置调试: 可恢复默认且重新加载读回正确")
 _rsd.deleteLater()
 
 # ④ 急停报警行：下拉左侧「报警方案」标签

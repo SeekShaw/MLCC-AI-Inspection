@@ -4669,7 +4669,22 @@ class ProductionView(_ReportExportMixin, QWidget):
         """
         if reset:
             self._bin_count = dict(getattr(self, "_bin_count_init", {}))
+        # 「剔除位置调试」：全踢某料盒时，模拟数据里只有该料盒累计件数。
+        # 附加选项：隔料剔除=隔一拍剔除一次；过滤重检=重检件(RST)不参与位置调试剔除。
+        rj = self.dev_cfg.get("reject", {})
+        dbg_bin = {"all_ok": "OK", "all_ng1": "NG1",
+                   "all_ng2": "NG2", "all_rst": "RST"}.get(
+                       rj.get("debug_mode", "by_settings"))
+        dbg_skip_tick = False
+        if not reset and dbg_bin and rj.get("debug_skip_feed", False):
+            self._dbg_rj_tick = getattr(self, "_dbg_rj_tick", 0) + 1
+            dbg_skip_tick = (self._dbg_rj_tick % 2 == 0)
         for key in BIN_KEYS:
+            if not reset and dbg_bin:
+                if key != dbg_bin or dbg_skip_tick:
+                    continue
+                if key == "RST" and rj.get("debug_filter_recheck", False):
+                    continue
             # 取出状态的料盒计数冻结（已取出期间不累计、不推进满料百分比）
             if not reset and self._bin_taken.get(key, False):
                 continue
@@ -6682,6 +6697,10 @@ class ProductionView(_ReportExportMixin, QWidget):
                 "default_ok_port": 1,     # 默认 OK 剔除口编号（1-4）
                 "default_pending_port": 4,  # 默认待定剔除口编号（1-4）
                 "default_ng_port": 2,     # 默认 NG 剔除口编号（1-4）
+                # 「剔除位置调试」：默认按剔除设置剔除；其余 4 项为全踢对应料盒
+                "debug_mode": "by_settings",
+                "debug_filter_recheck": False,  # 附加选项：过滤重检（可不勾选）
+                "debug_skip_feed": False,       # 附加选项：隔料剔除（可不勾选）
                 "ports": {
                     "ok":  {"enable": True, "position": 4000, "priority": 4, "blow_time": 200},
                     "ng1": {"enable": True, "position": 1000, "priority": 1, "blow_time": 200},
