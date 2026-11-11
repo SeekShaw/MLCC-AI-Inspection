@@ -225,6 +225,9 @@ class LoginDialog(QDialog):
         default = manager.get_default_login()
         if default and default in candidates:
             self.user_combo.setCurrentText(default)
+        elif "o1" in candidates:
+            # 未设 ★ 时默认选中设备操作员 o1（与启动登录回退链一致，2026-11-11）
+            self.user_combo.setCurrentText("o1")
         else:
             self.user_combo.setCurrentText("")
         self.user_combo.lineEdit().setPlaceholderText("选择或输入用户名")
@@ -410,7 +413,7 @@ class UserCenterDialogA(QDialog):
         cl.setSpacing(8)
         u = user
         cl.addLayout(_kv("用户名", u["username"]))
-        cl.addLayout(_kv("姓名", u["name"]))
+        cl.addLayout(_kv("姓名", manager.display_name(u)))
         cl.addLayout(_kv("用户类别", u["category"]))
         if u.get("created_at"):
             cl.addLayout(_kv("创建时间", u["created_at"]))
@@ -453,7 +456,7 @@ class UserCenterDialogA(QDialog):
         t1 = QLabel("当前登录用户")
         t1.setFont(_yahei(9))
         t1.setStyleSheet("color: rgba(255,255,255,0.8);")
-        t2 = QLabel(f"{u['name']}　（{u['category']}）")
+        t2 = QLabel(f"{manager.display_name(u)}　（{u['category']}）")
         t2.setFont(_yahei(13, True))
         t2.setStyleSheet("color: white;")
         info_col.addWidget(t1)
@@ -519,7 +522,9 @@ class UserCenterDialogB(QDialog):
         self.switch_requested = False
         self._device_cb = device_code_callback or (lambda v: None)
         self.setWindowTitle("用户中心")
-        self.setFixedSize(640, 560)
+        # 860×640（2026-11-11 加宽）：保证「用户管理」创建时间列与「权限配置」
+        # 各类别表头文字完整显示，不再被压缩成省略号 / 竖排
+        self.setFixedSize(860, 640)
         self.setModal(True)
         self.setStyleSheet(f"QDialog {{ background-color: {LIGHT_BG}; }}")
 
@@ -587,8 +592,11 @@ class UserCenterDialogB(QDialog):
         info = QVBoxLayout()
         info.setSpacing(1)
         info.addWidget(self._mini("当前登录", 9, "rgba(255,255,255,0.8)"))
-        info.addWidget(self._mini(
-            f"{user['name']}（{user['category']}）", 13, "white", bold=True))
+        # 姓名为空时按用户名显示（display_name 统一规则）；保存姓名后即时刷新
+        self._bottom_user_label = self._mini(
+            f"{self.manager.display_name(user)}（{user['category']}）",
+            13, "white", bold=True)
+        info.addWidget(self._bottom_user_label)
         bh.addLayout(info)
         bh.addStretch(1)
 
@@ -616,7 +624,38 @@ class UserCenterDialogB(QDialog):
         manager.add_permission_listener(self._perm_cb)
         self.finished.connect(
             lambda _r: manager.remove_permission_listener(self._perm_cb))
+        # 姓名（用户信息）变化后刷新本窗口底栏与头像首字符
+        self._user_cb = self._on_user_info_changed
+        manager.add_user_listener(self._user_cb)
+        self.finished.connect(
+            lambda _r: manager.remove_user_listener(self._user_cb))
         self._select("profile")
+
+    def _on_user_info_changed(self):
+        """用户信息（姓名）变化后刷新底栏「当前登录」与头像首字符。"""
+        u, m = self.current_user, self.manager
+        if getattr(self, "_bottom_user_label", None) is not None:
+            self._bottom_user_label.setText(
+                f"{m.display_name(u)}（{u['category']}）")
+        av = getattr(self, "_profile_avatar", None)
+        if av is not None:
+            lab = av.findChild(QLabel)
+            if lab is not None:
+                lab.setText(m.display_name(u)[:1].upper())
+
+    def _save_profile_name(self):
+        """个人信息「保存姓名」：空值允许（保存后按用户名显示）。
+
+        set_user_name 内部写盘并广播 user listener，底栏 / 头像 /
+        主窗口顶部标题栏均即时刷新。
+        """
+        u, m = self.current_user, self.manager
+        ok, msg = m.set_user_name(u["username"], self._profile_name_edit.text())
+        if not ok:
+            QMessageBox.warning(self, "保存失败", msg)
+            return
+        self._profile_name_edit.setText(u.get("name", ""))
+        QMessageBox.information(self, "已保存", msg)
 
     def _refresh_permission_visibility(self):
         """按当前用户最新权限矩阵刷新左侧页签；当前页被撤销时退回个人信息页。"""
@@ -752,17 +791,32 @@ class UserCenterDialogB(QDialog):
         page = self._panel("个人信息")
         u, m = self.current_user, self.manager
 
-        # ---- 头部：头像 + 姓名 + 类别徽标 ----
+        # ---- 头部：头像 + 姓名（可修改，2026-11-11） + 类别徽标 ----
         head = QHBoxLayout()
         head.setSpacing(14)
-        head.addWidget(
-            self._avatar((u["name"] or u["username"])[:1].upper(), 56, BLUE))
+        self._profile_avatar = self._avatar(
+            m.display_name(u)[:1].upper(), 56, BLUE)
+        head.addWidget(self._profile_avatar)
         hinfo = QVBoxLayout()
         hinfo.setSpacing(6)
-        name = QLabel(u["name"])
-        name.setFont(_yahei(17, True))
-        name.setStyleSheet(f"color: {TEXT_DARK};")
-        hinfo.addWidget(name)
+        # 姓名：输入框 + 「保存姓名」按钮；按修改后的生效，清空保存则按用户名显示
+        name_row = QHBoxLayout()
+        name_row.setSpacing(8)
+        self._profile_name_edit = QLineEdit(u.get("name", ""))
+        self._profile_name_edit.setPlaceholderText("姓名为空时按用户名显示")
+        self._profile_name_edit.setFixedSize(200, 32)
+        self._profile_name_edit.setStyleSheet(
+            f"QLineEdit {{ background-color: {WHITE}; color: {TEXT_DARK}; "
+            f"border: 1px solid #3A3E47; border-radius: 4px; padding: 4px 8px; }}")
+        save_name = QPushButton("保存姓名")
+        save_name.setFixedSize(88, 32)
+        save_name.setFont(_yahei(11))
+        save_name.setStyleSheet(_btn_primary())
+        save_name.clicked.connect(self._save_profile_name)
+        name_row.addWidget(self._profile_name_edit)
+        name_row.addWidget(save_name)
+        name_row.addStretch(1)
+        hinfo.addLayout(name_row)
         badge = QLabel(u["category"])
         badge.setFont(_yahei(11))
         badge.setStyleSheet(
@@ -836,10 +890,12 @@ class UserCenterDialogB(QDialog):
         self._um_table.setColumnCount(5)
         self._um_table.setHorizontalHeaderLabels(
             ["用户名", "姓名", "用户类别", "创建时间", "默认"])
-        # 用表格自带表头（蓝色），列宽随面板自适应，避免横向被裁
+        # 用表格自带表头（蓝色）；列宽改为固定关键列 + 末列吸收余量——
+        # 原来 Stretch 均分 5 列会把「创建时间」压成「2026-08-…」省略号（2026-11-11）
         self._um_table.horizontalHeader().setVisible(True)
         self._um_table.horizontalHeader().setSectionResizeMode(
-            QHeaderView.ResizeMode.Stretch)
+            QHeaderView.ResizeMode.Interactive)
+        self._um_table.horizontalHeader().setStretchLastSection(True)
         self._um_table.horizontalHeader().setStyleSheet(
             f"QHeaderView::section {{ background-color: #23252B; color: white; "
             f"padding: 5px; font-size: 11px; font-weight: 600; border: none; "
@@ -859,7 +915,7 @@ class UserCenterDialogB(QDialog):
             # 选中行：醒目蓝底 + 白色加粗文字，避免与底色对比不明显
             f"QTableWidget::item:selected {{ background-color: #E95420; "
             f"color: white; font-weight: 600; }}")
-        for i, w in enumerate([120, 110, 130, 150, 60]):
+        for i, w in enumerate([140, 140, 120, 180, 50]):
             self._um_table.setColumnWidth(i, w)
         self._um_table.cellDoubleClicked.connect(
             lambda r, c: self._um_view())
@@ -957,7 +1013,7 @@ class UserCenterDialogB(QDialog):
         u = self.manager.users[row]
         reply = QMessageBox.question(
             self, "确认删除",
-            f"确定要删除用户「{u['username']}（{u['name']}）」吗？",
+            f"确定要删除用户「{u['username']}（{self.manager.display_name(u)}）」吗？",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No)
         if reply == QMessageBox.StandardButton.Yes:
@@ -985,8 +1041,8 @@ class UserCenterDialogB(QDialog):
             self._um_refresh()
             QMessageBox.information(
                 self, "已设置",
-                f"已将「{u['username']}（{u['name']}）」设为默认登录用户。\n"
-                f"下次打开登录框将自动选中该账号。")
+                f"已将「{u['username']}（{self.manager.display_name(u)}）」"
+                f"设为默认登录用户。\n下次打开登录框将自动选中该账号。")
 
     def _um_import(self):
         path, _ = QFileDialog.getOpenFileName(
@@ -1036,7 +1092,7 @@ class UserCenterDialogB(QDialog):
             f"QTableWidget::item {{ padding: 4px; }}")
         table.horizontalHeader().setSectionResizeMode(
             QHeaderView.ResizeMode.Stretch)
-        table.horizontalHeader().setMinimumSectionSize(46)
+        table.horizontalHeader().setMinimumSectionSize(88)
 
         self._perm_checks = {}
         for r, (kind, pk, label) in enumerate(rows):
@@ -1241,7 +1297,7 @@ class UserDetailDialog(QDialog):
         cl.setSpacing(8)
         u = user
         cl.addLayout(_kv("用户名", u["username"]))
-        cl.addLayout(_kv("姓名", u["name"]))
+        cl.addLayout(_kv("姓名", manager.display_name(u)))
         cl.addLayout(_kv("用户类别", u["category"]))
         if u.get("created_at"):
             cl.addLayout(_kv("创建时间", u["created_at"]))
@@ -1398,7 +1454,7 @@ class UserManageDialog(QDialog):
         u = self.manager.users[row]
         reply = QMessageBox.question(
             self, "确认删除",
-            f"确定要删除用户「{u['username']}（{u['name']}）」吗？",
+            f"确定要删除用户「{u['username']}（{self.manager.display_name(u)}）」吗？",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No,
         )
@@ -1426,7 +1482,8 @@ class UserManageDialog(QDialog):
         if self.manager.set_default_login(u["username"]):
             QMessageBox.information(
                 self, "已设置",
-                f"已将「{u['username']}（{u['name']}）」设为默认登录用户。")
+                f"已将「{u['username']}（{self.manager.display_name(u)}）」"
+                f"设为默认登录用户。")
 
     def _on_import(self):
         path, _ = QFileDialog.getOpenFileName(

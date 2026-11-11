@@ -285,6 +285,8 @@ class UserManager:
         self.default_login: str | None = None  # 设为默认登录的用户名（开登录框时自动选中）
         # 权限变更观察者：权限配置保存后即时刷新所有已打开的界面
         self._permission_listeners = []
+        # 用户信息变更观察者：姓名修改后即时刷新各处显示（底栏 / 头像 / 顶部标题栏）
+        self._user_listeners = []
         self.load()
         self._last_perm_snapshot = self._perm_snapshot()
 
@@ -391,6 +393,10 @@ class UserManager:
              "password": "123456", "created_at": now},
             {"username": "operator01", "name": "张操作员", "category": "设备操作员",
              "password": "123456", "created_at": now},
+            # 2026-11-11：出厂默认登录账号 o1（设备操作员），姓名初始为空——
+            # 登录后个人信息 / 顶部标题栏按用户名「o1」显示，可在个人信息中修改姓名
+            {"username": "o1", "name": "", "category": "设备操作员",
+             "password": "123456", "created_at": now},
         ]
         self.save()
 
@@ -473,6 +479,45 @@ class UserManager:
         self.save()
         return True, "添加成功。"
 
+    # ---------- 用户信息变更广播（姓名修改等，与权限广播分离） ----------
+    def add_user_listener(self, callback):
+        """注册用户信息变更回调（姓名修改后刷新各处显示）；重复注册忽略。"""
+        if callback not in self._user_listeners:
+            self._user_listeners.append(callback)
+
+    def remove_user_listener(self, callback):
+        if callback in self._user_listeners:
+            self._user_listeners.remove(callback)
+
+    def notify_user_changed(self):
+        """用户信息变化时广播；界面已销毁等异常不应影响保存。"""
+        for cb in list(self._user_listeners):
+            try:
+                cb()
+            except Exception:
+                pass
+
+    @staticmethod
+    def display_name(user: dict | None) -> str:
+        """显示姓名规则（2026-11-11）：姓名 strip 后非空→显示姓名；
+        为空→显示用户名。用户中心底栏 / 个人信息 / 顶部标题栏统一走本函数。"""
+        if not user:
+            return ""
+        return (user.get("name") or "").strip() or user.get("username", "")
+
+    def set_user_name(self, username: str, name: str) -> tuple[bool, str]:
+        """修改用户姓名（个人信息页入口，2026-11-11）。
+
+        允许为空：保存为空字符串后按用户名显示；成功后写盘并广播刷新。
+        """
+        user = self.get_user(username)
+        if user is None:
+            return False, "用户不存在。"
+        user["name"] = (name or "").strip()
+        self.save()
+        self.notify_user_changed()
+        return True, "姓名已更新。"
+
     def update_user(self, username: str, name: str | None = None,
                     category: str | None = None, password: str | None = None) -> tuple[bool, str]:
         user = self.get_user(username)
@@ -489,6 +534,7 @@ class UserManager:
                 return False, "密码长度至少 6 位。"
             user["password"] = password
         self.save()
+        self.notify_user_changed()
         return True, "保存成功。"
 
     def delete_user(self, username: str) -> tuple[bool, str]:

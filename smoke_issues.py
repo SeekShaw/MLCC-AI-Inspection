@@ -1712,8 +1712,10 @@ _tmp_users = os.path.join(_TMP_CFG_DIR, "users.json")   # 隔离到临时目录�
 _um = _UM(path=_tmp_users)
 check(_um.get_default_login() is None, "默认登录: 未设置时 get_default_login 返回 None")
 _u, _uname = _app.resolve_startup_user(_um)
-check(_u is not None and _uname == "admin",
-      f"默认登录: 未设置默认登录用户时回退 admin (实际 {_uname})")
+# 2026-11-11：未设 ★ 时回退到出厂设备操作员 o1（种子账号，姓名为空）
+_o1_u = _um.get_user("o1")
+check(_u is not None and _u is _o1_u and _uname == "o1",
+      f"默认登录: 未设置默认登录用户时回退设备操作员 o1 (实际 {_uname})")
 check(_um.set_default_login("eng01") is True, "默认登录: 可将 eng01 设为默认登录用户")
 check(_um.get_default_login() == "eng01", "默认登录: 默认登录用户已持久化")
 _u2, _uname2 = _app.resolve_startup_user(_um)
@@ -1721,7 +1723,10 @@ check(_uname2 == "eng01" and _u2.get("category") == "设备工程师",
       f"默认登录: 启动账号取自默认登录用户 (实际 {_uname2}/{_u2.get('category')})")
 _um.default_login = "not_exist_user"          # 模拟默认账号已失效
 _u3, _uname3 = _app.resolve_startup_user(_um)
-check(_uname3 == "admin", f"默认登录: 默认账号失效时回退 admin (实际 {_uname3})")
+# 2026-11-11：回退链改为 ★ → o1（设备操作员）→ admin；o1 不在当前配置时落到 admin
+_expect_fb = "o1" if _um.get_user("o1") else "admin"
+check(_uname3 == _expect_fb,
+      f"默认登录: 默认账号失效时回退 {_expect_fb} (实际 {_uname3})")
 check("resolve_startup_user" in _inspect.getsource(_app.MainWindow.__init__),
       "默认登录: 主窗口启动时按默认登录用户解析账号")
 
@@ -4238,6 +4243,62 @@ _legacy_zips = [n for n in os.listdir(_ROOT)
                 if n.lower().endswith(".zip") and "便携版" in n]
 check(not _legacy_zips,
       "程序包命名: 含「便携版」的旧命名压缩包已全部清理")
+
+# ==== 2026-11-11：用户中心加宽 / 默认登录 o1 / 姓名可修改 / 导航底栏对齐 ====
+import user_manager as _ummod
+from app import resolve_startup_user as _resolve_user
+
+# 1) 出厂种子账号含 o1（设备操作员，姓名为空）
+_um_tmp = _ummod.UserManager(path=os.path.join(
+    tempfile.mkdtemp(prefix="smoke_uc_"), "users.json"))
+_o1 = _um_tmp.get_user("o1")
+check(_o1 is not None and _o1["category"] == "设备操作员"
+      and not (_o1.get("name") or "").strip(),
+      "默认登录: 出厂种子账号含设备操作员 o1 且姓名为空")
+
+# 2) 启动登录回退链：★ default_login → o1 → admin
+_su, _su_name = _resolve_user(_um_tmp)
+check(_su is _o1 and _su_name == "o1",
+      "默认登录: 未设 ★ 时启动登录回退到设备操作员 o1")
+check(_um_tmp.set_default_login("eng01") and _resolve_user(_um_tmp)[1] == "eng01",
+      "默认登录: 已设 ★ 时仍以「设为默认登录」账号优先")
+_um_tmp.delete_user("eng01")
+check(_resolve_user(_um_tmp)[1] == "o1",
+      "默认登录: ★ 账号被删除后自动回退到 o1")
+
+# 3) 姓名显示规则：空→用户名；修改后生效
+check(_um_tmp.display_name(_o1) == "o1",
+      "姓名修改: 姓名为空时按用户名显示")
+check(_um_tmp.set_user_name("o1", "  王操作员  ")[0]
+      and _o1["name"] == "王操作员"
+      and _um_tmp.display_name(_o1) == "王操作员",
+      "姓名修改: set_user_name 保存 strip 后的姓名并即时生效")
+_um_tmp2 = _ummod.UserManager(path=_um_tmp.path)
+check(_um_tmp2.get_user("o1")["name"] == "王操作员",
+      "姓名修改: 姓名修改已写盘持久化")
+check(_um_tmp.set_user_name("o1", "  ")[0] and _o1["name"] == ""
+      and _um_tmp.display_name(_o1) == "o1",
+      "姓名修改: 清空姓名保存后恢复按用户名显示")
+
+# 4) 用户中心 B 版：860×640 加宽 + 个人信息姓名输入框 / 保存按钮 + 底栏联动
+_ucb = _UCB(_um_tmp, _um_tmp.get_user("admin"))
+check(_ucb.width() == 860 and _ucb.height() == 640,
+      "用户中心: B 版窗口加宽为 860×640，表格/表头文字完整显示")
+check(_ucb._profile_name_edit is not None
+      and _ucb._bottom_user_label.text() == "系统管理员（超级管理员）",
+      "用户中心: 个人信息姓名可编辑，底栏按 display_name 显示")
+_um_tmp.set_user_name("admin", "")
+check(_ucb._bottom_user_label.text() == "admin（超级管理员）",
+      "用户中心: 姓名清空后底栏即时变为用户名（user listener 联动）")
+_um_tmp.set_user_name("admin", "系统管理员")
+check(_ucb._profile_name_edit.text() == "系统管理员"
+      and _ucb._bottom_user_label.text() == "系统管理员（超级管理员）",
+      "用户中心: 修改姓名后底栏与输入框即时刷新")
+_ucb.close()
+
+# 5) 主窗口左侧导航底部按钮与底部状态栏同高
+check(_mw._nav_frame.layout().contentsMargins().bottom() == 12,
+      "导航栏: 底部功能按钮组整体上移 12px，与底部状态栏同一高度")
 
 # ============ 收尾：确认未污染 src/ 下的工程配置（写盘已重定向到临时目录） ============
 check(all((open(_p, "rb").read() if os.path.exists(_p) else None) == _o

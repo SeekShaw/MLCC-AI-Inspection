@@ -95,11 +95,16 @@ def resolve_startup_user(user_manager):
     """解析启动登录账号，返回 (用户字典, 用户名)。
 
     优先使用「用户中心 → 设为默认登录」所设置的账号（列表中 ★ 标记）；
-    未设置或该账号已不存在时，回退到超级管理员 admin。
+    未设置或该账号已不存在时，回退到设备操作员 o1（2026-11-11 需求：
+    程序默认登录用户由超级管理员 admin 改为普通操作员账号，姓名为空时
+    各处按用户名 o1 显示）；o1 也不存在时再回退到超级管理员 admin。
     """
     default = user_manager.get_default_login()
     user = user_manager.get_user(default) if default else None
     if user is None:
+        user = user_manager.get_user("o1")
+        if user is not None:
+            return user, "o1"
         return user_manager.get_user("admin"), "admin"
     return user, default
 
@@ -379,7 +384,10 @@ class MainWindow(QMainWindow):
             QFrame {{ background-color: {COLORS["bg_panel"]}; border-right: 1px solid {COLORS["border"]}; }}
         """)
         nav_layout = QVBoxLayout(nav)
-        nav_layout.setContentsMargins(0, 0, 0, 0)
+        # 底部留 12px（＝内容区底边距）：导航栏贯穿整个窗口高度，而底部状态栏
+        # 只在右侧内容列（距窗口底 12px、高 28px）；留出同样 12px 后，
+        # 最底部「用户管理（用户中心）」图标与底部状态栏保持同一高度（2026-11-11）
+        nav_layout.setContentsMargins(0, 0, 0, 12)
         nav_layout.setSpacing(0)
 
         self.nav_buttons = []
@@ -390,7 +398,8 @@ class MainWindow(QMainWindow):
         self.current_product = self.products[0]
 
         # 用户与权限：启动登录账号优先取「用户中心 → 设为默认登录」设置的账号（★ 标记）；
-        # 未设置或该账号已被删除时，回退到超级管理员 admin（便于演示全部功能）。
+        # 未设置或该账号已被删除时，回退到设备操作员 o1（姓名为空按用户名显示），
+        # o1 也不存在时再回退到超级管理员 admin。
         self.user_manager = UserManager()
         self.current_user, self.default_login_username = \
             resolve_startup_user(self.user_manager)
@@ -398,6 +407,8 @@ class MainWindow(QMainWindow):
         self._install_permission_guards()
         # 权限配置保存后即时刷新主界面（登录/切换用户走 _set_current_user）
         self.user_manager.add_permission_listener(self._apply_permissions)
+        # 个人信息「姓名」修改后即时刷新顶部标题栏「当前用户」
+        self.user_manager.add_user_listener(self._refresh_user_labels)
         self._splash(22, "正在加载用户与产品配置…")
         self._playing = False
         # 高级设置（会话级开关，存于主窗口）；开机自启动 / 抽盒剔除逻辑 / 密码确认周期为持久化项
@@ -1172,7 +1183,9 @@ class MainWindow(QMainWindow):
         dlg = PasswordConfirmDialog(
             self,
             username=user.get("username", ""),
-            name=user.get("name", ""),
+            # 姓名为空时按用户名显示（display_name 统一规则，2026-11-11）
+            name=(self.user_manager.display_name(user)
+                  if um is not None else user.get("name", "")),
             password=str(user.get("password", "")),
             interval=(um.get_confirm_interval() if um is not None else "3分钟"),
             action_hint=action_hint)
