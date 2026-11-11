@@ -500,7 +500,10 @@ check(not _cen_bad,
       f"检测值中心值: 检测值非 0 的行与底层 row[4] 一致"
       f"（未错取补偿值等其它列，异常 {_cen_bad[:3]}）")
 # 值分布弹窗：下限线必须存在（lo 非空）且 lo < hi → 图上会画出两条限线
+# （2026-11-11 出厂清单为中性默认 0/0：先模拟用户给该行写入有效规格再验证）
 _r6 = 6
+dv._table_data[_r6][6], dv._table_data[_r6][7] = "0.70", "0.90"
+dv._refresh_row_display(_r6)   # 同步表格单元格文本（_detect_spec 优先读单元格）
 _lo6, _hi6 = dv._detect_spec(_r6)
 check(_lo6 is not None and _hi6 is not None and _lo6 < _hi6,
       f"值分布: 产品长度规格上下限有效且下限<上限（lo={_lo6} / hi={_hi6}）")
@@ -518,6 +521,8 @@ check(len(_sps) >= 2 and abs(_sps[0].value() - _lo6) < 1e-6
       f"值分布: 规格下限/上限输入框回填正确（下限={_sps[0].value() if _sps else None}"
       f" / 上限={_sps[1].value() if len(_sps) > 1 else None}）")
 _dd.close()
+dv._table_data[_r6][6], dv._table_data[_r6][7] = "0", "0"   # 还原中性出厂默认
+dv._refresh_row_display(_r6)
 
 # 「亮度差异」指标行（2026-10-09 新增）：值 30-100 随机波动、恒 OK、合格范围 30-225
 _bm = getattr(dv, "_eff_metrics", {}).get("亮度差异")
@@ -4073,12 +4078,12 @@ def _pick_mode(_v, _m):
     app.processEvents()
 
 def _in_debug_mode(_v):
-    """该工位是否处于「调试」模式：仅 102 产品歪料 / 104 产品连料 启用。"""
+    """该工位是否处于「调试」模式：仅 102 歪料 / 104 碎料 启用（2026-11-11 新名称）。"""
     _flags = []
     for _r, _sw in _v._row_checks.items():
         _row = _v._table_data[_r]
         _expect = (str(_row[1]) in ("102", "104")
-                   or str(_row[2]) in ("产品歪料", "产品连料"))
+                   or str(_row[2]) in ("歪料", "碎料"))
         _flags.append(_sw.is_on() == _expect)
     return bool(_flags) and all(_flags)
 
@@ -4243,6 +4248,37 @@ _legacy_zips = [n for n in os.listdir(_ROOT)
                 if n.lower().endswith(".zip") and "便携版" in n]
 check(not _legacy_zips,
       "程序包命名: 含「便携版」的旧命名压缩包已全部清理")
+
+# ==== 2026-11-11：检测项出厂清单改为 109 项（100~519），恢复至出厂开启全部 ====
+_fi = _dvmod.FACTORY_DETECT_ITEMS
+check(len(_fi) == 109 and len({c for c, _ in _fi}) == 109,
+      f"出厂清单: 共 109 项且检测编号唯一 (实际 {len(_fi)} 项)")
+check(_fi[0] == ("100", "有无（飞料）") and _fi[2] == ("102", "歪料")
+      and _fi[3] == ("103", "连料") and _fi[4] == ("104", "碎料")
+      and _fi[-1] == ("519", "粘碎锡"),
+      "出厂清单: 编号与项目名称按 2026-11-11 新清单生效（102 歪料 / 103 连料 / 104 碎料）")
+_dv0 = _mw.debug_views[0]
+check(len(_dv0._table_data) == 109
+      and all(bool(r[0]) for r in _dv0._table_data)
+      and [str(r[1]) for r in _dv0._table_data] == [c for c, _ in _fi]
+      and [str(r[2]) for r in _dv0._table_data] == [n for _, n in _fi],
+      "出厂配置: 检测项列表内置 109 项且默认全部启用")
+check(all(v._table_data[r][0] for v in _mw.debug_views[1:] for r in (0, 50, 108)),
+      "出厂配置: 全部相机工位共用同一份出厂检测项清单")
+check(_dvmod.DebugView._DEBUG_DETECT_CODES == {"102", "104"}
+      and _dvmod.DebugView._DEBUG_DETECT_NAMES == {"歪料", "碎料"},
+      "调试模式: 白名单仍为编号 102/104，名称同步为「歪料 / 碎料」")
+# 恢复至出厂走数据路径验证（避免模态消息框）：改动后按 _factory_data 还原 → 全部开启
+_dv0._table_data[0][0] = False
+_dv0._table_data[5][7] = "9.9"
+_fac = [{"code": str(row[1]), "detect": bool(row[0]), "lo": row[6], "hi": row[7],
+         "unit": str(row[8]), "port": str(row[9]),
+         "warn_enabled": True, "warn_threshold": 50}
+        for row in _dv0._factory_data]
+_n = _dv0._apply_detect_settings(_fac)
+check(_n == 109 and _dv0._table_data[0][0] is True
+      and _dv0._table_data[5][7] == "0",
+      f"恢复至出厂: 按 _factory_data 还原 109 项并全部开启（实际恢复 {_n} 项）")
 
 # ==== 2026-11-11：用户中心加宽 / 默认登录 o1 / 姓名可修改 / 导航底栏对齐 ====
 import user_manager as _ummod
