@@ -2752,12 +2752,44 @@ class SpecAutoAdjustDialog(QDialog):
                 lbl.setText(f"{cur_lo:g} ~ {cur_hi:g} {data[r][8]}")
 
 
+# 「方案同步」工位方块配色（2026-11-11）：当前工位黑色不可选，其余绿色可勾选。
+SCHEME_COLOR_SELECTABLE = "#2ECC71"
+SCHEME_COLOR_CURRENT = "#000000"
+
+
+def _scheme_check_style():
+    """方块状勾选控件：未选＝绿色描边空心，选中＝绿色实心。"""
+    return (
+        f"QCheckBox {{ color:{COLORS['text_primary']}; font-size:12px; spacing:10px; }}"
+        "QCheckBox::indicator { width:18px; height:18px; border-radius:3px; "
+        f"border:2px solid {SCHEME_COLOR_SELECTABLE}; background:transparent; }}"
+        "QCheckBox::indicator:checked { "
+        f"background:{SCHEME_COLOR_SELECTABLE}; "
+        f"border-color:{SCHEME_COLOR_SELECTABLE}; }}"
+    )
+
+
+def _scheme_current_style():
+    """当前工位：黑色实心方块，禁用不可勾选。"""
+    return (
+        "QCheckBox { color:#888888; font-size:12px; spacing:10px; }"
+        "QCheckBox::indicator { width:18px; height:18px; border-radius:3px; "
+        f"border:2px solid {SCHEME_COLOR_CURRENT}; "
+        f"background:{SCHEME_COLOR_CURRENT}; }}"
+        "QCheckBox::indicator:disabled { "
+        f"border:2px solid {SCHEME_COLOR_CURRENT}; "
+        f"background:{SCHEME_COLOR_CURRENT}; }}"
+    )
+
+
 class SyncSchemeDialog(QDialog):
     """「方案同步」目标工位选择窗口（2026-11-11 需求）。
 
-    候选工位＝当前工位以外的其余相机工位，每个工位一个复选框，默认全选；
-    「全选 / 全不选」可一次切换。确定后由 ``DebugView._on_scheme_sync``
-    只对勾选的工位执行检测项方案同步。
+    - 逐行列出 8 个相机工位，每行一个**方块式勾选控件**（选中＝绿色实心、
+      未选＝绿色描边空心），可多选；
+    - 当前工位那一行显示黑色实心方块且 ``setEnabled(False)``，不可勾选；
+    - 默认**均不勾选**；「快速全选 / 全部不选」一次勾选 / 清空全部可选工位；
+    - 点「确认」后由 ``DebugView._on_scheme_sync`` 只对勾选工位执行同步。
     """
 
     def __init__(self, parent=None, current_camera="", candidates=None):
@@ -2767,26 +2799,25 @@ class SyncSchemeDialog(QDialog):
                             | Qt.WindowType.WindowStaysOnTopHint)
         self.setStyleSheet(
             f"QDialog {{ background-color: {COLORS['bg_panel']}; }}")
-        self.resize(300, 340)
+        self.resize(320, 400)
 
         v = QVBoxLayout(self)
         v.setContentsMargins(14, 12, 14, 12)
-        v.setSpacing(8)
+        v.setSpacing(7)
 
         cur = QLabel(f"当前工位：{current_camera}")
         cur.setStyleSheet(
             f"color:{COLORS['text_primary']}; font-size:12px; font-weight:bold;")
         v.addWidget(cur)
 
-        tip = QLabel("选择要把当前检测项方案同步到的工位（不含当前工位）：")
+        tip = QLabel("选择要把当前检测项方案同步到的工位（当前工位不可选）：")
         tip.setStyleSheet(f"color:{COLORS['text_secondary']}; font-size:11px;")
         tip.setWordWrap(True)
         v.addWidget(tip)
 
-        self._all_cb = QCheckBox("全选 / 全不选")
-        self._all_cb.setChecked(True)
-        self._all_cb.setStyleSheet(
-            f"color:{COLORS['text_primary']}; font-size:11px;")
+        self._all_cb = QCheckBox("快速全选 / 全部不选")
+        self._all_cb.setChecked(False)
+        self._all_cb.setStyleSheet(_scheme_check_style())
         self._all_cb.toggled.connect(self._on_toggle_all)
         v.addWidget(self._all_cb)
 
@@ -2795,36 +2826,49 @@ class SyncSchemeDialog(QDialog):
         line.setStyleSheet(f"color:{COLORS['border']};")
         v.addWidget(line)
 
-        self._checks = []
+        names = list(CAMERA_NAMES)
         for name in (candidates or []):
-            cb = QCheckBox(str(name))
-            cb.setChecked(True)
-            cb.setStyleSheet(
-                f"color:{COLORS['text_primary']}; font-size:11px;")
-            cb.toggled.connect(self._on_item_toggled)
+            if name not in names:
+                names.append(name)
+        self._checks = []          # 7 个可选工位＝同步目标候选
+        self._station_checks = []  # 8 行（含当前工位禁用行），按 CAMERA_NAMES 顺序
+        self._current_cb = None
+        for name in names:
+            is_current = (name == current_camera)
+            cb = QCheckBox(
+                f"{name}（当前工位，不可选）" if is_current else str(name))
+            cb.setChecked(False)
+            if is_current:
+                cb.setEnabled(False)
+                cb.setStyleSheet(_scheme_current_style())
+                self._current_cb = cb
+            else:
+                cb.setStyleSheet(_scheme_check_style())
+                cb.toggled.connect(self._on_item_toggled)
+                self._checks.append(cb)
+            self._station_checks.append(cb)
             v.addWidget(cb)
-            self._checks.append(cb)
         v.addStretch(1)
 
         btns = QHBoxLayout()
         btns.addStretch(1)
-        ok = QPushButton("确定")
-        ok.setStyleSheet(
+        self._ok_btn = QPushButton("确认")
+        self._ok_btn.setStyleSheet(
             f"background-color:{COLORS['accent_blue']}; color:white; border:none; "
             f"border-radius:4px; padding:6px 18px; font-size:12px;")
-        cancel = QPushButton("取消")
-        cancel.setStyleSheet(
+        self._cancel_btn = QPushButton("取消")
+        self._cancel_btn.setStyleSheet(
             f"background-color:{COLORS['bg_card']}; color:{COLORS['text_primary']}; "
             f"border:1px solid {COLORS['border']}; border-radius:4px; "
             f"padding:6px 18px; font-size:12px;")
-        ok.clicked.connect(self.accept)
-        cancel.clicked.connect(self.reject)
-        btns.addWidget(ok)
-        btns.addWidget(cancel)
+        self._ok_btn.clicked.connect(self.accept)
+        self._cancel_btn.clicked.connect(self.reject)
+        btns.addWidget(self._ok_btn)
+        btns.addWidget(self._cancel_btn)
         v.addLayout(btns)
 
     def _on_toggle_all(self, on):
-        """「全选 / 全不选」联动各工位复选框（blockSignals 防递归）。"""
+        """「快速全选 / 全部不选」联动各工位方块（blockSignals 防递归）。"""
         for cb in self._checks:
             cb.blockSignals(True)
             cb.setChecked(on)
@@ -2842,8 +2886,9 @@ class SyncSchemeDialog(QDialog):
         self._all_cb.blockSignals(False)
 
     def selected_cameras(self):
-        """返回勾选的目标工位名（保序），供调用方按名字过滤调试页。"""
-        return [cb.text() for cb in self._checks if cb.isChecked()]
+        """返回勾选的可选工位名（保序），供调用方按名字过滤调试页。"""
+        return [cb.text() for cb in self._checks
+                if cb.isEnabled() and cb.isChecked()]
 
 
 class DebugView(QWidget):

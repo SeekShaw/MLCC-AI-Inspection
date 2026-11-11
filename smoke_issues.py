@@ -4129,7 +4129,7 @@ for _v in _views_all:
     _v._detect_mode_combo.setCurrentText("全开")
 dv._on_detect_mode_changed("全开", broadcast=False)
 
-# ============ 2026-11-11：方案同步弹窗（去掉本工位，仅同步选中工位） ============
+# ============ 2026-11-11：方案同步弹窗（方块勾选 / 默认全不选 / 仅同步勾选工位） ============
 import debug_view as _dvmod
 import copy as _copy
 _src_dv = _mw.debug_views[0]
@@ -4139,20 +4139,41 @@ _dlg = _dvmod.SyncSchemeDialog(
 _cand = [cb.text() for cb in _dlg._checks]
 check(len(_cand) == 7 and _src_dv.camera_name not in _cand
       and all(n in _dvmod.CAMERA_NAMES for n in _cand),
-      "方案同步: 弹窗候选为去掉本工位后的其余 7 个相机工位")
-check(all(cb.isChecked() for cb in _dlg._checks) and _dlg._all_cb.isChecked(),
-      "方案同步: 候选工位与「全选 / 全不选」默认全勾选")
-_dlg._checks[1].setChecked(False)
-_dlg._checks[3].setChecked(False)
-check(len(_dlg.selected_cameras()) == 5 and not _dlg._all_cb.isChecked(),
-      "方案同步: 取消 2 个工位后仅返回 5 个目标，全选框自动取消")
+      "方案同步: 可勾选工位为去掉本工位后的其余 7 个相机工位")
+check(len(_dlg._station_checks) == 8 and _dlg._current_cb is not None
+      and not _dlg._current_cb.isEnabled()
+      and not _dlg._current_cb.isChecked()
+      and _src_dv.camera_name in _dlg._current_cb.text(),
+      "方案同步: 共 8 行，当前工位单独一行且禁用不可勾选")
+check(not any(cb.isChecked() for cb in _dlg._checks)
+      and not _dlg._all_cb.isChecked()
+      and _dlg.selected_cameras() == [],
+      "方案同步: 默认均不勾选（含快速全选框），目标列表为空")
+check(all(_dvmod.SCHEME_COLOR_SELECTABLE in cb.styleSheet()
+          for cb in _dlg._checks)
+      and _dvmod.SCHEME_COLOR_CURRENT in _dlg._current_cb.styleSheet()
+      and "18px" in _dlg._checks[0].styleSheet(),
+      "方案同步: 方块勾选控件——其它工位绿色可勾选、当前工位黑色实心")
+_dlg._checks[1].setChecked(True)
+_dlg._checks[3].setChecked(True)
+check(_dlg.selected_cameras() == [_cand[1], _cand[3]]
+      and not _dlg._all_cb.isChecked(),
+      "方案同步: 可多选，勾选 2 个工位后仅返回这 2 个目标")
+for _cb in _dlg._checks:
+    _cb.setChecked(True)
+check(_dlg._all_cb.isChecked(),
+      "方案同步: 手动勾满 7 个工位后「快速全选 / 全部不选」自动勾上")
+_dlg._all_cb.setChecked(False)
+check(_dlg.selected_cameras() == [],
+      "方案同步: 取消快速全选可一次清空全部 7 个目标")
 _dlg._all_cb.setChecked(True)
 check(len(_dlg.selected_cameras()) == 7,
-      "方案同步: 「全选」可一次恢复全部 7 个目标")
-_dlg._all_cb.setChecked(False)
-check(len(_dlg.selected_cameras()) == 0,
-      "方案同步: 「全不选」可一次清空目标（此时不执行同步）")
+      "方案同步: 勾选快速全选可一次选中全部 7 个工位")
+check(_dlg._ok_btn.text() == "确认"
+      and _dlg._all_cb.text() == "快速全选 / 全部不选",
+      "方案同步: 按钮为「确认」，全选项为「快速全选 / 全部不选」")
 _dlg.close()
+del _dlg   # 显式释放无父窗口的 QDialog，避免解释器退出阶段 Qt 析构崩溃
 
 # 运行时验证：只写选中的工位，未选中工位数据保持原值
 _v1, _v2, _v3 = _target_dvs[0], _target_dvs[1], _target_dvs[2]
