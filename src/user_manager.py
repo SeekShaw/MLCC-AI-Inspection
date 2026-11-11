@@ -59,7 +59,7 @@ PERMISSION_GROUPS = [
         ("detect_restore_factory", "恢复至出厂"),
         ("detect_unit", "单位设置"),
         ("detect_output", "出料设置"),
-        ("detect_sync_all", "全部同步"),
+        ("detect_sync_all", "方案同步"),
         ("detect_auto_spec", "规格自动调整"),
     ]),
     ("检测项列表", [

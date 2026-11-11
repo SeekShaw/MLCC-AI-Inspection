@@ -2752,6 +2752,100 @@ class SpecAutoAdjustDialog(QDialog):
                 lbl.setText(f"{cur_lo:g} ~ {cur_hi:g} {data[r][8]}")
 
 
+class SyncSchemeDialog(QDialog):
+    """「方案同步」目标工位选择窗口（2026-11-11 需求）。
+
+    候选工位＝当前工位以外的其余相机工位，每个工位一个复选框，默认全选；
+    「全选 / 全不选」可一次切换。确定后由 ``DebugView._on_scheme_sync``
+    只对勾选的工位执行检测项方案同步。
+    """
+
+    def __init__(self, parent=None, current_camera="", candidates=None):
+        super().__init__(parent)
+        self.setWindowTitle("方案同步")
+        self.setWindowFlags(self.windowFlags()
+                            | Qt.WindowType.WindowStaysOnTopHint)
+        self.setStyleSheet(
+            f"QDialog {{ background-color: {COLORS['bg_panel']}; }}")
+        self.resize(300, 340)
+
+        v = QVBoxLayout(self)
+        v.setContentsMargins(14, 12, 14, 12)
+        v.setSpacing(8)
+
+        cur = QLabel(f"当前工位：{current_camera}")
+        cur.setStyleSheet(
+            f"color:{COLORS['text_primary']}; font-size:12px; font-weight:bold;")
+        v.addWidget(cur)
+
+        tip = QLabel("选择要把当前检测项方案同步到的工位（不含当前工位）：")
+        tip.setStyleSheet(f"color:{COLORS['text_secondary']}; font-size:11px;")
+        tip.setWordWrap(True)
+        v.addWidget(tip)
+
+        self._all_cb = QCheckBox("全选 / 全不选")
+        self._all_cb.setChecked(True)
+        self._all_cb.setStyleSheet(
+            f"color:{COLORS['text_primary']}; font-size:11px;")
+        self._all_cb.toggled.connect(self._on_toggle_all)
+        v.addWidget(self._all_cb)
+
+        line = QFrame()
+        line.setFrameShape(QFrame.Shape.HLine)
+        line.setStyleSheet(f"color:{COLORS['border']};")
+        v.addWidget(line)
+
+        self._checks = []
+        for name in (candidates or []):
+            cb = QCheckBox(str(name))
+            cb.setChecked(True)
+            cb.setStyleSheet(
+                f"color:{COLORS['text_primary']}; font-size:11px;")
+            cb.toggled.connect(self._on_item_toggled)
+            v.addWidget(cb)
+            self._checks.append(cb)
+        v.addStretch(1)
+
+        btns = QHBoxLayout()
+        btns.addStretch(1)
+        ok = QPushButton("确定")
+        ok.setStyleSheet(
+            f"background-color:{COLORS['accent_blue']}; color:white; border:none; "
+            f"border-radius:4px; padding:6px 18px; font-size:12px;")
+        cancel = QPushButton("取消")
+        cancel.setStyleSheet(
+            f"background-color:{COLORS['bg_card']}; color:{COLORS['text_primary']}; "
+            f"border:1px solid {COLORS['border']}; border-radius:4px; "
+            f"padding:6px 18px; font-size:12px;")
+        ok.clicked.connect(self.accept)
+        cancel.clicked.connect(self.reject)
+        btns.addWidget(ok)
+        btns.addWidget(cancel)
+        v.addLayout(btns)
+
+    def _on_toggle_all(self, on):
+        """「全选 / 全不选」联动各工位复选框（blockSignals 防递归）。"""
+        for cb in self._checks:
+            cb.blockSignals(True)
+            cb.setChecked(on)
+            cb.blockSignals(False)
+        self._sync_all_checkbox()
+
+    def _on_item_toggled(self, _on):
+        self._sync_all_checkbox()
+
+    def _sync_all_checkbox(self):
+        all_on = bool(self._checks) and all(cb.isChecked()
+                                            for cb in self._checks)
+        self._all_cb.blockSignals(True)
+        self._all_cb.setChecked(all_on)
+        self._all_cb.blockSignals(False)
+
+    def selected_cameras(self):
+        """返回勾选的目标工位名（保序），供调用方按名字过滤调试页。"""
+        return [cb.text() for cb in self._checks if cb.isChecked()]
+
+
 class DebugView(QWidget):
     def __init__(self, camera_name="下表面", parent=None, main_window=None):
         super().__init__(parent)
@@ -3388,7 +3482,7 @@ class DebugView(QWidget):
             lambda *_: self._reposition_overlay_buttons())
 
         # 检测项列表上方工具条（从左到右）：
-        # 设置为默认 → 恢复至默认 → 恢复至出厂 → 单位设置 → 出料设置 → 全部同步
+        # 设置为默认 → 恢复至默认 → 恢复至出厂 → 单位设置 → 出料设置 → 方案同步
         # → 规格自动调整（2026-10-20 新增：基于分布样本自动调整检测项规格上下限）
         # （「是否检测」批量模式下拉已移到「是否检测」列头右侧）
         self._yield_all_on = True     # 「预警全开/关」初始为「全开」态
@@ -3412,7 +3506,7 @@ class DebugView(QWidget):
             ("恢复至出厂", "factory", self._on_restore_factory),
             ("单位设置", "unit", self._on_unit_settings),
             ("出料设置", "output", self._on_output_settings),
-            ("全部同步", "sync", self._on_sync_all),
+            ("方案同步", "sync", self._on_scheme_sync),
             ("规格自动调整", "params", self._on_auto_spec_adjust),
         ]
         self._toolbar_buttons = []
@@ -5097,16 +5191,47 @@ class DebugView(QWidget):
             QMessageBox.information(self, "出料设置",
                                     f"已更新 {n} 项收料位置。")
 
-    def _on_sync_all(self):
-        """全部同步：把本相机检测项设置同步到其它所有相机调试页。"""
+    def _on_scheme_sync(self):
+        """方案同步：弹窗选择目标工位后，只把本相机检测项方案同步到勾选工位。
+
+        候选工位＝``debug_views`` 中除本页外的其余页，并按相机名再次排除
+        当前工位（即去掉当前工位后的剩余工位）；取消 / 一个都不选均不写数据。
+        """
         mw = self.main_window
         if mw is None:
-            QMessageBox.information(self, "全部同步", "请在主程序中使用「全部同步」。")
+            QMessageBox.information(self, "方案同步", "请在主程序中使用「方案同步」。")
             return
-        views = [v for v in getattr(mw, "debug_views", []) if v is not self]
+        views = [v for v in getattr(mw, "debug_views", [])
+                 if v is not self
+                 and getattr(v, "camera_name", "") != self.camera_name]
         if not views:
-            QMessageBox.information(self, "全部同步", "没有其它相机页面可同步。")
+            QMessageBox.information(self, "方案同步", "没有其它相机页面可同步。")
             return
+        dlg = SyncSchemeDialog(
+            self, self.camera_name,
+            [getattr(v, "camera_name", "?") for v in views])
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+        picked = set(dlg.selected_cameras())
+        if not picked:
+            QMessageBox.information(self, "方案同步", "未选择任何工位，未执行同步。")
+            return
+        targets = [v for v in views
+                   if getattr(v, "camera_name", "?") in picked]
+        done, total, failed = self._sync_scheme_to(targets)
+        msg = f"已同步到 {done} 个相机页面（共 {total} 项检测设置）。"
+        if failed:
+            msg += f"\n失败：{'、'.join(failed)}"
+        self._dv_log(
+            f"检测项设置：方案同步 → {done} 个相机（{total} 项）："
+            f"{'、'.join(sorted(picked))}")
+        QMessageBox.information(self, "方案同步", msg)
+
+    def _sync_scheme_to(self, views):
+        """把本工位检测项方案同步到 ``views``，返回 ``(done, total, failed)``。
+
+        与弹窗解耦，便于回归直接验证「只写选中工位」而不触发模态对话框。
+        """
         items = self._collect_detect_settings()
         total, failed = 0, []
         for v in views:
@@ -5114,12 +5239,7 @@ class DebugView(QWidget):
                 total += v._apply_detect_settings(items)
             except Exception:
                 failed.append(getattr(v, "camera_name", "?"))
-        done = len(views) - len(failed)
-        msg = f"已同步到 {done} 个相机页面（共 {total} 项检测设置）。"
-        if failed:
-            msg += f"\n失败：{'、'.join(failed)}"
-        self._dv_log(f"检测项设置：全部同步 → {done} 个相机（{total} 项）")
-        QMessageBox.information(self, "全部同步", msg)
+        return len(views) - len(failed), total, failed
 
     def _on_auto_spec_adjust(self):
         """「规格自动调整」按钮：打开规格上下限自动调整窗口。"""

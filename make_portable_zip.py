@@ -3,9 +3,9 @@
 - 把完整的运行时目录 output/（exe + 配置文件 + assets + 图标 + 发布文档）整体压成 zip；
 - 压缩包内顶层为单一文件夹，解压后双击其中的 exe 即可运行，无需安装；
 - 压缩包文件名＝名字 + 版本号（版本唯一来源 src/app_meta.py），
-  例如「EcompVision Inspector 便携版 V3.6.6.0.zip」；同版本重打覆盖，
-  不同版本各自留档，便于按版本回溯交付物；
-- 压缩包内顶层文件夹名保持固定（PKG_NAME），解压路径稳定、可直接替换；
+  例如「EcompVision Inspector V3.6.7.0.zip」；名称不含「便携版」；
+  同版本重打覆盖，不同版本各自留档，便于按版本回溯交付物；
+- 压缩包内顶层文件夹名取同一个 PKG_NAME（不含「便携版」），解压路径稳定；
 - 由 build_b.py 在每次重新生成 exe 后自动调用。
 """
 import os
@@ -29,8 +29,9 @@ except Exception:
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 SRC_DIR = os.path.join(ROOT, "output")          # 完整运行时目录
-PKG_NAME = "EcompVision Inspector 便携版"       # 压缩包内顶层文件夹名（稳定，反复替换）
-ZIP_LEGACY = os.path.join(ROOT, PKG_NAME + ".zip")  # 旧的无版本号文件名（已弃用）
+# 2026-11-11 需求：压缩包去掉「便携版」三个字；压缩包内顶层文件夹同名。
+PKG_NAME = "EcompVision Inspector"              # 顶层文件夹名 / 压缩包名字前缀
+LEGACY_ZIP_PREFIX = "EcompVision Inspector 便携版"  # 旧命名（含「便携版」），打包时清理
 BUILD_TMP = os.path.join(ROOT, "_pkg_build")    # 解压用临时目录
 
 
@@ -83,11 +84,13 @@ def build():
                 z.write(full, rel)
     # 4) 删除临时目录，只保留 zip
     shutil.rmtree(BUILD_TMP, ignore_errors=True)
-    # 5) 迁移：旧的无版本号 zip 已废弃，避免两个包并存导致误发
-    if os.path.isfile(ZIP_LEGACY):
-        os.remove(ZIP_LEGACY)
+    # 5) 迁移：清理所有带「便携版」的旧命名压缩包（无版本号 / 带版本号均清理）
+    for _fn in os.listdir(ROOT):
+        if _fn.startswith(LEGACY_ZIP_PREFIX) and _fn.lower().endswith(".zip"):
+            os.remove(os.path.join(ROOT, _fn))
+            print("   清理旧命名压缩包:", _fn)
     size = os.path.getsize(out_zip)
-    print(f">> 便携版压缩包已生成 -> {out_zip} ({size:,} bytes)")
+    print(f">> 程序压缩包已生成 -> {out_zip} ({size:,} bytes)")
 
 
 if __name__ == "__main__":

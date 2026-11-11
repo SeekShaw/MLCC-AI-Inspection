@@ -187,7 +187,7 @@ def _draw_glyph(p, kind, x, y, w, h):
                        QPointF(x + w * 0.55, y + h * 0.8))
         _L(x + w * 0.42, y + h * 0.5, x + w * 0.86, y + h * 0.5)
         _arrow_head(x + w * 0.86, y + h * 0.5, 1, 0)
-    elif kind == "sync":                     # 双循环箭头（全部同步）
+    elif kind == "sync":                     # 双循环箭头（方案同步）
         cx, cy, r = x + w * 0.5, y + h * 0.5, w * 0.34
         p.drawArc(QRectF(cx - r, cy - r, r * 2, r * 2), 30 * 16, 140 * 16)
         p.drawArc(QRectF(cx - r, cy - r, r * 2, r * 2), 210 * 16, 140 * 16)

@@ -329,12 +329,12 @@ dv._playing = False
 # ============ 新需求：调试界面检测项表格工具条与「良率预警设置」列 ============
 src_dv = open("C:/Users/Lenovo/WorkBuddy/Teruo/src/debug_view.py", encoding="utf-8").read()
 # 1) 工具条顺序（运行时校验从左到右）：
-#    设置为默认 → 恢复至默认 → 恢复至出厂 → 单位设置 → 出料设置 → 全部同步
+#    设置为默认 → 恢复至默认 → 恢复至出厂 → 单位设置 → 出料设置 → 方案同步
 #    → 规格自动调整（2026-10-20 新增）
 #    （「检测项全开/关」已移到「是否检测」列头右侧，不再出现在工具条）
 from PyQt6.QtWidgets import QPushButton as _QPushButton, QHBoxLayout as _QHBoxLayout
 _TOOLBAR_ORDER = ["设置为默认", "恢复至默认", "恢复至出厂",
-                  "单位设置", "出料设置", "全部同步", "规格自动调整"]
+                  "单位设置", "出料设置", "方案同步", "规格自动调整"]
 _toolbar_found = None
 for _lay in dv.findChildren(_QHBoxLayout):
     _widgets = [_lay.itemAt(i).widget() for i in range(_lay.count())]
@@ -344,7 +344,7 @@ for _lay in dv.findChildren(_QHBoxLayout):
         _toolbar_found = _lay
         break
 check(_toolbar_found is not None,
-      "工具条: 运行时按钮从左到右顺序为 设置为默认→恢复至默认→恢复至出厂→单位设置→出料设置→全部同步→规格自动调整")
+      "工具条: 运行时按钮从左到右顺序为 设置为默认→恢复至默认→恢复至出厂→单位设置→出料设置→方案同步→规格自动调整")
 _toolbar_texts = ([(_toolbar_found.itemAt(i).widget().text() or
                     _toolbar_found.itemAt(i).widget().toolTip())
                    for i in range(_toolbar_found.count())
@@ -3951,9 +3951,11 @@ check([_PP[k] for k in _TTP] == ["检测流程设计", "产品目标检索",
 check(len(_DLP) == 7 and all(_PMOD[k] == "检测列表设置" for k in _DLP),
       "检测列表细分: 7 个操作归属独立「检测列表设置」模块")
 check([_PP[k] for k in _DLP] == ["设置为默认", "恢复至默认", "恢复至出厂",
-                                 "单位设置", "出料设置", "全部同步",
+                                 "单位设置", "出料设置", "方案同步",
                                  "规格自动调整"],
       "检测列表细分: 7 个权限项标签与工具条按钮提示逐一对应")
+check(_PP["detect_sync_all"] == "方案同步",
+      "检测列表细分: 方案同步显示名已生效，权限键仍为 detect_sync_all 兼容旧配置")
 _dv0 = _mw.debug_views[0]
 check(_PU.perm_key_of(_dv0._mode_label) == "camera_work_mode"
       and _PU.perm_key_of(_dv0._trigger_mode) == "camera_work_mode",
@@ -4127,7 +4129,49 @@ for _v in _views_all:
     _v._detect_mode_combo.setCurrentText("全开")
 dv._on_detect_mode_changed("全开", broadcast=False)
 
-# ============ 2026-11-11：发布文档同步到 output/ 与便携版 zip ============
+# ============ 2026-11-11：方案同步弹窗（去掉本工位，仅同步选中工位） ============
+import debug_view as _dvmod
+import copy as _copy
+_src_dv = _mw.debug_views[0]
+_target_dvs = _mw.debug_views[1:]
+_dlg = _dvmod.SyncSchemeDialog(
+    None, _src_dv.camera_name, [v.camera_name for v in _target_dvs])
+_cand = [cb.text() for cb in _dlg._checks]
+check(len(_cand) == 7 and _src_dv.camera_name not in _cand
+      and all(n in _dvmod.CAMERA_NAMES for n in _cand),
+      "方案同步: 弹窗候选为去掉本工位后的其余 7 个相机工位")
+check(all(cb.isChecked() for cb in _dlg._checks) and _dlg._all_cb.isChecked(),
+      "方案同步: 候选工位与「全选 / 全不选」默认全勾选")
+_dlg._checks[1].setChecked(False)
+_dlg._checks[3].setChecked(False)
+check(len(_dlg.selected_cameras()) == 5 and not _dlg._all_cb.isChecked(),
+      "方案同步: 取消 2 个工位后仅返回 5 个目标，全选框自动取消")
+_dlg._all_cb.setChecked(True)
+check(len(_dlg.selected_cameras()) == 7,
+      "方案同步: 「全选」可一次恢复全部 7 个目标")
+_dlg._all_cb.setChecked(False)
+check(len(_dlg.selected_cameras()) == 0,
+      "方案同步: 「全不选」可一次清空目标（此时不执行同步）")
+_dlg.close()
+
+# 运行时验证：只写选中的工位，未选中工位数据保持原值
+_v1, _v2, _v3 = _target_dvs[0], _target_dvs[1], _target_dvs[2]
+_snap = [_copy.deepcopy(v._table_data) for v in (_src_dv, _v1, _v2, _v3)]
+_sentinel = 987654.0
+_src_dv._table_data[0][6] = _sentinel
+_done, _total, _failed = _src_dv._sync_scheme_to([_v1, _v3])
+check(_done == 2 and not _failed and _total > 0
+      and float(_v1._table_data[0][6]) == _sentinel
+      and float(_v3._table_data[0][6]) == _sentinel
+      and _v2._table_data[0][6] == _snap[2][0][6],
+      "方案同步: 仅同步到选中的 2 个工位，未选中工位保持原值")
+for _v, _s in zip((_src_dv, _v1, _v2, _v3), _snap):
+    _v._table_data = _s
+check("class SyncSchemeDialog" in src_dv and "全部同步" not in src_dv
+      and "_on_scheme_sync" in src_dv,
+      "方案同步: 源码已无「全部同步」字样，工具条指向新弹窗处理函数")
+
+# ============ 2026-11-11：发布文档同步到 output/ 与程序压缩包 ============
 # 需求：权威文档随 exe 一同交付；build_b.py 每次打包自动同步到 output/，
 # make_portable_zip.py 整体复制 output/ 后压缩包顶层即含同一份 md。
 # 同日追加：压缩包文件名改为「名字 + 版本号」，此处按 src/app_meta.py
@@ -4143,9 +4187,8 @@ if os.path.isfile(_meta_path):
         if _line.strip().startswith("APP_VERSION ="):
             _ver = _line.split('"')[1]
             break
-_DOC_ZIP = os.path.join(_ROOT, f"EcompVision Inspector 便携版 V{_ver}.zip")
-_DOC_LEGACY_ZIP = os.path.join(_ROOT, "EcompVision Inspector 便携版.zip")
-_DOC_ARC = "EcompVision Inspector 便携版/软件功能规格与测试用例设计.md"
+_DOC_ZIP = os.path.join(_ROOT, f"EcompVision Inspector V{_ver}.zip")
+_DOC_ARC = "EcompVision Inspector/软件功能规格与测试用例设计.md"
 _doc_bytes = open(_DOC_SRC, "rb").read() if os.path.isfile(_DOC_SRC) else None
 check(bool(_doc_bytes),
       "发布文档同步: 权威文档 docs/软件功能规格与测试用例设计.md 存在且非空")
@@ -4159,15 +4202,21 @@ _doc_zip_ok = True
 if os.path.isfile(_DOC_ZIP):
     import zipfile as _zipfile
     with _zipfile.ZipFile(_DOC_ZIP) as _z:
-        _doc_zip_ok = _DOC_ARC in _z.namelist() and _z.read(_DOC_ARC) == _doc_bytes
+        _doc_zip_ok = (_DOC_ARC in _z.namelist()
+                       and _z.read(_DOC_ARC) == _doc_bytes
+                       and not any("便携版" in n for n in _z.namelist()))
 check(_doc_zip_ok,
-      "发布文档同步: 便携版 zip 顶层含同名 md 且字节一致（zip 不存在时跳过）")
+      "发布文档同步: 程序包顶层含同名 md 且字节一致、包内路径无「便携版」")
 _mpz_src = (open(os.path.join(_ROOT, "make_portable_zip.py"), "r", encoding="utf-8").read()
             if os.path.isfile(os.path.join(_ROOT, "make_portable_zip.py")) else "")
-check(bool(_ver) and "def zip_path" in _mpz_src and "V{ver}.zip" in _mpz_src,
-      f"便携包命名: make_portable_zip.py 按「名字 + V{_ver}」生成压缩包文件名")
-check(not os.path.isfile(_DOC_LEGACY_ZIP),
-      "便携包命名: 旧的无版本号 zip 已迁移，不再保留")
+check(bool(_ver) and "def zip_path" in _mpz_src and "V{ver}.zip" in _mpz_src
+      and 'PKG_NAME = "EcompVision Inspector"' in _mpz_src
+      and "LEGACY_ZIP_PREFIX" in _mpz_src,
+      f"程序包命名: 按「名字 + V{_ver}」生成压缩包，名字与顶层文件夹均不含「便携版」")
+_legacy_zips = [n for n in os.listdir(_ROOT)
+                if n.lower().endswith(".zip") and "便携版" in n]
+check(not _legacy_zips,
+      "程序包命名: 含「便携版」的旧命名压缩包已全部清理")
 
 # ============ 收尾：确认未污染 src/ 下的工程配置（写盘已重定向到临时目录） ============
 check(all((open(_p, "rb").read() if os.path.exists(_p) else None) == _o
