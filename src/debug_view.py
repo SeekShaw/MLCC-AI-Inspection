@@ -2780,7 +2780,8 @@ class DebugView(QWidget):
             _cfg.get(self.camera_name, {}).get("filter_show_checked", False))
         self._play_timer = QTimer(self)
         self._play_timer.timeout.connect(self._on_play_tick)
-        self._cam_speed = [1, 2, 1, 2]
+        # 各路相机同步推进：主相机每节拍统一 +1 帧，其余通道同步同序号
+        self._cam_speed = [1, 1, 1, 1]
         # 样张帧缓存：首次生成后复用，避免切换界面时反复同步生成造成卡顿
         self._frames_cache = None
         self._frames_cache_size = None
@@ -3968,7 +3969,18 @@ class DebugView(QWidget):
                     for cam in self._cams:
                         cam.set_playing(True)
         if not self._play_timer.isActive():
-            self._play_timer.start(30)
+            self._play_timer.start(self._play_interval_ms())
+
+    def _play_interval_ms(self):
+        """相机播放节拍间隔（ms）：取高级设置「主界面最小刷新间隔」(fps) 折算 1000/fps，
+        默认 10fps → 100ms。与生产运行界面同一取值，保证两界面刷新节奏一致。"""
+        mw = getattr(self, "main_window", None)
+        try:
+            fps = int(mw._adv_settings.get("min_refresh_interval", 10)) if mw else 10
+        except Exception:
+            fps = 10
+        fps = max(1, min(fps, 1000))
+        return max(1, int(round(1000.0 / fps)))
 
     @staticmethod
     def _make_frames_like_production(cam_name, w, h, index=0):
@@ -4003,6 +4015,10 @@ class DebugView(QWidget):
                 cam.screen.update()
 
     def _on_play_tick(self):
+        # 高级设置「主界面最小刷新间隔」修改即时生效：节拍变化则按新间隔重启定时器
+        _interval = self._play_interval_ms()
+        if self._play_timer.interval() != _interval:
+            self._play_timer.start(_interval)
         self._tick_count += 1
         # 冻结时不推进相机帧（画布停留在当前画面，不再刷新），统计仍按节拍更新
         if not self._frozen:

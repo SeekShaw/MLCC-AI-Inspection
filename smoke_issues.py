@@ -1206,6 +1206,24 @@ finally:
     _shutil.rmtree(_fr, ignore_errors=True)
     _shutil.rmtree(_fr_empty, ignore_errors=True)
 
+# ============ 相机刷新同步与可设置帧率（高级设置「主界面最小刷新间隔」） ============
+check(all(s == 1 for s in pv._cam_speed) and all(p == 0 for p in pv._cam_phase),
+      "相机刷新: 各路同步推进(步长全1/初相位全0)")
+check(pv._play_interval_ms() == 100,
+      f"相机刷新: 默认10fps→节拍100ms (实际 {pv._play_interval_ms()})")
+pv._adv_settings["min_refresh_interval"] = 25
+check(pv._play_interval_ms() == 40,
+      f"相机刷新: 设置25fps→节拍40ms (实际 {pv._play_interval_ms()})")
+pv._adv_settings["min_refresh_interval"] = 10
+# 调试界面读取同一设置（Fake 主窗口注入 _adv_settings）
+mw._adv_settings = getattr(mw, "_adv_settings", {})
+mw._adv_settings["min_refresh_interval"] = 25
+check(dv._play_interval_ms() == 40,
+      f"相机刷新: 调试界面读同一设置25fps→节拍40ms (实际 {dv._play_interval_ms()})")
+mw._adv_settings["min_refresh_interval"] = 10
+check(dv._play_interval_ms() == 100,
+      f"相机刷新: 调试界面恢复默认10fps→节拍100ms (实际 {dv._play_interval_ms()})")
+
 # ============ 新需求：检索按钮→「返回」→恢复默认「当前运行-运行开始-现在」 ============
 # 默认（当前运行）：按钮「检索」且置灰不可点
 check(pv._btn_search_stat.text() == "检索" and not pv._btn_search_stat.isEnabled(),
@@ -2047,8 +2065,8 @@ check(abs(_vib["round_voltage"] - 80.0) < 1e-6,
       f"振动盘: 圆振电压示例值 80.0 V (实际 {_vib['round_voltage']})")
 check(abs(_vib["line_voltage"] - 68.0) < 1e-6,
       f"振动盘: 直振电压示例值 68.0 V (实际 {_vib['line_voltage']})")
-check(pv._products_per_tick == 6,
-      f"振动盘: 12000 Pcs/Min 按 30ms 节拍折算为 6 Pcs/节拍 (实际 {pv._products_per_tick})")
+check(pv._products_per_tick == max(1, round(12000 / 60.0 * pv._play_interval_ms() / 1000.0)),
+      f"振动盘: 12000 Pcs/Min 按当前节拍({pv._play_interval_ms()}ms)折算为 {max(1, round(12000 / 60.0 * pv._play_interval_ms() / 1000.0))} Pcs/节拍 (实际 {pv._products_per_tick})")
 from device_settings_dialog import DeviceSettingsDialog as _DSD
 _dsd = _DSD(_mw)   # DeviceSettingsDialog 接收主窗口，内部取 mw.production
 check(_dsd.sb_vib.value() == 12000, f"振动盘: 设置页供料速度显示 12000 (实际 {_dsd.sb_vib.value()})")

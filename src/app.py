@@ -597,7 +597,8 @@ class MainWindow(QMainWindow):
         # 页面栈：生产运行 + 每路相机一个调试界面 + 占位页
         self.stack = QStackedWidget()
         self._splash(38, "正在初始化生产界面…")
-        self.production = ProductionView(user_manager=self.user_manager)
+        self.production = ProductionView(user_manager=self.user_manager,
+                                         adv_settings=self._adv_settings)
         # 生产界面「扫码录入」等操作入口接入空闲确认（超时需重新输入密码）
         self.production.idle_confirm_cb = self.confirm_if_idle
         # 任意料盒/电磁阀达 100% 时由生产界面回调 _on_stop 执行自动停机

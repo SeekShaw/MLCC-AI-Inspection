@@ -85,11 +85,11 @@ _ESTOP_PEAK_MINUTES = 10.0
 # 使显示良率稳定在 95~97%（小样本纯随机抽样会漂出该区间）。
 _YIELD_FEEDBACK = 2.5
 
-# 离子风扇异常出现概率（每个运行节拍，约 33 拍/秒）→ ≈ 每 1 分钟出现一次异常（演示节奏）
+# 离子风扇异常出现概率（每个运行节拍）→ 演示节奏随节拍间隔变化（间隔由高级设置决定）
 _ION_FAN_TRIGGER_P = 0.0005
 
-# 播放节拍时长（秒）：与 _play_timer.start(30) 对应，用于把「供料速度 Pcs/Min」折算为每节拍产品数
-_PLAY_TICK_SECONDS = 0.03
+# 播放节拍时长已改为动态：_play_interval_ms() 按高级设置「主界面最小刷新间隔」(fps)
+# 折算为 1000/fps 毫秒（默认 10fps → 100ms），各路相机按该帧率同步轮番刷新。
 
 # 「统计配置 / 统计清零」按钮统一样式：蓝色底、白字、点击后不变色
 _BLUE_BTN_STYLE = (
@@ -3192,9 +3192,11 @@ def open_production_report(parent, period, start, end, kpi, donut, cam_stats,
 class ProductionView(_ReportExportMixin, QWidget):
     """生产运行界面：绝对定位的浮动面板，支持运行时拖拽与缩放。"""
 
-    def __init__(self, parent=None, user_manager=None):
+    def __init__(self, parent=None, user_manager=None, adv_settings=None):
         super().__init__(parent)
         self.user_manager = user_manager
+        # 高级设置会话级取值（MainWindow._adv_settings 的同一引用，对话框修改即时可见）
+        self._adv_settings = adv_settings if adv_settings is not None else {}
         self.setStyleSheet("background-color: transparent;")
         self._laid = False
         self.panels = []
@@ -3238,9 +3240,9 @@ class ProductionView(_ReportExportMixin, QWidget):
         self._play_timer = QTimer(self)
         self._play_timer.timeout.connect(self._on_play_tick)
         # 注：未点击「设备启动」前生产信息保持静态示例、不自动刷新（见 _start_idle_sim 已弃用）
-        # 每路相机独立换帧步长/初相位，画面更自然、不整齐划一
-        self._cam_speed = [1, 2, 1, 2, 3, 1, 2, 3]
-        self._cam_phase = [0, 3, 5, 2, 4, 6, 1, 7]
+        # 各路相机刷新须基本同步：统一每节拍推进 1 帧、初相位一致，仅各路样张内容不同
+        self._cam_speed = [1] * 8
+        self._cam_phase = [0] * 8
 
     # ------------------------------------------------------------------
     # 面板创建
@@ -6313,6 +6315,19 @@ class ProductionView(_ReportExportMixin, QWidget):
                 f"QPushButton:disabled {{ color: {COLORS['text_secondary']}; border-color: {COLORS['border']}; "
                 f"background-color: {COLORS['bg_card']}; }}")
 
+    def _play_interval_ms(self):
+        """相机播放节拍间隔（ms）：由高级设置「主界面最小刷新间隔」(fps) 折算 1000/fps。
+
+        即各路相机按每秒刷新该设置值张图的速度轮番显示，默认 10fps → 100ms。
+        读取的是会话级 _adv_settings 同一引用，高级设置中修改即时生效。
+        """
+        try:
+            fps = int(self._adv_settings.get("min_refresh_interval", 10))
+        except Exception:
+            fps = 10
+        fps = max(1, min(fps, 1000))
+        return max(1, int(round(1000.0 / fps)))
+
     def start_playback(self):
         """启动相机画布与生产统计实时累计：逐帧快速刷新样张，统计随刷新增长。"""
         _pd("enter start_playback playing=", self._playing)
@@ -6385,7 +6400,7 @@ class ProductionView(_ReportExportMixin, QWidget):
         finally:
             # 无论如何都要启动播放定时器：只要它起来了，相机画布与生产统计就会开始刷新，
             # 避免任何前置异常导致定时器没启动、画布/统计『点了设备启动却不动』。
-            self._play_timer.start(30)  # ~33fps 快速换帧
+            self._play_timer.start(self._play_interval_ms())  # 节拍=1000/「主界面最小刷新间隔」fps
 
     def _load_frames_to_cams(self):
         """把示例/用户样张帧装载到各相机画布（独立于统计初始化，保证画布必刷新）。
@@ -6497,6 +6512,10 @@ class ProductionView(_ReportExportMixin, QWidget):
         return dict(getattr(self, "_valve_used", {}))
 
     def _on_play_tick(self):
+        # 高级设置「主界面最小刷新间隔」修改即时生效：节拍间隔变化则按新间隔重启定时器
+        _interval = self._play_interval_ms()
+        if self._play_timer.interval() != _interval:
+            self._play_timer.start(_interval)
         # 诊断：前 6 帧记录 tick/idx/可见性/尺寸，确认定时器真的在驱动重绘
         self._play_diag_n = getattr(self, "_play_diag_n", 0) + 1
         if self._play_diag_n <= 6:
@@ -6515,7 +6534,7 @@ class ProductionView(_ReportExportMixin, QWidget):
                         "timer=", self._play_timer.isActive())
             except Exception:
                 pass
-        # 每路相机按各自步长推进样张帧，形成快速、错落的逐帧刷新
+        # 各路相机同步推进：每节拍统一 +1 帧、初相位一致，多路画面基本同步刷新
         # （ZiGAA 品牌展示位固定显示、不推进）
         for i, cam in enumerate(self.cam_grid.cams):
             if i == ZIGAA_CAM_INDEX:
@@ -6713,7 +6732,7 @@ class ProductionView(_ReportExportMixin, QWidget):
             # 一分钟内的总数差值低于统计卡片显示的平均速度；改为时间基累计后，
             # 一分钟差值 = 平均速度（约 11000 Pcs/Min），两处口径严格一致。
             now = time.monotonic()
-            dt = (_PLAY_TICK_SECONDS if self._last_accum_ts is None
+            dt = (self._play_interval_ms() / 1000.0 if self._last_accum_ts is None
                   else min(now - self._last_accum_ts, 1.0))
             self._last_accum_ts = now
             n_exact = (getattr(self, "_avg_speed", 0.0) / 60.0 * dt
@@ -7298,7 +7317,9 @@ class ProductionView(_ReportExportMixin, QWidget):
         except Exception:
             return
         if feed > 0:
-            self._products_per_tick = int(max(1, round(feed / 60.0 * _PLAY_TICK_SECONDS)))
+            # 按当前播放节拍间隔折算（间隔随「主界面最小刷新间隔」可变）
+            self._products_per_tick = int(max(
+                1, round(feed / 60.0 * self._play_interval_ms() / 1000.0)))
 
     def _refresh_dev_display(self):
         """将 dev_cfg 当前值刷新到设备运行状态区（停止态也同步显示配置值）。"""
