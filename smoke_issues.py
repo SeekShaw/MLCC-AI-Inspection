@@ -4130,11 +4130,21 @@ dv._on_detect_mode_changed("全开", broadcast=False)
 # ============ 2026-11-11：发布文档同步到 output/ 与便携版 zip ============
 # 需求：权威文档随 exe 一同交付；build_b.py 每次打包自动同步到 output/，
 # make_portable_zip.py 整体复制 output/ 后压缩包顶层即含同一份 md。
+# 同日追加：压缩包文件名改为「名字 + 版本号」，此处按 src/app_meta.py
+# 独立算出期望文件名，不调用被测模块，避免自证式断言。
 _ROOT = os.path.dirname(os.path.abspath(__file__))
 _DOC_REL = "docs/软件功能规格与测试用例设计.md"
 _DOC_SRC = os.path.join(_ROOT, _DOC_REL)
 _DOC_OUT = os.path.join(_ROOT, "output", "软件功能规格与测试用例设计.md")
-_DOC_ZIP = os.path.join(_ROOT, "EcompVision Inspector 便携版.zip")
+_ver = None
+_meta_path = os.path.join(_ROOT, "src", "app_meta.py")
+if os.path.isfile(_meta_path):
+    for _line in open(_meta_path, "r", encoding="utf-8").read().splitlines():
+        if _line.strip().startswith("APP_VERSION ="):
+            _ver = _line.split('"')[1]
+            break
+_DOC_ZIP = os.path.join(_ROOT, f"EcompVision Inspector 便携版 V{_ver}.zip")
+_DOC_LEGACY_ZIP = os.path.join(_ROOT, "EcompVision Inspector 便携版.zip")
 _DOC_ARC = "EcompVision Inspector 便携版/软件功能规格与测试用例设计.md"
 _doc_bytes = open(_DOC_SRC, "rb").read() if os.path.isfile(_DOC_SRC) else None
 check(bool(_doc_bytes),
@@ -4152,6 +4162,12 @@ if os.path.isfile(_DOC_ZIP):
         _doc_zip_ok = _DOC_ARC in _z.namelist() and _z.read(_DOC_ARC) == _doc_bytes
 check(_doc_zip_ok,
       "发布文档同步: 便携版 zip 顶层含同名 md 且字节一致（zip 不存在时跳过）")
+_mpz_src = (open(os.path.join(_ROOT, "make_portable_zip.py"), "r", encoding="utf-8").read()
+            if os.path.isfile(os.path.join(_ROOT, "make_portable_zip.py")) else "")
+check(bool(_ver) and "def zip_path" in _mpz_src and "V{ver}.zip" in _mpz_src,
+      f"便携包命名: make_portable_zip.py 按「名字 + V{_ver}」生成压缩包文件名")
+check(not os.path.isfile(_DOC_LEGACY_ZIP),
+      "便携包命名: 旧的无版本号 zip 已迁移，不再保留")
 
 # ============ 收尾：确认未污染 src/ 下的工程配置（写盘已重定向到临时目录） ============
 check(all((open(_p, "rb").read() if os.path.exists(_p) else None) == _o
