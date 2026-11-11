@@ -5088,13 +5088,19 @@ class DebugView(QWidget):
         return os.path.join(base, "detect_defaults.json")
 
     def _collect_detect_settings(self):
-        """收集当前检测项设置（按检测编号为键，供存盘 / 跨相机同步）。"""
+        """收集当前检测项设置（按检测编号为键，供存盘 / 跨相机同步）。
+
+        2026-11-11：携带「检测列表中所有最新设置」——除是否检测、规格上下限、
+        单位、收料位置、良率预警外，新增 标称值 / 默认检测值 / 补偿值 三项，
+        使方案同步能把当前工位的完整检测方案原样复制到目标工位。
+        """
         items = []
         for r, row in enumerate(self._table_data):
             warn = self._yield_warn.get(r, {"enabled": True, "threshold": 50})
             items.append({
                 "code": str(row[1]), "name": str(row[2]),
                 "detect": bool(row[0]),
+                "nominal": row[3], "default_val": row[4], "comp": row[5],
                 "lo": row[6], "hi": row[7],
                 "unit": str(row[8]), "port": str(row[9]),
                 "warn_enabled": bool(warn.get("enabled", True)),
@@ -5103,7 +5109,11 @@ class DebugView(QWidget):
         return items
 
     def _apply_detect_settings(self, items):
-        """把设置写回本视图（数据 + 控件显示 + 结果重判）。返回写入条数。"""
+        """把设置写回本视图（数据 + 控件显示 + 结果重判）。返回写入条数。
+
+        2026-11-11：同步写入 标称值 / 默认检测值 / 补偿值（row[3/4/5]），
+        覆盖 `_collect_detect_settings` 收集的全部检测项配置。
+        """
         table = getattr(self, "_table", None)
         if table is None or not items:
             return 0
@@ -5115,6 +5125,9 @@ class DebugView(QWidget):
                 continue
             row = self._table_data[i]
             row[0] = bool(it.get("detect", row[0]))
+            row[3] = it.get("nominal", row[3])
+            row[4] = it.get("default_val", row[4])
+            row[5] = it.get("comp", row[5])
             row[6] = it.get("lo", row[6])
             row[7] = it.get("hi", row[7])
             row[8] = str(it.get("unit", row[8]))

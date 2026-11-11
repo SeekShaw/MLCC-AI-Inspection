@@ -4222,13 +4222,23 @@ del _dlg   # 显式释放无父窗口的 QDialog，避免解释器退出阶段 Q
 _v1, _v2, _v3 = _target_dvs[0], _target_dvs[1], _target_dvs[2]
 _snap = [_copy.deepcopy(v._table_data) for v in (_src_dv, _v1, _v2, _v3)]
 _sentinel = 987654.0
-_src_dv._table_data[0][6] = _sentinel
+_src_dv._table_data[0][3] = _sentinel      # 标称值
+_src_dv._table_data[0][4] = _sentinel      # 默认检测值
+_src_dv._table_data[0][5] = _sentinel      # 补偿值
+_src_dv._table_data[0][6] = _sentinel      # 规格下限
 _done, _total, _failed = _src_dv._sync_scheme_to([_v1, _v3])
 check(_done == 2 and not _failed and _total > 0
       and float(_v1._table_data[0][6]) == _sentinel
       and float(_v3._table_data[0][6]) == _sentinel
       and _v2._table_data[0][6] == _snap[2][0][6],
       "方案同步: 仅同步到选中的 2 个工位，未选中工位保持原值")
+# 2026-11-11：方案同步须携带「所有最新设置」——标称值/默认检测值/补偿值一并复制
+check(float(_v1._table_data[0][3]) == _sentinel
+      and float(_v1._table_data[0][4]) == _sentinel
+      and float(_v1._table_data[0][5]) == _sentinel
+      and float(_v3._table_data[0][3]) == _sentinel
+      and float(_v3._table_data[0][5]) == _sentinel,
+      "方案同步: 标称值/默认检测值/补偿值随方案一同同步到目标工位（所有最新设置）")
 for _v, _s in zip((_src_dv, _v1, _v2, _v3), _snap):
     _v._table_data = _s
 check("class SyncSchemeDialog" in src_dv and "全部同步" not in src_dv
