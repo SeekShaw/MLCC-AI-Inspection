@@ -4255,8 +4255,59 @@ check(len(_fi) == 109 and len({c for c, _ in _fi}) == 109,
       f"出厂清单: 共 109 项且检测编号唯一 (实际 {len(_fi)} 项)")
 check(_fi[0] == ("100", "有无（飞料）") and _fi[2] == ("102", "歪料")
       and _fi[3] == ("103", "连料") and _fi[4] == ("104", "碎料")
-      and _fi[-1] == ("519", "粘碎锡"),
+      and _fi[-1] == ("519", "瓷体粘碎膜"),
       "出厂清单: 编号与项目名称按 2026-11-11 新清单生效（102 歪料 / 103 连料 / 104 碎料）")
+# 18 项检测项按最新清单改名（2026-11-11 二次更新）：端面类 / 瓷体类加前缀
+_fi_map = dict(_fi)
+check(_fi_map["410"] == "端面脏污" and _fi_map["411"] == "端面偏色"
+      and _fi_map["412"] == "端面开裂" and _fi_map["423"] == "端面凹坑"
+      and _fi_map["424"] == "端面长瘤"
+      and _fi_map["500"] == "瓷体粘锡单个面积" and _fi_map["501"] == "瓷体粘锡总面积"
+      and _fi_map["509"] == "瓷体开裂" and _fi_map["510"] == "瓷体裂纹"
+      and _fi_map["511"] == "瓷体划伤" and _fi_map["512"] == "瓷体刮伤"
+      and _fi_map["513"] == "瓷体压伤" and _fi_map["514"] == "瓷体凹痕"
+      and _fi_map["515"] == "瓷体漏铜" and _fi_map["516"] == "瓷体漏基材"
+      and _fi_map["517"] == "瓷体凹坑" and _fi_map["518"] == "瓷体凸起"
+      and _fi_map["519"] == "瓷体粘碎膜",
+      "检测项改名: 410/411/412/423/424/500/501/509~519 按最新清单生效（端面/瓷体前缀）")
+# 名称在所有相机工位的检测项列表中一致（单位/出料/规格弹窗均读 _table_data，自动一致）
+check(all(_mw.debug_views[i]._table_data[r][2] == _fi_map[_mw.debug_views[i]._table_data[r][1]]
+          for i in range(8) for r in range(109)),
+      "检测项改名: 8 工位检测项列表名称与出厂清单逐行一致（单位/出料/规格弹窗同源）")
+
+# 模拟生产模式：节拍触发检测项示例值刷新（每一项给结果示例值并按生产节奏刷新，2026-11-11）
+_dv = _dvmod.DebugView()
+_dv._accepted_mode = "模拟生产"
+_dv._playing = True
+_refr = {"n": 0}
+_orig_refr = _dv.refresh_detection_values
+def _track_refr(*a, **k):
+    _refr["n"] += 1
+    return _orig_refr(*a, **k)
+_dv.refresh_detection_values = _track_refr
+try:
+    for _ in range(3):          # tick_count 走到 3 → 命中每 3 拍一次的刷新
+        _dv._on_play_tick()
+except Exception as _e:
+    check(False, f"模拟生产: 节拍刷新检测项示例值未抛异常（{_e!r}）")
+else:
+    check(_refr["n"] >= 1, "模拟生产: 节拍触发检测项示例值刷新（每一项给结果示例值并按生产节奏刷新）")
+    check(all(str(_dv._table_data[r][4]).strip() != ""
+              and str(_dv._table_data[r][10]).strip() != ""
+              for r in range(109)),
+          "模拟生产: 109 项检测项均带示例检测值与结果（OK/NG/待定）")
+_dv.close()
+
+# 飞料监测相机：纳入样张文件关键字，按目录前缀读取并同帧率刷新（2026-11-11）
+_tmpf = tempfile.mkdtemp(prefix="smoke_fly_")
+with open(os.path.join(_tmpf, "飞料监测_样张1.png"), "wb") as _f:
+    _f.write(b"")
+_orig_dir = _pvm_paths._camera_frame_dir
+_pvm_paths._camera_frame_dir = lambda: _tmpf
+_fly = _pvm_paths._camera_frame_files().get("飞料监测")
+_pvm_paths._camera_frame_dir = _orig_dir
+check(bool(_fly), "飞料监测: 文件目录前缀『飞料监测』样张正确归集到飞料监测一路（与其它 6 路一致）")
+
 _dv0 = _mw.debug_views[0]
 check(len(_dv0._table_data) == 109
       and all(bool(r[0]) for r in _dv0._table_data)
