@@ -198,15 +198,23 @@ def _camera_frame_files():
 
 
 def _load_camera_frames(cam_name, w, h, count_per=12):
-    """为某路相机加载样张帧：归集该路所有匹配图片，逐张生成漂移帧并拼接，
-    运行时即可在图片间轮番切换（多张则轮番加载多张）。
+    """为某路相机加载样张帧（按文件名自然顺序轮番显示）：
+
+    - 仅 1 张图：生成漂移帧拼成序列，模拟真实相机动态刷新。
+    - 多张图：直接在这些图片之间轮番切换（每张重复若干帧以稳定停留，再切下一张）。
     无匹配样张时返回 None（调用方回退到示例帧）。"""
     files = _camera_frame_files().get(cam_name)
     if not files:
         return None
+    if len(files) == 1:
+        return _make_user_frames(files[0], w, h, count=count_per)
     frames = []
     for fp in files:
-        frames += _make_user_frames(fp, w, h, count=count_per)
+        # 多张图：取每图的覆盖裁剪单帧（含轻微居中，无漂移），重复 count_per 帧
+        # 稳定停留后再切到下一张，形成「轮番刷新」效果
+        one = _make_user_frames(fp, w, h, count=1)
+        if one:
+            frames.extend(one * count_per)
     return frames if frames else None
 
 

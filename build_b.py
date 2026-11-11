@@ -176,14 +176,47 @@ def main():
         stash_exe(OUT_EXE)
     install_exe(DIST_EXE, OUT_EXE)
 
-    # 3) 同步 assets/ 资源目录到 output/（相机样张等运行时依赖）
+    # 3) 同步 assets/ 资源目录到 output/（图标/配置等运行时依赖）。
+    #    注意：output/assets/camera_frames 由用户在运行侧直接管理，构建时保留其既有
+    #    样张（不删除、不覆盖），运行时 exe 即读取该目录。故整体替换前先把该目录复制
+    #    备份出来（用复制而非移动，避免中途失败丢数据），替换完成后再把用户样张平铺放回
+    #    （恢复前确保目标目录已清空，杜绝 move 目标已存在时产生的嵌套目录损坏）。
     assets_src = "assets"
     assets_dst = os.path.join("output", "assets")
+    cam_dst = os.path.join(assets_dst, "camera_frames")
+    cam_keep = os.path.join("output", "_cf_keep")
+    if os.path.isdir(cam_keep):
+        shutil.rmtree(cam_keep)
+    had_user_cf = False
+    if os.path.isdir(cam_dst):
+        # 复制备份用户侧样张（保留原文件，备份失败也不会影响输出侧）
+        os.makedirs(cam_keep, exist_ok=True)
+        for _item in os.listdir(cam_dst):
+            _s = os.path.join(cam_dst, _item)
+            _d = os.path.join(cam_keep, _item)
+            try:
+                if os.path.isfile(_s):
+                    shutil.copy2(_s, _d)
+                else:
+                    shutil.copytree(_s, _d)
+            except Exception as _e:
+                print("   camera_frames 备份跳过:", _item, repr(_e))
+        had_user_cf = True
     if os.path.exists(assets_src):
         if os.path.exists(assets_dst):
             shutil.rmtree(assets_dst)
         shutil.copytree(assets_src, assets_dst)
-        print("   同步 assets ->", assets_dst)
+        # 用用户侧样张覆盖 dev 自带 camera_frames（用户侧为空时保留 dev 默认）
+        if had_user_cf:
+            if os.path.isdir(cam_dst):
+                shutil.rmtree(cam_dst)
+            # cam_dst 此时必不存在 → 用 copytree 平铺放回，dst 若不存在才成功，
+            # 即便意外已存在也会直接报错暴露问题，而不会像 move 那样嵌套。
+            shutil.copytree(cam_keep, cam_dst)
+            shutil.rmtree(cam_keep)
+        print("   同步 assets ->", assets_dst,
+              "（保留 camera_frames 既有样张）" if had_user_cf
+              else "（camera_frames 用 dev 默认样张）")
 
     # 3.1) 同步 app_icon.ico 到 output/：程序启动时按原生多档尺寸加载为窗口 / 任务栏图标
     if os.path.exists("app_icon.ico"):
