@@ -2,6 +2,7 @@ import os
 import json
 import sys
 import random
+import shutil
 import time
 from datetime import datetime, timedelta
 from PyQt6.QtWidgets import (
@@ -2432,13 +2433,22 @@ class UnitCell(QFrame):
         menu = self._build_menu()
         action = menu.exec(self.mapToGlobal(pos))
         if action is not None:
-            self.set_unit(action.text())
+            text = str(action.text())
+            self._lbl.setText(text)
+            # 仅用户主动选择才回调（写入数据 + 全局联动）；程序化刷新不走这里
+            if self._on_select is not None:
+                self._on_select(text)
 
     def set_unit(self, text):
-        """更新显示的单位，并回调通知外部（写入底层数据）。"""
+        """仅更新显示的单位（**不触发选择回调**）。
+
+        2026-11-11 修复：此前 set_unit 会调用 _on_select（→ _set_unit →
+        权限校验弹「无权限」窗 + 全局同步）——任何程序化刷新（恢复默认/出厂、
+        方案同步、权限应用后的行刷新）都会触发，切换到无「单位」权限的用户时
+        连续弹出「无权限」窗、阻断其它操作。现改为：显示更新走本方法，回调仅
+        由右键菜单的用户选择触发。
+        """
         self._lbl.setText(str(text))
-        if self._on_select is not None:
-            self._on_select(str(text))
 
     def current_unit(self):
         return self._lbl.text()
@@ -3679,6 +3689,9 @@ class DebugView(QWidget):
         toolbar_defs = [
             ("设置为默认", "default_set", self._on_set_default),
             ("恢复至默认", "restore", self._on_restore_default),
+            # 2026-11-11 需求：恢复至出厂左侧新增「设置为出厂」——把当前方案存为
+            # 出厂基准；默认仅超级管理员拥有（权限键 detect_set_factory，可配置）
+            ("设置为出厂", "factory_set", self._on_set_factory),
             ("恢复至出厂", "factory", self._on_restore_factory),
             ("单位设置", "unit", self._on_unit_settings),
             ("出料设置", "output", self._on_output_settings),
@@ -3749,6 +3762,14 @@ class DebugView(QWidget):
         _hdr_font.setPixelSize(10)
         _hdr_font.setWeight(QFont.Weight.Normal)
         self._table.horizontalHeader().setFont(_hdr_font)
+
+        # 2026-11-11 需求：加载持久化检测方案（单位设置/出料设置/方案同步等
+        # 设置结果存于 %APPDATA%/EcompVisionInspector/config，程序更新不覆盖）。
+        # 必须在表格控件全部构建完成后执行，保证数据与显示一次性同步。
+        try:
+            self._load_persisted_scheme()
+        except Exception:
+            pass
 
     # ------------------------------------------------------------------
     # 主题重绘
@@ -4718,6 +4739,7 @@ class DebugView(QWidget):
         if 0 <= row < len(self._table_data):
             self._table_data[row][8] = str(text)
             self._sync_units_global(row, str(text))
+            self._persist_scheme()   # 单位变更落盘（程序更新不覆盖，下次启动加载）
 
     def _sibling_debug_views(self):
         """其它相机工位的 DebugView 列表（单位 / 出料设置全局联动用）。"""
@@ -4732,6 +4754,7 @@ class DebugView(QWidget):
             return
         code = str(self._table_data[row][1])
         for v in self._sibling_debug_views():
+            changed = False
             for r2, row2 in enumerate(v._table_data):
                 if str(row2[1]) == code and str(row2[8]) != unit:
                     row2[8] = unit
@@ -4739,6 +4762,9 @@ class DebugView(QWidget):
                     if cell is not None:
                         cell.set_unit(unit)
                     v._refresh_row_display(r2)
+                    changed = True
+            if changed:
+                v._persist_scheme()   # 联动后的工位方案也各自落盘
 
     def _sync_ports_global(self, code_ports):
         """按检测项编号把收料位置同步到所有其它相机工位（出料设置全局联动）。
@@ -4747,12 +4773,16 @@ class DebugView(QWidget):
         """
         n = 0
         for v in self._sibling_debug_views():
+            changed = False
             for r2, row2 in enumerate(v._table_data):
                 port = code_ports.get(str(row2[1]))
                 if port is not None and str(row2[9]) != port:
                     row2[9] = port
                     v._refresh_row_display(r2)
                     n += 1
+                    changed = True
+            if changed:
+                v._persist_scheme()   # 联动后的工位方案也各自落盘
         return n
 
     def _on_yield_warn_toggled(self, row, on):
@@ -5082,21 +5112,91 @@ class DebugView(QWidget):
         except Exception:
             pass
 
-    def _detect_defaults_path(self):
-        """检测项默认配置落盘路径：与 exe 或脚本同目录（frozen 跟随可执行文件）。
+    @staticmethod
+    def _config_dir():
+        """检测配置持久化目录（**程序更新不覆盖**）。
 
-        2026-11-11：按相机工位名区分文件名（``detect_defaults_<相机名>.json``），
-        使「设置为默认 / 恢复至默认」仅作用于**当前工位**，不影响其它相机工位。
+        2026-11-11 需求：单位设置 / 出料设置 / 方案同步 / 设置为默认 / 设置为出厂
+        等落盘配置原先写在 exe 同目录，程序更新（整目录替换）会被删除或覆盖。
+        现统一改存 ``%APPDATA%/EcompVisionInspector/config``（无 APPDATA 时退回
+        用户主目录），并自动把旧 exe 同目录的历史配置迁移过来（旧存在且新不存在
+        才复制，避免覆盖新配置）。
         """
+        base = os.environ.get("APPDATA") or os.path.expanduser("~")
+        d = os.path.join(base, "EcompVisionInspector", "config")
+        try:
+            os.makedirs(d, exist_ok=True)
+        except Exception:
+            d = os.path.dirname(os.path.abspath(__file__))
+        return d
+
+    def _exe_side_dir(self):
+        """exe / 脚本所在目录（旧版配置文件位置，供迁移）。"""
         if getattr(sys, "frozen", False) and getattr(sys, "executable", ""):
-            base = os.path.dirname(os.path.abspath(sys.executable))
-        else:
-            base = os.path.dirname(os.path.abspath(__file__))
+            return os.path.dirname(os.path.abspath(sys.executable))
+        return os.path.dirname(os.path.abspath(__file__))
+
+    def _cam_tag(self):
+        """相机工位名文件安全标签（用于按工位区分配置文件）。"""
         cam = "".join(ch for ch in str(getattr(self, "camera_name", ""))
                       if ch.isalnum() or ch in "-_")
-        if not cam:
-            cam = "default"
-        return os.path.join(base, f"detect_defaults_{cam}.json")
+        return cam or "default"
+
+    def _migrate_old_config(self, old_name, new_path):
+        """把 exe 同目录的旧版配置迁移到持久化目录（仅当旧存在且新不存在）。"""
+        try:
+            old_p = os.path.join(self._exe_side_dir(), old_name)
+            if os.path.exists(old_p) and not os.path.exists(new_path):
+                shutil.copyfile(old_p, new_path)
+        except Exception:
+            pass
+
+    def _detect_defaults_path(self):
+        """「设置为默认 / 恢复至默认」配置路径（按工位区分，存持久化目录）。"""
+        p = os.path.join(self._config_dir(),
+                         f"detect_defaults_{self._cam_tag()}.json")
+        self._migrate_old_config(f"detect_defaults_{self._cam_tag()}.json", p)
+        self._migrate_old_config("detect_defaults.json", p)
+        return p
+
+    def _factory_path(self):
+        """「设置为出厂」配置路径（按工位区分，存持久化目录）。"""
+        p = os.path.join(self._config_dir(), f"factory_{self._cam_tag()}.json")
+        self._migrate_old_config(f"factory_{self._cam_tag()}.json", p)
+        return p
+
+    def _scheme_path(self):
+        """当前工位检测方案（单位/收料位置/规格等全套）持久化路径。
+
+        2026-11-11 需求：单位设置 / 出料设置 / 方案同步 设置完成后保存为配置
+        文件，下次程序更新（替换 exe 目录）不会覆盖删除；程序启动时自动加载。
+        """
+        p = os.path.join(self._config_dir(), f"scheme_{self._cam_tag()}.json")
+        self._migrate_old_config(f"scheme_{self._cam_tag()}.json", p)
+        return p
+
+    def _persist_scheme(self):
+        """把当前工位检测方案（_collect_detect_settings 全量）写入持久化配置。"""
+        try:
+            with open(self._scheme_path(), "w", encoding="utf-8") as f:
+                json.dump({"items": self._collect_detect_settings()}, f,
+                          ensure_ascii=False, indent=2)
+        except Exception:
+            pass
+
+    def _load_persisted_scheme(self):
+        """程序启动 / 页面构建完成时加载持久化方案（无文件则保持出厂默认）。"""
+        p = self._scheme_path()
+        if not os.path.exists(p):
+            return 0
+        try:
+            with open(p, "r", encoding="utf-8") as f:
+                items = (json.load(f) or {}).get("items", [])
+        except Exception:
+            return 0
+        if not items:
+            return 0
+        return self._apply_detect_settings(items, persist=False)
 
     def _collect_detect_settings(self):
         """收集当前检测项设置（按检测编号为键，供存盘 / 跨相机同步）。
@@ -5119,11 +5219,13 @@ class DebugView(QWidget):
             })
         return items
 
-    def _apply_detect_settings(self, items):
+    def _apply_detect_settings(self, items, persist=True):
         """把设置写回本视图（数据 + 控件显示 + 结果重判）。返回写入条数。
 
         2026-11-11：同步写入 标称值 / 默认检测值 / 补偿值（row[3/4/5]），
-        覆盖 `_collect_detect_settings` 收集的全部检测项配置。
+        覆盖 `_collect_detect_settings` 收集的全部检测项配置；
+        写回成功后默认把方案持久化到 ``scheme_<相机名>.json``（程序更新不覆盖，
+        下次启动自动加载）——``persist=False`` 用于启动加载等回写场景。
         """
         table = getattr(self, "_table", None)
         if table is None or not items:
@@ -5150,6 +5252,8 @@ class DebugView(QWidget):
                                            warn["threshold"]))
             self._refresh_row_display(i)
             n += 1
+        if persist and n:
+            self._persist_scheme()
         return n
 
     def _on_cell_changed(self, row, col):
@@ -5244,6 +5348,7 @@ class DebugView(QWidget):
             QMessageBox.warning(self, "设置默认", f"保存默认设置失败：{e!r}")
             return
         self._dv_log(f"检测项设置：已保存默认（{len(self._table_data)} 项）")
+        self._persist_scheme()   # 当前方案同时落盘（下次启动自动加载）
         QMessageBox.information(
             self, "设置默认",
             f"已把当前 {len(self._table_data)} 项检测设置保存为默认。")
@@ -5266,18 +5371,56 @@ class DebugView(QWidget):
         QMessageBox.information(self, "恢复至默认", f"已恢复 {n} 项检测设置。")
 
     def _on_restore_factory(self):
-        """恢复至出厂：还原到内置出厂数据。"""
-        factory = getattr(self, "_factory_data", None)
+        """恢复至出厂：优先还原「设置为出厂」保存的出厂基准（``factory_<相机名>.json``），
+        未设置过时还原到内置出厂数据。"""
+        p = self._factory_path()
+        factory = None
+        if os.path.exists(p):
+            try:
+                with open(p, "r", encoding="utf-8") as f:
+                    factory = (json.load(f) or {}).get("items", [])
+            except Exception:
+                factory = None
         if not factory:
-            QMessageBox.information(self, "恢复至出厂", "缺少出厂数据，无法恢复。")
-            return
-        items = [{"code": str(row[1]), "detect": bool(row[0]),
-                  "lo": row[6], "hi": row[7], "unit": str(row[8]),
-                  "port": str(row[9]), "warn_enabled": True,
-                  "warn_threshold": 50} for row in factory]
-        n = self._apply_detect_settings(items)
+            builtin = getattr(self, "_factory_data", None)
+            if not builtin:
+                QMessageBox.information(self, "恢复至出厂", "缺少出厂数据，无法恢复。")
+                return
+            factory = [{"code": str(row[1]), "detect": bool(row[0]),
+                        "nominal": row[3], "default_val": row[4],
+                        "comp": row[5], "lo": row[6], "hi": row[7],
+                        "unit": str(row[8]), "port": str(row[9]),
+                        "warn_enabled": True, "warn_threshold": 50}
+                       for row in builtin]
+        n = self._apply_detect_settings(factory)
         self._dv_log(f"检测项设置：已恢复出厂（{n} 项）")
         QMessageBox.information(self, "恢复至出厂", f"已恢复 {n} 项出厂设置。")
+
+    def _on_set_factory(self):
+        """设置为出厂（「恢复至出厂」左侧按钮，默认仅超级管理员拥有该权限）：
+        把当前工位检测项方案存为「出厂基准」（``factory_<相机名>.json``，
+        持久化目录、程序更新不覆盖），此后「恢复至出厂」还原到该基准；
+        未设置过时「恢复至出厂」仍还原内置出厂清单。
+        """
+        mw = getattr(self, "main_window", None)
+        um = getattr(mw, "user_manager", None)
+        user = getattr(mw, "current_user", None)
+        if um is not None and not um.can(user, "detect_set_factory"):
+            QMessageBox.warning(self, "无权限", "当前用户无权限修改「设置为出厂」")
+            return
+        try:
+            with open(self._factory_path(), "w", encoding="utf-8") as f:
+                json.dump({"items": self._collect_detect_settings()}, f,
+                          ensure_ascii=False, indent=2)
+        except Exception as e:
+            QMessageBox.warning(self, "设置为出厂", f"保存出厂配置失败：{e!r}")
+            return
+        self._persist_scheme()
+        self._dv_log("检测项设置：已把当前方案设置为出厂基准")
+        QMessageBox.information(
+            self, "设置为出厂",
+            f"已把当前 {len(self._table_data)} 项检测设置存为出厂配置，"
+            "「恢复至出厂」将还原到该配置。")
 
     def _on_unit_settings(self):
         """单位设置：对话框批量查看/修改各检测项单位。"""
@@ -5372,12 +5515,10 @@ class DebugView(QWidget):
                                     f"已更新 {n} 项单位（全局联动，所有工位同步生效）。")
 
     def _unit_defaults_path(self):
-        """单位默认配置落盘路径：与 exe 或脚本同目录（frozen 跟随可执行文件）。"""
-        if getattr(sys, "frozen", False) and getattr(sys, "executable", ""):
-            base = os.path.dirname(os.path.abspath(sys.executable))
-        else:
-            base = os.path.dirname(os.path.abspath(__file__))
-        return os.path.join(base, "unit_defaults.json")
+        """单位默认配置落盘路径（持久化目录，程序更新不覆盖）。"""
+        p = os.path.join(self._config_dir(), "unit_defaults.json")
+        self._migrate_old_config("unit_defaults.json", p)
+        return p
 
     def _unit_set_default_global(self, combos, show_msg=True, msg_parent=None):
         """单位设置弹窗「设置为默认」：把当前各检测项单位选择应用到**所有相机工位**
@@ -5410,6 +5551,8 @@ class DebugView(QWidget):
                         cell.set_unit(u)
                     v._refresh_row_display(r)
                     n += 1
+        for v in views:
+            v._persist_scheme()   # 各工位方案落盘（程序更新不覆盖）
         self._persist_unit_defaults(code_unit)
         self._dv_log(f"单位设置：设置为默认（全局生效，{n} 处单位同步）")
         if show_msg:
@@ -5530,6 +5673,7 @@ class DebugView(QWidget):
         # 2026-11-11 需求：出料设置全局联动——收料位置按检测项编号同步到
         # 所有其它相机工位（与单位设置同一联动口径）
         n_sync = self._sync_ports_global(code_ports)
+        self._persist_scheme()   # 出料设置落盘（程序更新不覆盖，下次启动加载）
         self._dv_log(f"检测项设置：出料设置已更新（{n} 项收料位置，"
                      f"全局联动同步 {n_sync} 处）")
         if n:

@@ -10,6 +10,10 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "src"))
 _TMP_CFG_DIR = tempfile.mkdtemp(prefix="smoke_cfg_")
 _TMP_SHIFT = os.path.join(_TMP_CFG_DIR, "shift_defaults.json")
 _TMP_ALARM = os.path.join(_TMP_CFG_DIR, "alarm_config.json")
+# 2026-11-11：检测方案/默认/出厂配置改存 %APPDATA%/EcompVisionInspector/config，
+# 冒烟测试重定向 APPDATA 到临时目录——既验证真实写盘/加载，又不污染真实配置、
+# 且每次运行临时目录全新（避免上次运行残留方案影响本次出厂基线断言）。
+os.environ["APPDATA"] = _TMP_CFG_DIR
 _CFG_GUARD = {}
 for _cfg_name in ("shift_defaults.json", "alarm_config.json"):
     _gp = os.path.join(os.path.dirname(os.path.abspath(__file__)), "src", _cfg_name)
@@ -333,7 +337,7 @@ src_dv = open("C:/Users/Lenovo/WorkBuddy/Teruo/src/debug_view.py", encoding="utf
 #    → 规格自动调整（2026-10-20 新增）
 #    （「检测项全开/关」已移到「是否检测」列头右侧，不再出现在工具条）
 from PyQt6.QtWidgets import QPushButton as _QPushButton, QHBoxLayout as _QHBoxLayout
-_TOOLBAR_ORDER = ["设置为默认", "恢复至默认", "恢复至出厂",
+_TOOLBAR_ORDER = ["设置为默认", "恢复至默认", "设置为出厂", "恢复至出厂",
                   "单位设置", "出料设置", "方案同步", "规格自动调整"]
 _toolbar_found = None
 for _lay in dv.findChildren(_QHBoxLayout):
@@ -344,7 +348,7 @@ for _lay in dv.findChildren(_QHBoxLayout):
         _toolbar_found = _lay
         break
 check(_toolbar_found is not None,
-      "工具条: 运行时按钮从左到右顺序为 设置为默认→恢复至默认→恢复至出厂→单位设置→出料设置→方案同步→规格自动调整")
+      "工具条: 运行时按钮从左到右顺序为 设置为默认→恢复至默认→设置为出厂→恢复至出厂→单位设置→出料设置→方案同步→规格自动调整")
 _toolbar_texts = ([(_toolbar_found.itemAt(i).widget().text() or
                     _toolbar_found.itemAt(i).widget().toolTip())
                    for i in range(_toolbar_found.count())
@@ -395,10 +399,19 @@ _unit_menu = _unit_cell._build_menu()
 check([a.text() for a in _unit_menu.actions()]
       == ["Pixel", "mm", "Deg", "Dec", "灰度级"],
       "单位列: 右键菜单包含 Pixel/mm/Deg/Dec/灰度级")
+# 2026-11-11 修复：set_unit 仅更新显示（不触发回调），用户选择（右键菜单路径
+# _on_select）才写入数据——否则权限应用/行刷新会触发「无权限」弹窗阻断操作。
 _unit_cell.set_unit("灰度级"); app.processEvents()
+check(_unit_cell.current_unit() == "灰度级" and dv._table_data[0][8] != "灰度级",
+      "单位列: set_unit 仅更新显示、不触发写入（程序化刷新不再弹「无权限」窗）")
+_unit_cell._on_select("灰度级"); app.processEvents()
 check(dv._table_data[0][8] == "灰度级" and _unit_cell.current_unit() == "灰度级",
-      "单位列: 选择「灰度级」后写入底层数据并刷新显示")
-_unit_cell.set_unit("Pixel"); app.processEvents()   # 还原，避免影响后续断言
+      "单位列: 用户选择（_on_select 回调）写入底层数据并刷新显示")
+_unit_cell._on_select("Pixel"); app.processEvents()   # 还原，避免影响后续断言
+try:
+    _os_sm = os.path.exists(dv._scheme_path()) and os.remove(dv._scheme_path())
+except OSError:
+    pass
 
 # 6) 「检测值」列：数值 + 「值分布」按钮（原数值分布列按钮移入此处）
 check(dv._table.horizontalHeaderItem(_val_col).text() == "检测值",
@@ -3632,8 +3645,8 @@ from user_manager import (
     PERMISSION_MODULE as _PMOD, permission_rows as _prows,
     NAV_PERMISSION_KEY as _NPK, DEFAULT_CATEGORY_PERMISSIONS as _PDEF,
 )
-check(len(_PGRP) == 12 and len(_PP) == 56,
-      f"权限细化: 12 个模块 / 56 项功能（实际 {len(_PGRP)} / {len(_PP)}）")
+check(len(_PGRP) == 12 and len(_PP) == 57,
+      f"权限细化: 12 个模块 / 57 项功能（实际 {len(_PGRP)} / {len(_PP)}）")
 check(_PP.get("reject_debug") == "剔除位置调试"
       and _PMOD["reject_debug"] == "检测与分选",
       "权限细化: 新增「剔除位置调试」可配置权限项")
@@ -3991,12 +4004,12 @@ check(all(_PMOD[k] == "相机与图像" for k in
 check([_PP[k] for k in _TTP] == ["检测流程设计", "产品目标检索",
                                  "计算元素精确查找", "图像效果调节"],
       "相机调试细分: 4 个目标页签权限标签与功能名对应")
-check(len(_DLP) == 7 and all(_PMOD[k] == "检测列表设置" for k in _DLP),
-      "检测列表细分: 7 个操作归属独立「检测列表设置」模块")
-check([_PP[k] for k in _DLP] == ["设置为默认", "恢复至默认", "恢复至出厂",
-                                 "单位设置", "出料设置", "方案同步",
-                                 "规格自动调整"],
-      "检测列表细分: 7 个权限项标签与工具条按钮提示逐一对应")
+check(len(_DLP) == 8 and all(_PMOD[k] == "检测列表设置" for k in _DLP),
+      "检测列表细分: 8 个操作归属独立「检测列表设置」模块")
+check([_PP[k] for k in _DLP] == ["设置为默认", "恢复至默认", "设置为出厂",
+                                 "恢复至出厂", "单位设置", "出料设置",
+                                 "方案同步", "规格自动调整"],
+      "检测列表细分: 8 个权限项标签与工具条按钮提示逐一对应")
 check(_PP["detect_sync_all"] == "方案同步",
       "检测列表细分: 方案同步显示名已生效，权限键仍为 detect_sync_all 兼容旧配置")
 _dv0 = _mw.debug_views[0]
@@ -4066,8 +4079,9 @@ for _c in _PCATS:
           f"权限细分兼容: {_c} 报警子页默认继承入口权限")
     check(all(_PDEF[_c][k] == _PDEF[_c]["run_settings"] for k in _DTP),
           f"权限细分兼容: {_c} 设备子页默认继承入口权限")
-    check(all(_PDEF[_c][k] == _PDEF[_c]["camera_debug"] for k in _DLP),
-          f"权限细分兼容: {_c} 检测列表子项默认继承相机调试权限")
+    check(all(_PDEF[_c][k] == _PDEF[_c]["camera_debug"] for k in _DLP
+              if k != "detect_set_factory"),
+          f"权限细分兼容: {_c} 检测列表子项默认继承相机调试权限（设置为出厂除外，默认仅超级管理员）")
 check(_PDEF["设备工程师"]["element_find"]
       == _PDEF["设备工程师"]["camera_calibration"],
       "权限细分兼容: 计算元素精确查找默认继承相机标定权限")
@@ -4434,10 +4448,113 @@ _gd0u._unit_set_default_global([(_r106u, _FakeCombo("Dec"))], show_msg=False)
 check(str(_gd1u._table_data[_r106_1][8]) == "Dec",
       "单位设置-设为默认: 还原后所有工位同编号项同步回 Dec")
 import os as _os
+import types as _types
 try:
     _os.remove(_gd0u._unit_defaults_path())
 except OSError:
     pass
+
+# 检测方案持久化（2026-11-11）：单位/出料/方案同步等设置写入
+# %APPDATA%/EcompVisionInspector/config（程序更新不覆盖），下次启动自动加载。
+_gd_p = _mw.debug_views[0]
+_sp = _gd_p._scheme_path()
+check("EcompVisionInspector" in _sp
+      and os.path.basename(_sp).startswith("scheme_"),
+      f"方案持久化: 配置存于 APPDATA 持久化目录（程序更新不覆盖），{_sp}")
+_c_lo_p = _gd_p._col_by_header("规格下限")
+_orig_lo_p = str(_gd_p._table_data[0][6])
+_gd_p._table.item(0, _c_lo_p).setText("77.7")     # 手动编辑 → cellChanged 回写
+_gd_p._persist_scheme()
+_gd_p2 = _dvmod.DebugView(camera_name=_gd_p.camera_name)   # 新建同工位页
+check(str(_gd_p2._table_data[0][6]) == "77.7",
+      "方案持久化: 新建同工位调试页启动时自动加载已保存方案（77.7 还原）")
+_gd_p2.close()
+_gd_p._table_data[0][6] = _orig_lo_p
+_gd_p._refresh_row_display(0)
+_gd_p._persist_scheme()
+try:
+    os.remove(_sp)
+except OSError:
+    pass
+
+# 「设置为出厂」（2026-11-11）：恢复至出厂左侧新增按钮；默认仅超级管理员拥有（可配置）
+from user_manager import DEFAULT_CATEGORY_PERMISSIONS as _DCP
+check(_DCP["超级管理员"].get("detect_set_factory") is True
+      and _DCP["设备操作员"].get("detect_set_factory") is False
+      and _DCP["设备技术员"].get("detect_set_factory") is False,
+      "设置为出厂: 默认仅超级管理员拥有权限（其余类别默认无、可在权限配置放开）")
+_tb_tips = [b.toolTip() for b in _mw.debug_views[0]._toolbar_buttons]
+check(_tb_tips[:4] == ["设置为默认", "恢复至默认", "设置为出厂", "恢复至出厂"],
+      "设置为出厂: 工具条「恢复至出厂」左侧新增按钮（图标 + 悬浮提示）")
+class _UMAllow:
+    def can(self, u, k): return True
+class _UMDeny:
+    def can(self, u, k): return k != "detect_set_factory"
+_gd_f = _dvmod.DebugView()
+_gd_f.main_window = _types.SimpleNamespace(user_manager=_UMDeny(),
+                                           current_user="o1")
+_orig_f0 = str(_gd_f._table_data[0][6])
+_c_lo_f = _gd_f._col_by_header("规格下限")
+_msgs = []
+_QMB = _dvmod.QMessageBox
+_oi, _ow = _QMB.information, _QMB.warning
+_QMB.information = staticmethod(
+    lambda *a, **k: _msgs.append(a[1] if len(a) > 1 else ""))
+_QMB.warning = staticmethod(
+    lambda *a, **k: _msgs.append(a[1] if len(a) > 1 else ""))
+try:
+    _gd_f._table.item(0, _c_lo_f).setText("33.3")     # 编辑回写后作为出厂基准
+    _gd_f._on_set_factory()   # 无权限 → 拦截
+    check("无权限" in _msgs and not os.path.exists(_gd_f._factory_path()),
+          "设置为出厂: 无权限用户点击被拦截（提示「无权限」且不写出厂配置）")
+    _gd_f.main_window.user_manager = _UMAllow()
+    _gd_f._on_set_factory()   # 有权限 → 保存当前方案为出厂基准
+    check(os.path.exists(_gd_f._factory_path()),
+          "设置为出厂: 有权限点击后把当前方案存为出厂基准（持久化目录）")
+    _gd_f._table.item(0, _c_lo_f).setText("0")        # 再改回内置出厂值
+    _gd_f._on_restore_factory()
+    check(str(_gd_f._table_data[0][6]) == "33.3",
+          "恢复至出厂: 优先还原「设置为出厂」保存的基准（33.3），而非内置出厂值")
+finally:
+    _QMB.information, _QMB.warning = _oi, _ow
+try:
+    os.remove(_gd_f._factory_path())
+    os.remove(_gd_f._scheme_path())
+except OSError:
+    pass
+_gd_f._table_data[0][6] = _orig_f0
+_gd_f._refresh_row_display(0)
+_gd_f.close()
+
+# 「恢复至默认」还原到「设置为默认」保存的参数（2026-11-11：文本列编辑已回写
+# 底层数据，保存的默认即用户当前参数，不再表现为「恢复至出厂」）
+_gd_d = _dvmod.DebugView()
+_c_lo_d = _gd_d._col_by_header("规格下限")
+_o_d = str(_gd_d._table_data[0][6])
+_msgs2 = []
+_QMB2 = _dvmod.QMessageBox
+_oi2, _ow2 = _QMB2.information, _QMB2.warning
+_QMB2.information = staticmethod(
+    lambda *a, **k: _msgs2.append(a[1] if len(a) > 1 else ""))
+_QMB2.warning = staticmethod(
+    lambda *a, **k: _msgs2.append(a[1] if len(a) > 1 else ""))
+try:
+    _gd_d._table.item(0, _c_lo_d).setText("88.8")     # 编辑（cellChanged 回写）
+    _gd_d._on_set_default()                           # 保存默认（应含 88.8）
+    _gd_d._table.item(0, _c_lo_d).setText("0")        # 再改回出厂值
+    _gd_d._on_restore_default()                       # 恢复至默认
+    check(str(_gd_d._table_data[0][6]) == "88.8",
+          "恢复至默认: 还原到「设置为默认」保存的参数（88.8），而非出厂值")
+finally:
+    _QMB2.information, _QMB2.warning = _oi2, _ow2
+try:
+    os.remove(_gd_d._detect_defaults_path())
+    os.remove(_gd_d._scheme_path())
+except OSError:
+    pass
+_gd_d._table_data[0][6] = _o_d
+_gd_d._refresh_row_display(0)
+_gd_d.close()
 
 # 单位设置 / 出料设置全局联动：本工位修改 → 其它工位同编号检测项同步生效（2026-11-11）
 _gd0, _gd1, _gd2 = (_mw.debug_views[0], _mw.debug_views[1], _mw.debug_views[2])

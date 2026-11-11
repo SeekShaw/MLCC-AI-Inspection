@@ -176,6 +176,11 @@ def _draw_glyph(p, kind, x, y, w, h):
         cx = x + w * 0.5
         _L(cx, y + h * 0.32, cx, y + h * 0.62)
         _arrow_head(cx, y + h * 0.62, 0, 1)
+    elif kind == "factory_set":              # 方箱 + 内部上箭头（设置为出厂）
+        p.drawRect(QRectF(x + w * 0.2, y + h * 0.2, w * 0.6, h * 0.6))
+        cx = x + w * 0.5
+        _L(cx, y + h * 0.62, cx, y + h * 0.32)
+        _arrow_head(cx, y + h * 0.32, 0, -1)
     elif kind == "unit":                     # 直尺（单位设置）
         p.drawRect(QRectF(x + w * 0.12, y + h * 0.3, w * 0.76, h * 0.4))
         for fx in (0.3, 0.5, 0.7):

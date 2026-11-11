@@ -56,6 +56,7 @@ PERMISSION_GROUPS = [
     ("检测列表设置", [
         ("detect_default_set", "设置为默认"),
         ("detect_restore_default", "恢复至默认"),
+        ("detect_set_factory", "设置为出厂"),
         ("detect_restore_factory", "恢复至出厂"),
         ("detect_unit", "单位设置"),
         ("detect_output", "出料设置"),
@@ -137,7 +138,8 @@ DEVICE_TAB_PERMISSIONS = (
     "dev_dd_motor", "dev_vibrator", "dev_esd", "dev_negative_pressure",
 )
 DETECT_LIST_PERMISSIONS = (
-    "detect_default_set", "detect_restore_default", "detect_restore_factory",
+    "detect_default_set", "detect_restore_default", "detect_set_factory",
+    "detect_restore_factory",
     "detect_unit", "detect_output", "detect_sync_all", "detect_auto_spec",
 )
 # 检测项列表按**列头**细分的权限项：(列头名, 权限键)。
@@ -223,7 +225,11 @@ _CHILD_GRANTS = {
     },
     "camera_debug": {
         "camera_work_mode", "flow_design", "target_search", "image_effect",
-        "detect_list", "jog_debug", *DETECT_LIST_PERMISSIONS,
+        "detect_list", "jog_debug",
+        # 检测列表各操作按钮随相机调试入口默认继承，**「设置为出厂」除外**：
+        # 该操作会把当前方案覆盖为出厂基准，破坏性大，默认仅超级管理员拥有
+        # （超级管理员在上方 set(PERMISSIONS) 已全量授予；权限配置界面可再放开）。
+        *(k for k in DETECT_LIST_PERMISSIONS if k != "detect_set_factory"),
         # 检测项列表 8 个列头权限：拆分前列一直可见，默认随相机调试入口继承
         *(k for _h, k in DETECT_COL_PERMISSIONS),
     },
