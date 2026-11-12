@@ -11,7 +11,7 @@ from PyQt6.QtWidgets import (
     QComboBox, QCheckBox, QLineEdit, QSizePolicy, QDialog, QMenu,
     QAbstractItemView, QMessageBox, QApplication, QDateTimeEdit,
     QTabWidget, QScrollArea, QFileDialog, QSpinBox, QSlider,
-    QGroupBox, QStackedWidget, QDoubleSpinBox,
+    QGroupBox, QStackedWidget, QDoubleSpinBox, QRadioButton, QButtonGroup,
 )
 from PyQt6.QtCore import Qt, QTimer, QPointF, QDateTime, QRect, QSize, QEvent
 from PyQt6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPen, QBrush, QImage, QPixmap
@@ -3761,6 +3761,9 @@ class DebugView(QWidget):
         # 良率预警设置：按行记录「启用 / 预警阈值(%)」，默认全部启用、阈值 50%
         self._yield_warn = {r: {"enabled": True, "threshold": 50}
                             for r in range(len(raw))}
+        # 缺陷定义（2026-11-12 需求）：按行记录「缺陷个数 / 缺陷长度 / 单个缺陷
+        # 面积 / 缺陷总面积」，仅单位 Dec 且规格上下限均为 0 的检测项可设置
+        self._defect_defs = {}
         # 出厂设置快照（「恢复至出厂」用）：内置原始数据的副本
         self._factory_data = [list(r) for r in raw]
 
@@ -3830,16 +3833,27 @@ class DebugView(QWidget):
                     self._unit_cells[r] = unit_cell
                     table.setCellWidget(r, c, unit_cell)
                 elif c == 12:
-                    # 检测项操作：教导 / 复制 / 删除（中性按钮+文字），每一行都有（已移除「同步」）
+                    # 检测项操作：缺陷定义 / 教导 / 复制 / 删除（中性按钮+文字），
+                    # 每一行都有（已移除「同步」）。
+                    # 2026-11-12 需求：「教导」左侧新增「缺陷定义」——仅检测单位为
+                    # Dec 且规格上下限均为 0 的检测项可打开，否则置灰。
                     btn_widget = QFrame()
                     hl = QHBoxLayout(btn_widget)
                     hl.setContentsMargins(2, 0, 2, 0)
                     hl.setSpacing(3)
-                    for txt in ["教导", "复制", "删除"]:
+                    for txt in ["缺陷定义", "教导", "复制", "删除"]:
                         b = QPushButton(txt)
                         b.setStyleSheet(BTN_NEUTRAL)
                         b.setFixedHeight(22)
-                        if txt == "教导":
+                        if txt == "缺陷定义":
+                            b.clicked.connect(
+                                lambda _, n=item_name, rr=r: self._open_defect_def(n, rr))
+                            if not hasattr(self, "_defect_btns"):
+                                self._defect_btns = {}
+                            self._defect_btns[r] = b
+                            b.setEnabled(self._defect_def_enabled(r))
+                            b.setToolTip("仅检测单位为 Dec 且规格上下限均为 0 的检测项可设置")
+                        elif txt == "教导":
                             b.clicked.connect(
                                 lambda _, n=item_name, rr=r: self._open_teach(n, rr))
                         else:
@@ -4176,8 +4190,10 @@ class DebugView(QWidget):
         # 数据单元格：QSS item padding 6px 同理可能未完全计入，统一加安全余量
         for c in range(table.columnCount()):
             table.setColumnWidth(c, table.columnWidth(c) + 6)
-        # 含 cell widget 的列补最小宽（resizeColumnsToContents 不计入控件尺寸）
-        for c, mw in ((1, 120), (9, 150), (15, 150)):
+        # 含 cell widget 的列补最小宽（resizeColumnsToContents 不计入控件尺寸）。
+        # 2026-11-12 修复：列 12「检测项操作」扩为 缺陷定义/教导/复制/删除 4 个
+        # 按钮后未补最小宽，「缺陷定义」文字被压窄截断 → 补 190px。
+        for c, mw in ((1, 120), (9, 150), (12, 190), (15, 150)):
             if c < table.columnCount():
                 table.setColumnWidth(c, max(table.columnWidth(c), mw))
 
@@ -5212,6 +5228,7 @@ class DebugView(QWidget):
         if 0 <= row < len(self._table_data):
             self._table_data[row][8] = str(text)
             self._sync_units_global(row, str(text))
+            self._sync_defect_btn(row)   # 单位变化后同步「缺陷定义」按钮可用状态
             self._persist_scheme()   # 单位变更落盘（程序更新不覆盖，下次启动加载）
 
     def _sibling_debug_views(self):
@@ -5275,6 +5292,129 @@ class DebugView(QWidget):
             return
         rec = self._yield_warn.setdefault(row, {"enabled": True, "threshold": 50})
         rec["threshold"] = int(value)
+
+    # ------------------------------------------------------------------
+    # 缺陷定义（2026-11-12 需求）：针对检测单位为 Dec 且规格上下限均为 0 的
+    # 检测项，在「教导」左侧提供「缺陷定义」入口，弹小窗设置缺陷个数 / 缺陷
+    # 长度 / 单个缺陷面积 / 缺陷总面积（示例值 1 / 5 Pixel / 5 Pixel² / 20 Pixel²）。
+    # ------------------------------------------------------------------
+    def _defect_def_enabled(self, r):
+        """「缺陷定义」按钮可用性：检测单位为 Dec 且规格上下限均为 0。
+
+        其余检测项（单位非 Dec、或上下限任一非 0 / 非法）置灰不可打开。
+        """
+        if not (0 <= r < len(self._table_data)):
+            return False
+        row = self._table_data[r]
+
+        def _num(v):
+            try:
+                return float(str(v).strip())
+            except (TypeError, ValueError):
+                return None
+        unit = str(row[8] or "").strip()
+        lo, hi = _num(row[6]), _num(row[7])
+        return unit == "Dec" and lo == 0.0 and hi == 0.0
+
+    def _sync_defect_btn(self, r):
+        """按底层数据同步该行「缺陷定义」按钮的可用（置灰）状态。"""
+        b = getattr(self, "_defect_btns", {}).get(r)
+        if b is not None:
+            b.setEnabled(self._defect_def_enabled(r))
+
+    def _open_defect_def(self, name, r):
+        """「缺陷定义」小窗：缺陷个数 / 缺陷长度 / 单个缺陷面积 / 缺陷总面积。
+
+        默认（示例）值：个数 1、长度 5 Pixel、单个缺陷面积 5 Pixel²、
+        缺陷总面积 20 Pixel²；「确定」写回该行记录（再次打开回显上次值）。
+        """
+        if not self._defect_def_enabled(r):
+            QMessageBox.warning(
+                self, "不可设置",
+                "「缺陷定义」仅对检测单位为 Dec 且规格上下限均为 0 的检测项开放")
+            return
+        rec = getattr(self, "_defect_defs", {}).get(
+            r, {"count": 1, "length": 5.0, "area_single": 5.0, "area_total": 20.0})
+        dlg = QDialog(self)
+        dlg.setWindowTitle(f"缺陷定义 - {name}")
+        dlg.setWindowFlags(dlg.windowFlags() | Qt.WindowType.WindowStaysOnTopHint)
+        dlg.setStyleSheet(f"QDialog {{ background-color: {COLORS['bg_panel']}; }}")
+        dlg.setFixedWidth(320)
+        v = QVBoxLayout(dlg)
+        v.setContentsMargins(14, 12, 14, 12)
+        v.setSpacing(8)
+        _f = QFont("Microsoft YaHei")
+        _f.setPixelSize(11)
+        spin_style = (
+            f"QSpinBox, QDoubleSpinBox {{ background-color: {COLORS['bg_card']}; "
+            f"color: {COLORS['text_primary']}; border: 1px solid {COLORS['border']}; "
+            f"border-radius: 4px; padding: 2px 6px; font-size: 11px; }}")
+        rows = [("缺陷个数", QSpinBox(), " 个"),
+                ("缺陷长度", QDoubleSpinBox(), " Pixel"),
+                ("单个缺陷面积", QDoubleSpinBox(), " Pixel²"),
+                ("缺陷总面积", QDoubleSpinBox(), " Pixel²")]
+        widgets = []
+        for label, w, suffix in rows:
+            lbl = QLabel(label)
+            lbl.setFont(_f)
+            lbl.setStyleSheet(f"color:{COLORS['text_primary']}; font-size:11px;")
+            w.setFont(_f)
+            w.setStyleSheet(spin_style)
+            w.setFixedHeight(26)
+            w.setFixedWidth(150)
+            w.setRange(0, 9999999)
+            w.setSuffix(suffix)
+            if isinstance(w, QDoubleSpinBox):
+                w.setDecimals(2)
+            _v = float(rec[{"缺陷个数": "count", "缺陷长度": "length",
+                            "单个缺陷面积": "area_single",
+                            "缺陷总面积": "area_total"}[label]])
+            # QSpinBox（缺陷个数）只接受 int，QDoubleSpinBox 接受 float
+            w.setValue(int(_v) if isinstance(w, QSpinBox) else _v)
+            hl = QHBoxLayout()
+            hl.setSpacing(8)
+            hl.addWidget(lbl, 1)
+            hl.addWidget(w, 0)
+            v.addLayout(hl)
+            widgets.append(w)
+        btns = QHBoxLayout()
+        btns.addStretch(1)
+        ok_btn = QPushButton("确定")
+        ok_btn.setStyleSheet(
+            f"background-color:{COLORS['accent_blue']}; color:white; border:none; "
+            f"border-radius:4px; padding:6px 18px; font-size:12px;")
+        cancel_btn = QPushButton("取消")
+        cancel_btn.setStyleSheet(
+            f"background-color:{COLORS['bg_card']}; color:{COLORS['text_primary']}; "
+            f"border:1px solid {COLORS['border']}; border-radius:4px; "
+            f"padding:6px 18px; font-size:12px;")
+        btns.addWidget(ok_btn)
+        btns.addWidget(cancel_btn)
+        v.addLayout(btns)
+
+        def _apply_defect():
+            self._defect_defs[r] = {
+                "count": int(widgets[0].value()),
+                "length": float(widgets[1].value()),
+                "area_single": float(widgets[2].value()),
+                "area_total": float(widgets[3].value()),
+            }
+            self._dv_log(f"检测项「{name}」缺陷定义已更新："
+                         f"个数={self._defect_defs[r]['count']}，"
+                         f"长度={self._defect_defs[r]['length']:.2f} Pixel，"
+                         f"单个缺陷面积={self._defect_defs[r]['area_single']:.2f} Pixel²，"
+                         f"缺陷总面积={self._defect_defs[r]['area_total']:.2f} Pixel²")
+            dlg.accept()
+        ok_btn.clicked.connect(_apply_defect)
+        cancel_btn.clicked.connect(dlg.reject)
+        # 非模态：与出料设置等子窗口一致，打开后不影响其它页面操作
+        dlg.setModal(False)
+        dlg.setWindowModality(Qt.WindowModality.NonModal)
+        prev = getattr(self, "_defect_dlg", None)
+        if prev is not None and prev.isVisible():
+            prev.close()
+        self._defect_dlg = dlg
+        dlg.show()
 
     def _set_toggle_btn(self, btn, on, on_text, off_text):
         """批量开关按钮：on=全开态（橙色填充）；off=全关态（中性卡片色）。
@@ -5918,6 +6058,8 @@ class DebugView(QWidget):
                     if it is not None:
                         it.setText(result)
                         self._apply_result_color(it, result)
+            # 7) 缺陷定义按钮：单位 / 规格上下限变化后即时同步可用（置灰）状态
+            self._sync_defect_btn(r)
         finally:
             self._cell_commit_suppress = False
 
@@ -6275,12 +6417,12 @@ class DebugView(QWidget):
         表格数据并刷新「收料位置」列显示。
         ⚠️ 2026-10-21 需求：此窗口内容改为检测表收料位置列的批量设置，
         不再打开「剔除设定」（设备剔除口硬件配置）窗口。
+        2026-11-12 需求：窗口顶部新增「剔除位置调试」区块（5 种模式单选 +
+        过滤重检 / 隔料剔除附加项），与左侧导航「分选设置 → 剔除设定」页面
+        同源读写 ``dev_cfg["reject"]``，默认「按剔除设置剔除」；处于非默认
+        调试方式时「收料位置」列表置灰（由调试方式统一接管），权限口径与
+        剔除设定页一致（无 reject_debug 权限时区块置灰并回默认）。
         """
-        if not self._reject_pos_editable():
-            QMessageBox.warning(
-                self, "不可设置",
-                "当前处于剔除位置调试模式，「收料位置」仅在「按剔除设置剔除」时可设置")
-            return
         if not self._col_can("dcol_pos"):
             QMessageBox.warning(self, "无权限", "当前用户无权限修改「收料位置」")
             return
@@ -6292,14 +6434,90 @@ class DebugView(QWidget):
             if cur and cur not in options:
                 options.append(cur)
 
+        mw = self.main_window
+        pv = getattr(mw, "production", None) if mw is not None else None
+        rj = (getattr(pv, "dev_cfg", {}).get("reject", {})
+              if pv is not None else {})
+        can_dbg = bool(
+            mw is not None and callable(getattr(mw, "_can", None))
+            and mw._can("reject_debug"))
+
         dlg = QDialog(self)
         dlg.setWindowTitle("出料设置")
         dlg.setWindowFlags(dlg.windowFlags() | Qt.WindowType.WindowStaysOnTopHint)
         dlg.setStyleSheet(f"QDialog {{ background-color: {COLORS['bg_panel']}; }}")
-        dlg.resize(440, 540)
+        dlg.resize(440, 620)
         v = QVBoxLayout(dlg)
         v.setContentsMargins(14, 12, 14, 12)
         v.setSpacing(8)
+
+        # —— 剔除位置调试区块（2026-11-12 需求，与「剔除设定」页保持一致）——
+        # 5 种位置剔除模式（单选，默认「按剔除设置剔除」）+ 过滤重检 / 隔料剔除
+        dbg_title = QLabel("剔除位置调试")
+        dbg_title.setStyleSheet(
+            f"color:{COLORS['text_primary']}; font-size:12px; font-weight:600;")
+        v.addWidget(dbg_title)
+        radio_style = (
+            f"QRadioButton {{ color: {COLORS['text_primary']}; font-size: 12px; "
+            f"spacing: 6px; }}"
+            f"QRadioButton::indicator {{ width: 13px; height: 13px; "
+            f"border-radius: 6px; border: 1px solid #FFFFFF; "
+            f"background-color: transparent; }}"
+            f"QRadioButton::indicator:checked {{ "
+            f"border: 1px solid {COLORS['accent_blue']}; "
+            f"background-color: {COLORS['accent_blue']}; }}")
+        cb_style = (
+            f"QCheckBox {{ color: {COLORS['text_primary']}; font-size: 12px; "
+            f"spacing: 6px; }}"
+            f"QCheckBox::indicator {{ width: 13px; height: 13px; "
+            f"border-radius: 3px; border: 1px solid #FFFFFF; "
+            f"background-color: transparent; }}"
+            f"QCheckBox::indicator:checked {{ "
+            f"border: 1px solid {COLORS['accent_blue']}; "
+            f"background-color: {COLORS['accent_blue']}; }}")
+        dbg_group = QButtonGroup(dlg)
+        dbg_group.setExclusive(True)
+        dbg_radios = {}
+        radio_row = QHBoxLayout()
+        radio_row.setSpacing(12)
+        for key, label in (("by_settings", "按剔除设置剔除"),
+                           ("all_ok", "全踢OK料盒"),
+                           ("all_ng1", "全踢NG1料盒"),
+                           ("all_ng2", "全踢NG2料盒"),
+                           ("all_rst", "全踢RST料盒")):
+            rb = QRadioButton(label)
+            rb.setStyleSheet(radio_style)
+            dbg_group.addButton(rb)
+            dbg_radios[key] = rb
+            radio_row.addWidget(rb)
+        radio_row.addStretch()
+        v.addLayout(radio_row)
+        opt_row = QHBoxLayout()
+        opt_row.setSpacing(20)
+        dbg_filter = QCheckBox("过滤重检")
+        dbg_filter.setStyleSheet(cb_style)
+        dbg_skip = QCheckBox("隔料剔除")
+        dbg_skip.setStyleSheet(cb_style)
+        opt_row.addWidget(dbg_filter)
+        opt_row.addWidget(dbg_skip)
+        opt_row.addStretch()
+        v.addLayout(opt_row)
+        # 回填当前配置；无 reject_debug 权限时强制默认并整块置灰（可见不可操作）
+        cur_mode = str(rj.get("debug_mode", "by_settings"))
+        if cur_mode not in dbg_radios:
+            cur_mode = "by_settings"
+        dbg_radios[cur_mode].setChecked(True)
+        dbg_filter.setChecked(bool(rj.get("debug_filter_recheck", False)))
+        dbg_skip.setChecked(bool(rj.get("debug_skip_feed", False)))
+        if not can_dbg:
+            dbg_radios["by_settings"].setChecked(True)
+            dbg_filter.setChecked(False)
+            dbg_skip.setChecked(False)
+            for rb in dbg_radios.values():
+                rb.setEnabled(False)
+            dbg_filter.setEnabled(False)
+            dbg_skip.setEnabled(False)
+
         tip = QLabel("对应检测表「收料位置」列：为每个检测项选择 / 输入收料位置")
         tip.setStyleSheet(f"color:{COLORS['text_secondary']}; font-size:11px;")
         tip.setWordWrap(True)
@@ -6316,6 +6534,17 @@ class DebugView(QWidget):
         _f = QFont("Microsoft YaHei")
         _f.setPixelSize(10)
         combos = []   # [(row, combo), ...]
+
+        def _ports_mode():
+            return next((k for k, rb in dbg_radios.items() if rb.isChecked()),
+                        "by_settings")
+
+        def _sync_ports_enabled():
+            # 非默认调试方式时收料位置由该调试方式统一接管 → 列表置灰
+            en = _ports_mode() == "by_settings"
+            for _, cb in combos:
+                cb.setEnabled(en)
+
         for r, row in enumerate(self._table_data):
             if not str(row[2] or "").strip():   # 空检测项行跳过（同单位设置）
                 continue
@@ -6339,6 +6568,10 @@ class DebugView(QWidget):
             hl.addWidget(cb, 0)
             bl.addWidget(rw)
             combos.append((r, cb))
+        # 切换位置调试方式时即时联动收料位置列表可用性
+        for rb in dbg_radios.values():
+            rb.toggled.connect(lambda _checked=False: _sync_ports_enabled())
+        _sync_ports_enabled()
         bl.addStretch(1)
         scroll.setWidget(body)
         v.addWidget(scroll, 1)
@@ -6361,7 +6594,9 @@ class DebugView(QWidget):
         # 非模态：打开后不影响生产运行界面 / 调试界面其它页面的操作
         # （2026-11-12 反馈：之前 exec() 模态会卡住子窗口、无法操作其它页面）。
         # 「确定」通过 accepted 信号写回，不阻塞事件循环。
-        dlg.accepted.connect(lambda: self._output_apply(combos))
+        dlg.accepted.connect(
+            lambda: self._output_apply(
+                combos, dbg_radios, dbg_filter, dbg_skip, can_dbg, cur_mode))
         dlg.setModal(False)
         dlg.setWindowModality(Qt.WindowModality.NonModal)
         prev = getattr(self, "_output_dlg", None)
@@ -6372,8 +6607,39 @@ class DebugView(QWidget):
         self._output_dlg = dlg
         dlg.show()
 
-    def _output_apply(self, combos):
-        """「出料设置」弹窗「确定」写回：收料位置按检测项编号全局联动到所有工位。"""
+    def _output_apply(self, combos, dbg_radios=None, dbg_filter=None,
+                      dbg_skip=None, can_dbg=True, prev_mode="by_settings"):
+        """「出料设置」弹窗「确定」写回。
+
+        2026-11-12 需求：先把「剔除位置调试」写回 ``dev_cfg["reject"]``（与
+        「分选设置 → 剔除设定」页面同源，无 reject_debug 权限不写非默认）；
+        处于非默认调试方式时收料位置由调试方式统一接管、不写回；模式变化
+        后通知主窗口刷新各工位「收料位置」列可编辑性。
+        """
+        mw = self.main_window
+        mode = "by_settings"
+        if dbg_radios:
+            mode = next((k for k, rb in dbg_radios.items() if rb.isChecked()),
+                        "by_settings")
+        pv = getattr(mw, "production", None) if mw is not None else None
+        if dbg_radios and pv is not None:
+            if can_dbg:
+                rj = pv.dev_cfg["reject"]
+                rj["debug_mode"] = mode
+                if dbg_filter is not None:
+                    rj["debug_filter_recheck"] = bool(dbg_filter.isChecked())
+                if dbg_skip is not None:
+                    rj["debug_skip_feed"] = bool(dbg_skip.isChecked())
+                pv.save_device_config()
+            if mode != prev_mode:
+                fn = getattr(mw, "on_reject_debug_mode_changed", None)
+                if fn is not None:
+                    fn()
+        # 全踢模式下收料位置由调试方式统一接管：跳过收料位置写回
+        if mode != "by_settings":
+            self._dv_log("检测项设置：出料设置处于剔除位置调试方式，"
+                         "收料位置由调试方式接管，未修改")
+            return
         n = 0
         code_ports = {}
         for r, cb in combos:

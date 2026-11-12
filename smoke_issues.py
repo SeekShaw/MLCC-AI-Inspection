@@ -2403,6 +2403,139 @@ check(bool(dv._table.item(0, _c_pos).flags()
 if _col_can_bak is not None:
     dv._col_can = _col_can_bak
 
+# ============ 2026-11-12 需求：出料设置窗口内嵌剔除位置调试 + 缺陷定义按钮 ============
+from PyQt6.QtWidgets import QRadioButton as _QRBtn, QComboBox as _QCmb
+from PyQt6.QtWidgets import QCheckBox as _QCheckBox
+# ① 出料设置窗口：含「剔除位置调试」区块（5 单选 + 2 附加项），默认按剔除设置剔除
+_col_can_bak2 = getattr(dv, "_col_can", None)
+dv._col_can = lambda k: True
+_can_bak2 = getattr(mw, "_can", None)
+mw._can = lambda key: True            # 临时授予 reject_debug 权限便于写入验证
+_dbg_notified = []
+mw.on_reject_debug_mode_changed = lambda: _dbg_notified.append(True)
+_prev_out = getattr(dv, "_output_dlg", None)
+if _prev_out is not None and _prev_out.isVisible():
+    _prev_out.close()
+try:
+    dv._on_output_settings()
+    _odlg = getattr(dv, "_output_dlg", None)
+    check(_odlg is not None and _odlg.isVisible(),
+          "出料设置: 窗口可打开（非默认调试方式不再整体拦截）")
+    _oradios = {rb.text(): rb for rb in _odlg.findChildren(_QRBtn)}
+    check(len(_oradios) == 5 and _oradios["按剔除设置剔除"].isChecked()
+          and not _oradios["全踢NG1料盒"].isChecked(),
+          "出料设置: 剔除位置调试区块含 5 种模式且默认按剔除设置剔除")
+    _ofilters = [c for c in _odlg.findChildren(_QCheckBox)
+                 if c.text() in ("过滤重检", "隔料剔除")]
+    check(sorted(c.text() for c in _ofilters) == ["过滤重检", "隔料剔除"],
+          "出料设置: 剔除位置调试区块含过滤重检/隔料剔除附加项")
+    # ② 切到全踢NG1：收料位置列表联动置灰；确定后写回 dev_cfg 且不写收料位置
+    _oradios["全踢NG1料盒"].setChecked(True)
+    _ocmbs = _odlg.findChildren(_QCmb)
+    check(all(not cb.isEnabled() for cb in _ocmbs),
+          "出料设置: 全踢NG1模式下收料位置列表全部置灰（由调试方式接管）")
+    _ports_bak = {r: str(row[9]) for r, row in enumerate(dv._table_data)}
+    _odlg.accept(); app.processEvents()
+    check(pv3.dev_cfg["reject"]["debug_mode"] == "all_ng1"
+          and pv3.dev_cfg["reject"].get("debug_filter_recheck", False) is False,
+          "出料设置: 确定后剔除位置调试写回 dev_cfg（与剔除设定页同源）")
+    check(_dbg_notified == [True],
+          "出料设置: 调试方式变化后通知主窗口刷新收料位置列")
+    _ports_same = all(str(dv._table_data[r][9]) == p
+                      for r, p in _ports_bak.items())
+    check(_ports_same,
+          "出料设置: 全踢模式下确定不修改收料位置")
+finally:
+    pv3.dev_cfg["reject"]["debug_mode"] = "by_settings"
+    pv3.dev_cfg["reject"]["debug_filter_recheck"] = False
+    pv3.dev_cfg["reject"]["debug_skip_feed"] = False
+    pv3.save_device_config()
+    dv._apply_col_permissions(lambda k: True)
+    if _can_bak2 is None:
+        del mw._can
+    else:
+        mw._can = _can_bak2
+    del mw.on_reject_debug_mode_changed
+    if _col_can_bak2 is not None:
+        dv._col_can = _col_can_bak2
+    _odlg2 = getattr(dv, "_output_dlg", None)
+    if _odlg2 is not None:
+        _odlg2.close()
+
+# ③ 缺陷定义按钮：教导左侧；仅单位 Dec 且规格上下限均为 0 的检测项可用
+_c_ops = dv._col_by_header("检测项操作")
+check(dv._table.columnWidth(_c_ops) >= 190,
+      f"缺陷定义: 「检测项操作」列补最小宽 190px 保证 4 按钮文字完整 "
+      f"(实际 {dv._table.columnWidth(_c_ops)}px)")
+_defect_ok_rows, _defect_off_rows = [], []
+for _r in range(dv._table.rowCount()):
+    _cell = dv._table.cellWidget(_r, _c_ops)
+    _bdefs = [b for b in _cell.findChildren(_QPushButton) if b.text() == "缺陷定义"]
+    if not _bdefs:
+        continue
+    _enabled = dv._defect_def_enabled(_r)
+    (_defect_ok_rows if _enabled else _defect_off_rows).append((_r, _bdefs[0]))
+check(len(_defect_ok_rows) >= 1 and len(_defect_off_rows) >= 1,
+      f"缺陷定义: 存在可用行（单位 Dec 且上下限均 0，共 {len(_defect_ok_rows)} 行）与置灰行")
+_mismatch = [(_r, b.isEnabled(), dv._table_data[_r][6], dv._table_data[_r][7],
+              dv._table_data[_r][8])
+             for _r, b in _defect_ok_rows + _defect_off_rows
+             if b.isEnabled() != dv._defect_def_enabled(_r)]
+check(not _mismatch,
+      f"缺陷定义: 按钮可用性与单位/规格上下限条件一致（不满足则置灰） 不一致行={_mismatch[:4]}")
+# 缺陷定义按钮位于「教导」左侧
+_r0, _b0 = _defect_ok_rows[0]
+_cell0 = dv._table.cellWidget(_r0, _c_ops)
+_texts0 = [b.text() for b in _cell0.findChildren(_QPushButton)]
+check(_texts0[:2] == ["缺陷定义", "教导"],
+      f"缺陷定义: 按钮位于「教导」左侧（顺序 {_texts0}）")
+# ④ 置灰联动：把可用行的单位改为 Pixel 后整行刷新即置灰，恢复 Dec 后重新可用
+_r1 = _defect_ok_rows[0][0]
+_unit_bak = dv._table_data[_r1][8]
+dv._table_data[_r1][8] = "Pixel"
+dv._refresh_row_display(_r1)
+check(not dv._table.cellWidget(_r1, _c_ops).findChildren(
+        _QPushButton)[0].isEnabled(),
+      "缺陷定义: 单位改为非 Dec 后按钮即时置灰")
+dv._table_data[_r1][8] = _unit_bak
+dv._refresh_row_display(_r1)
+check(dv._table.cellWidget(_r1, _c_ops).findChildren(
+        _QPushButton)[0].isEnabled(),
+      "缺陷定义: 恢复单位 Dec 后按钮重新可用")
+# ⑤ 缺陷定义小窗：缺陷个数/缺陷长度/单个缺陷面积/缺陷总面积，示例值 1/5/5/20
+_name1 = str(dv._table_data[_r1][2])
+dv._open_defect_def(_name1, _r1)
+_ddlg2 = getattr(dv, "_defect_dlg", None)
+check(_ddlg2 is not None and _ddlg2.isVisible()
+      and "缺陷定义" in _ddlg2.windowTitle(),
+      "缺陷定义: 点击按钮打开缺陷定义小窗")
+from PyQt6.QtWidgets import QSpinBox as _QSpin2, QDoubleSpinBox as _QDSpin2
+_spins = _ddlg2.findChildren(_QSpin2)
+_dspins = _ddlg2.findChildren(_QDSpin2)
+check(len(_spins) == 1 and len(_dspins) == 3
+      and _spins[0].value() == 1
+      and [round(s.value(), 2) for s in _dspins] == [5.0, 5.0, 20.0],
+      f"缺陷定义: 缺陷个数=1、长度=5Pixel、单个面积=5Pixel²、总面积=20Pixel² "
+      f"(实际 {[ _spins[0].value()] + [round(s.value(), 2) for s in _dspins]})")
+_spins[0].setValue(3)
+_dspins[0].setValue(7.5)
+_dspins[2].setValue(30.0)
+_okb = [b for b in _ddlg2.findChildren(_QPushButton) if b.text() == "确定"][0]
+_okb.click(); app.processEvents()
+check(dv._defect_defs.get(_r1, {}).get("count") == 3
+      and dv._defect_defs.get(_r1, {}).get("length") == 7.5
+      and dv._defect_defs.get(_r1, {}).get("area_single") == 5.0
+      and dv._defect_defs.get(_r1, {}).get("area_total") == 30.0,
+      f"缺陷定义: 确定后写回该行记录（实际 {dv._defect_defs.get(_r1)})")
+check(getattr(dv, "_defect_dlg") is not None
+      and not dv._defect_dlg.isVisible(),
+      "缺陷定义: 确定后窗口关闭，再次打开回显上次值")
+dv._open_defect_def(_name1, _r1)
+check(dv._defect_dlg.findChildren(_QSpin2)[0].value() == 3,
+      "缺陷定义: 再次打开回显上次设置的值")
+dv._defect_dlg.close()
+dv._defect_defs.pop(_r1, None)
+
 # ④ 急停报警行：下拉左侧「报警方案」标签
 _dlg_estop = _ad2.AlarmSettingsDialog(is_super_admin=True)
 check(getattr(_dlg_estop, "_estop_mode_lbl", None) is not None
