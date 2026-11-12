@@ -3615,6 +3615,17 @@ check(_vcd.minimumSize().height() == _vcd_h
       f"Copilot: 主对话窗默认高度=完整显示最小高度 (实际 {_vcd.width()}×{_vcd_h}，"
       f"最小高 {_vcd.minimumSize().height()})")
 check(len(_vcd._pending) == 0, "Copilot: 初始无待发送图片")
+
+# 2026-11-12 UI 需求：模型训练助手占位页——入口改为应用内页面（不再启动外部 exe），
+# 提供标题 + 左侧模块导航 + 「内容待设计」空状态，避免打开后纯空白像出错
+from model_training_page import ModelTrainingPage as _MTAP
+_mtap = _MTAP()
+check(isinstance(_mtap, _MTAP)
+      and _mtap.windowTitle() == "模型训练助手"
+      and "内容待设计" in _mtap._state_big.text()
+      and _mtap._state_big.text().startswith("「数据集管理」"),
+      "模型训练助手: 应用内占位页（标题/空状态提示，非外部 exe）")
+_mtap.deleteLater()
 _img = _QI(40, 30, _QI.Format.Format_RGB32)
 _img.fill(_QC(255, 0, 0))
 _vcd.attach_image(_img)
@@ -4080,19 +4091,26 @@ check(_ttabs is not None
       and _ttabs.isTabVisible(2) == _mw._can("element_find"),
       "权限显隐: 调试界面页签按细分权限显隐（QTabWidget.setTabVisible）")
 
-# 功能入口守卫：无权限调用被拦截，有权限放行
-_guard_hits = []
-with _patch.object(_MT, "open_model_training",
-                   lambda *a, **k: _guard_hits.append(1)):
-    _mw._set_current_user(_op_u)
-    _mw._open_model_training()
-    check(_guard_hits == [], "权限显隐: 无模型训练权限时入口被守卫拦截")
-    _mw._set_current_user(_adm_u)
-    _mw._open_model_training()
-    check(_guard_hits == [1], "权限显隐: 有模型训练权限时入口正常放行")
-    _mw.btn_model_training.click()
-    check(_guard_hits == [1, 1],
-          "模型训练助手: 顶部快捷按钮点击后经同一守卫启动外部软件")
+# 功能入口守卫：无权限调用被拦截，有权限打开应用内占位页
+# （2026-11-12 修订：入口由「启动外部 exe」改为「打开应用内 ModelTrainingPage」）
+from model_training_page import ModelTrainingPage as _MTAP2
+_mw._set_current_user(_op_u)
+_mw._open_model_training()
+check(getattr(_mw, "_dlg_model_training", None) is None
+      or not _mw._dlg_model_training.isVisible(),
+      "权限显隐: 无模型训练权限时入口被守卫拦截（占位页未打开）")
+_mw._set_current_user(_adm_u)
+_mw._open_model_training()
+check(isinstance(getattr(_mw, "_dlg_model_training", None), _MTAP2)
+      and _mw._dlg_model_training.isVisible(),
+      "权限显隐: 有模型训练权限时入口打开应用内占位页（不再启动外部 exe）")
+_mw.btn_model_training.click()
+check(isinstance(getattr(_mw, "_dlg_model_training", None), _MTAP2)
+      and _mw._dlg_model_training.isVisible(),
+      "模型训练助手: 顶部快捷按钮点击后打开同一应用内占位页")
+# 关闭占位页，避免影响后续
+if getattr(_mw, "_dlg_model_training", None) is not None:
+    _mw._dlg_model_training.close()
 
 # 权限配置保存后无需切换用户/重开窗口即刷新；调试页同时有入口硬拦截
 _saved_path = _mw.user_manager.path

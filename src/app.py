@@ -1389,9 +1389,20 @@ class MainWindow(QMainWindow):
         self._dlg_img_save.show()
 
     def _open_model_training(self):
-        """启动「模型训练助手」外部软件（独立分离进程，本程序不受影响）。"""
-        import model_training
-        model_training.open_model_training(self)
+        """打开「模型训练助手」应用内占位页（非模态，与 AI 助手同式）。
+
+        2026-11-12 UI 需求：各训练模块尚未设计，先以占位页呈现（标题 +
+        左侧模块导航 + 「内容待设计」空状态），避免打开后纯空白像出错。
+        后续模块逐步落地后，这里再切换为真实功能页。
+        """
+        dlg = getattr(self, "_dlg_model_training", None)
+        if dlg is None or not dlg.isVisible():
+            from model_training_page import ModelTrainingPage
+            self._dlg_model_training = ModelTrainingPage(self)
+            dlg = self._dlg_model_training
+            dlg.show()
+        dlg.raise_()
+        dlg.activateWindow()
 
     def _open_ai_copilot(self, image=None):
         """打开「AI助手」(Vision Copilot) 非模态对话窗。
