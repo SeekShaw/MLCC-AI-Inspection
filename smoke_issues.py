@@ -2493,22 +2493,60 @@ if hasattr(dv, "_cams") and len(dv._cams) > 0:
     if _photo_btn is not None:
         check(_items.index(_photo_btn) == _name_idx + 1,
               f"拍照设置: 按钮位于卡片名称右侧 (name@{_name_idx}, btn@{_items.index(_photo_btn)})")
-        # 点击应触发 main_window._open_trigger_settings（与导航「拍照设置」同一窗口）
+        # 2026-11-12 需求：点击应打开触发设定，并自动选中当前工位相机进行参数设置
+        from production_view import CAMERA_NAMES as _CAMERA_NAMES
+        _dv_cam_idx = _CAMERA_NAMES.index(dv.camera_name)
+        # ① 按钮点击应把当前工位相机序号传给 main_window._open_trigger_settings
         _opened = {}
-        _orig_open = getattr(dv.main_window, "_open_trigger_settings", None)
+        _orig = getattr(dv.main_window, "_open_trigger_settings", None)
 
-        def _fake_open():
-            _opened["hit"] = True
+        def _fake_open(cam_index=None):
+            _opened["idx"] = cam_index
         dv.main_window._open_trigger_settings = _fake_open
         try:
             _photo_btn.click()
         finally:
-            if _orig_open is None:
+            if _orig is None:
                 del dv.main_window._open_trigger_settings
             else:
-                dv.main_window._open_trigger_settings = _orig_open
-        check(_opened.get("hit", False),
-              "拍照设置: 点击按钮调用 main_window._open_trigger_settings（与导航拍照设置一致）")
+                dv.main_window._open_trigger_settings = _orig
+        check(_opened.get("idx") == _dv_cam_idx,
+              f"拍照设置: 按钮点击传入当前工位相机序号 {dv.camera_name} (idx={_dv_cam_idx})")
+        # ② 构造器：传入 initial_cam 应自动选中该相机
+        _tsd_idx = _TSD(_mw, initial_cam=_dv_cam_idx)
+        check(_tsd_idx._current == f"相机{_dv_cam_idx + 1}",
+              f"拍照设置: 触发设定构造传入相机序号自动选中 {dv.camera_name} -> {_tsd_idx._current}")
+        _tsd_idx.deleteLater()
+        # ③ 入口：传入相机序号应打开并选中；已开时切换不重复新建
+        _old = getattr(_mw, "_dlg_trigger", None)
+        if _old is not None:
+            try:
+                _old.close()
+            except Exception:
+                pass
+        _mw._open_trigger_settings(_dv_cam_idx)
+        _dlg = getattr(_mw, "_dlg_trigger", None)
+        check(isinstance(_dlg, _TSD) and _dlg._current == f"相机{_dv_cam_idx + 1}",
+              f"拍照设置: 打开触发设定并自动选中当前工位相机 {dv.camera_name} -> {getattr(_dlg, '_current', None)}")
+        if isinstance(_dlg, _TSD):
+            _mw._open_trigger_settings((_dv_cam_idx + 1) % 8)
+            check(getattr(_mw, "_dlg_trigger", None) is _dlg
+                  and _dlg._current == f"相机{(_dv_cam_idx + 1) % 8 + 1}",
+                  "拍照设置: 浮窗已开时点击其它工位相机直接切换选中（不重复新建）")
+            _dlg.close()
+        # ④ 不传相机序号（导航「拍照设置」）维持原行为：默认选中相机1
+        _def = getattr(_mw, "_dlg_trigger", None)
+        if _def is not None:
+            try:
+                _def.close()
+            except Exception:
+                pass
+        _mw._open_trigger_settings()
+        _def = getattr(_mw, "_dlg_trigger", None)
+        check(isinstance(_def, _TSD) and _def._current == "相机1",
+              "拍照设置: 导航不传序号时默认选中相机1")
+        if isinstance(_def, _TSD):
+            _def.close()
 
 # ============ 新需求：计算元素精确查找行首「眼睛」显隐按钮 ============
 from components import CameraScreen as _CamScreen
@@ -4091,26 +4129,29 @@ check(_ttabs is not None
       and _ttabs.isTabVisible(2) == _mw._can("element_find"),
       "权限显隐: 调试界面页签按细分权限显隐（QTabWidget.setTabVisible）")
 
-# 功能入口守卫：无权限调用被拦截，有权限打开应用内占位页
-# （2026-11-12 修订：入口由「启动外部 exe」改为「打开应用内 ModelTrainingPage」）
-from model_training_page import ModelTrainingPage as _MTAP2
-_mw._set_current_user(_op_u)
-_mw._open_model_training()
-check(getattr(_mw, "_dlg_model_training", None) is None
-      or not _mw._dlg_model_training.isVisible(),
-      "权限显隐: 无模型训练权限时入口被守卫拦截（占位页未打开）")
-_mw._set_current_user(_adm_u)
-_mw._open_model_training()
-check(isinstance(getattr(_mw, "_dlg_model_training", None), _MTAP2)
-      and _mw._dlg_model_training.isVisible(),
-      "权限显隐: 有模型训练权限时入口打开应用内占位页（不再启动外部 exe）")
-_mw.btn_model_training.click()
-check(isinstance(getattr(_mw, "_dlg_model_training", None), _MTAP2)
-      and _mw._dlg_model_training.isVisible(),
-      "模型训练助手: 顶部快捷按钮点击后打开同一应用内占位页")
-# 关闭占位页，避免影响后续
-if getattr(_mw, "_dlg_model_training", None) is not None:
-    _mw._dlg_model_training.close()
+# 功能入口守卫：无权限调用被拦截，有权限以独立进程启动占位页
+# （2026-11-12 修订：入口由「应用内窗」改为「独立分离进程启动 model_training_app.py」，
+#  独立 PID，不阻塞/不影响主软件，窗口可独立最小化/隐藏）
+import subprocess as _sp
+_mt_proc_hits = []
+class _FakeProc:
+    def __init__(self, *a, **k):
+        _mt_proc_hits.append(list(a))
+    def poll(self):
+        return None  # 视为运行中
+with _patch.object(_sp, "Popen", lambda *a, **k: _FakeProc(*a, **k)):
+    _mw._set_current_user(_op_u)
+    _mw._open_model_training()
+    check(_mt_proc_hits == [],
+          "权限显隐: 无模型训练权限时入口被守卫拦截（未启动独立进程）")
+    _mw._set_current_user(_adm_u)
+    _mw._open_model_training()
+    check(len(_mt_proc_hits) == 1
+          and any("model_training_app.py" in str(a) for a in _mt_proc_hits[0]),
+          "权限显隐: 有权限时以独立进程启动模型训练助手（model_training_app.py）")
+    _mw.btn_model_training.click()
+    check(len(_mt_proc_hits) == 1,
+          "模型训练助手: 独立进程已运行时点击不再重复拉起")
 
 # 权限配置保存后无需切换用户/重开窗口即刷新；调试页同时有入口硬拦截
 _saved_path = _mw.user_manager.path

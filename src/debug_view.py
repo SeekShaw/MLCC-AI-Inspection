@@ -3533,7 +3533,9 @@ class DebugView(QWidget):
             f"border: 1px solid {COLORS['accent_blue']}; border-radius: 4px; padding: 0 8px; "
             f"font-size: 10px; }}"
             f"QPushButton:hover {{ background-color: {COLORS['accent_blue']}; color: white; }}")
-        btn_photo.clicked.connect(lambda: self.main_window._open_trigger_settings())
+        btn_photo.clicked.connect(
+            lambda: self.main_window._open_trigger_settings(
+                CAMERA_NAMES.index(self.camera_name)))
         main_preview.add_title_button(btn_photo)
         self._btn_photo_settings = btn_photo
 

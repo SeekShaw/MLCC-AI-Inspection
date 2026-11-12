@@ -1245,8 +1245,34 @@ class MainWindow(QMainWindow):
                             tab_perms=DEVICE_TAB_PERMISSIONS)
         self.production.log_operation(self.current_user["name"], "打开了设备设置")
 
-    def _open_trigger_settings(self):
-        """打开「触发设定」非模态浮窗，并同步到调试界面触发模式。"""
+    def _open_trigger_settings(self, cam_index=None):
+        """打开「触发设定」非模态浮窗，并同步到调试界面触发模式。
+
+        2026-11-12 需求：从相机调试界面点击「拍照设置」时传入当前工位相机序号
+        (cam_index，0-based)，自动选中该相机进行参数设置；浮窗已打开则直接
+        切换选中该相机（不再默认相机1）。不传则维持原行为（新建默认相机1，
+        已开则置顶）。
+        """
+        if cam_index is not None:
+            dlg = getattr(self, "_dlg_trigger", None)
+            if dlg is not None and dlg.isVisible():
+                try:
+                    dlg.set_current_cam(cam_index)
+                except Exception:
+                    pass
+                dlg.raise_()
+                dlg.activateWindow()
+                self.production.log_operation(
+                    self.current_user["name"], "打开了触发设定")
+                return
+            dlg = TriggerSettingsDialog(self, initial_cam=cam_index)
+            self._dlg_trigger = dlg
+            dlg.show()
+            dlg.raise_()
+            dlg.activateWindow()
+            self.production.log_operation(
+                self.current_user["name"], "打开了触发设定")
+            return
         self._show_modeless("_dlg_trigger", TriggerSettingsDialog)
         self.production.log_operation(self.current_user["name"], "打开了触发设定")
 
@@ -1389,20 +1415,54 @@ class MainWindow(QMainWindow):
         self._dlg_img_save.show()
 
     def _open_model_training(self):
-        """打开「模型训练助手」应用内占位页（非模态，与 AI 助手同式）。
+        """打开「模型训练助手」——以**独立分离进程**启动占位页（独立 PID）。
 
-        2026-11-12 UI 需求：各训练模块尚未设计，先以占位页呈现（标题 +
-        左侧模块导航 + 「内容待设计」空状态），避免打开后纯空白像出错。
-        后续模块逐步落地后，这里再切换为真实功能页。
+        2026-11-12 修订：由「应用内非模态窗」改为「独立进程页面」。窗口以 subprocess
+        独立启动，与主程序 MLCC Visual inspection software 互不干扰：主程序崩溃 /
+        退出均不影响该窗口，窗口可独立最小化 / 隐藏 / 关闭，不影响主软件的运行与操作。
+        已运行时重复点击不再重复拉起。后续模块真实功能落地后可改为启动外部专业软件。
         """
-        dlg = getattr(self, "_dlg_model_training", None)
-        if dlg is None or not dlg.isVisible():
+        import subprocess
+        import sys
+        from pathlib import Path
+
+        proc = getattr(self, "_mt_proc", None)
+        if proc is not None and proc.poll() is None:
+            return  # 独立进程已在运行，避免重复拉起
+
+        if getattr(sys, "frozen", False):
+            # 打包后暂无独立 exe：回退为应用内占位页（仍非阻塞、不卡主软件）。
+            # TODO: 打包时附带独立的模型训练助手 exe，再改为启动该 exe。
             from model_training_page import ModelTrainingPage
-            self._dlg_model_training = ModelTrainingPage(self)
-            dlg = self._dlg_model_training
-            dlg.show()
-        dlg.raise_()
-        dlg.activateWindow()
+            dlg = getattr(self, "_dlg_model_training", None)
+            if dlg is None or not dlg.isVisible():
+                self._dlg_model_training = ModelTrainingPage(self)
+                dlg = self._dlg_model_training
+                dlg.show()
+                dlg.raise_()
+                dlg.activateWindow()
+            return
+
+        script = Path(__file__).resolve().parent / "model_training_app.py"
+        try:
+            kwargs = {
+                "cwd": str(Path(__file__).resolve().parent.parent),
+                "close_fds": True,
+            }
+            if sys.platform == "win32":
+                kwargs["creationflags"] = (
+                    subprocess.CREATE_NEW_PROCESS_GROUP
+                    | subprocess.DETACHED_PROCESS
+                )
+            else:
+                kwargs["start_new_session"] = True
+            self._mt_proc = subprocess.Popen(
+                [sys.executable, str(script)], **kwargs)
+        except Exception as exc:
+            from PyQt6.QtWidgets import QMessageBox
+            QMessageBox.warning(
+                self, "模型训练助手",
+                f"未能启动模型训练助手：\n{exc}")
 
     def _open_ai_copilot(self, image=None):
         """打开「AI助手」(Vision Copilot) 非模态对话窗。

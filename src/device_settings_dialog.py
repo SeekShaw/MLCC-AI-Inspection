@@ -674,7 +674,7 @@ class TriggerSettingsDialog(QDialog):
     编辑先写入工作副本，点「保存」才提交到 dev_cfg 并持久化到 device_config.json。
     """
 
-    def __init__(self, mw):
+    def __init__(self, mw, initial_cam=None):
         super().__init__(mw)
         self.mw = mw
         self.pv = mw.production
@@ -718,7 +718,12 @@ class TriggerSettingsDialog(QDialog):
         while len(values) < 18:
             values.append(255)
         self._light_values = values[:18]
-        self._current = self._cam_names[0]
+        # 初始选中相机：外部（相机调试界面「拍照设置」）可指定当前工位相机序号，
+        # 否则默认选中相机1
+        if initial_cam is not None and 0 <= int(initial_cam) < len(self._cam_names):
+            self._current = self._cam_names[int(initial_cam)]
+        else:
+            self._current = self._cam_names[0]
         self._cam_btns = {}
         # 构建表格时控件 setValue / setChecked 会触发回写信号，用 _loading 屏蔽；
         # _select() 结束时解除屏蔽。
@@ -1060,6 +1065,11 @@ class TriggerSettingsDialog(QDialog):
             f"padding: 4px 8px; font-size: 12px; }}"
             f"QSpinBox::up-button, QSpinBox::down-button {{ width: 16px; }}"
         )
+
+    def set_current_cam(self, idx):
+        """外部（相机调试界面「拍照设置」）指定选中某相机（0-based 序号）。"""
+        if 0 <= int(idx) < len(self._cam_names):
+            self._select(self._cam_names[int(idx)])
 
     def _select(self, name):
         """点击表头相机：高亮该列并切换下方触发光源区为该相机已选光源。

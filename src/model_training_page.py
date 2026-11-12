@@ -32,6 +32,13 @@ class ModelTrainingPage(QDialog):
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        # 独立进程窗口：允许最小化 / 隐藏 / 关闭，且始终置顶于主软件之上便于定位
+        self.setWindowFlags(
+            self.windowFlags()
+            | Qt.WindowType.WindowMinimizeButtonHint
+            | Qt.WindowType.WindowMaximizeButtonHint
+            | Qt.WindowType.WindowCloseButtonHint
+        )
         self.setWindowTitle("模型训练助手")
         self.resize(1000, 680)
         self.setMinimumSize(820, 560)
