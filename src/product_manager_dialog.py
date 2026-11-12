@@ -4,6 +4,9 @@
 """
 from __future__ import annotations
 
+import json
+import os
+import sys
 from datetime import datetime
 from uuid import uuid4
 
@@ -80,6 +83,47 @@ def _make_template_products() -> list[dict]:
         _make_template_product("电容", "0402"),
         _make_template_product("电阻", "0603"),
     ]
+
+
+def _products_config_path() -> str:
+    """产品持久化落盘路径：与 exe 或脚本同目录（优先跟随可执行文件所在目录）。"""
+    if getattr(sys, "frozen", False) and getattr(sys, "executable", ""):
+        base = os.path.dirname(os.path.abspath(sys.executable))
+    else:
+        base = os.path.dirname(os.path.abspath(__file__))
+    return os.path.join(base, "products_config.json")
+
+
+def load_products() -> list[dict]:
+    """加载产品列表；首次无文件时以两个母版种子写入并返回。
+
+    解决「管理产品」里编辑/新增的产品在退出软件再打开后丢失的问题：
+    产品列表持久化到 products_config.json，启动时优先读取。
+    """
+    path = _products_config_path()
+    if os.path.exists(path):
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if isinstance(data, list):
+                return data
+        except Exception:
+            # 损坏则回退到母版种子
+            pass
+    seed = _make_template_products()
+    save_products(seed)
+    return seed
+
+
+def save_products(products: list[dict]) -> bool:
+    """把产品列表持久化到 products_config.json。"""
+    path = _products_config_path()
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(products, f, ensure_ascii=False, indent=2)
+        return True
+    except Exception:
+        return False
 
 
 class ProductManagerDialog(QDialog):

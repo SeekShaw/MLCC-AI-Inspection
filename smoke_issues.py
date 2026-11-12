@@ -2210,6 +2210,32 @@ check(pv._valve_used["OK"] == 0.0 and pv._valve_used["NG1"] == 120.0
 pv.reset_valve_counts()   # 全量重置后 OK 仍保持清零（初始值已被记为 0）
 check(pv._valve_used["OK"] == 0.0, "已使用次数清零: 全量重置后已清零的阀保持 0 重新计数")
 pv._valve_used = _used_bak; pv._valve_used_init = _init_bak
+# ⑤ 玻璃使用转数报警区块：「次数清零」按钮清零玻璃盘已旋转次数（仅超级管理员可见）
+_grot_got = []
+_dlg_g = _ad2.AlarmSettingsDialog(
+    is_super_admin=True, on_reset_glass_rotation=lambda: _grot_got.append(True))
+_clear_grot = [b for b in _dlg_g.findChildren(_QPushButton) if b.text() == "次数清零"]
+check(len(_clear_grot) == 1,
+      f"次数清零: 玻璃使用转数区块含 1 个「次数清零」按钮 (实际 {len(_clear_grot)})")
+_clear_grot[0].click()
+check(_grot_got == [True],
+      "次数清零: 点击按钮触发复位玻璃盘旋转次数的回调")
+# 生产界面：累计旋转圈数清零后归 0 并重新计数
+_grot_bak = getattr(pv, "_glass_rotations", 0.0)
+pv._glass_rotations = 12345.0
+pv.reset_glass_rotation()
+check(pv._glass_rotations == 0.0,
+      f"次数清零: 复位后玻璃盘已旋转次数归 0 (实际 {pv._glass_rotations})")
+pv._glass_rotations = _grot_bak
+_dlg_g._on_finished(0); _dlg_g.deleteLater()
+# 权限守卫：非超级管理员不可见「次数清零」按钮（仅超管可见，与电磁阀「已使用次数清零」同规则）
+_dlg_g_user = _ad2.AlarmSettingsDialog(
+    is_super_admin=False, on_reset_glass_rotation=lambda: None)
+_clear_grot_user = [b for b in _dlg_g_user.findChildren(_QPushButton)
+                    if b.text() == "次数清零"]
+check(len(_clear_grot_user) == 0,
+      "次数清零: 非超级管理员不可见「次数清零」按钮")
+_dlg_g_user._on_finished(0); _dlg_g_user.deleteLater()
 # ④ 触发设定：已重构为「相机参数表格 + 底部自动获取触发位置」按钮
 _tsd = _TSD(_mw)
 _auto_pos_btns = [b for b in _tsd.findChildren(_QPushButton)
@@ -2480,6 +2506,34 @@ _dlg.table.selectRow(len(_dlg.products) - 1)
 _dlg._on_selection_changed()
 check(_dlg._btn_delete.isEnabled(), "母版: 选中副本后「删除产品」按钮恢复启用")
 _dlg.deleteLater()
+
+# ============ 2026-11-12 修复：产品管理编辑/新增内容需持久化（退出再打开保留） ============
+import product_manager_dialog as _pmd
+import os as _os
+_tmp_path = _pmd._products_config_path()
+_backup = _os.path.exists(_tmp_path) and open(_tmp_path, encoding="utf-8").read()
+try:
+    _before = _pmd.load_products()
+    _n_before = len(_before)
+    # 模拟「管理产品」中新增一个产品（直接作用于同一列表对象并落盘）
+    _pmd.save_products(_before + [{
+        "id": "persist-unit-test", "created_at": "20260101 00:00:00",
+        "product_type": "电容", "product_model": "0603", "product_spec": "Ver09",
+        "description": "持久化测试", "camera_configs": [],
+    }])
+    _after = _pmd.load_products()
+    check(len(_after) == _n_before + 1
+          and any(p.get("id") == "persist-unit-test" for p in _after),
+          "产品持久化: 新增产品经 save/load 后保留（退出再打开不丢失）")
+finally:
+    # 还原真实产品配置，避免污染
+    if _backup is None:
+        try:
+            _os.remove(_tmp_path)
+        except Exception:
+            pass
+    else:
+        open(_tmp_path, "w", encoding="utf-8").write(_backup)
 
 # ============ 2026-11-12 需求：左侧导航相机按钮图标右上角 [1]..[8] 尾标 ============
 from production_view import CAMERA_NAMES as _CN_BADGE

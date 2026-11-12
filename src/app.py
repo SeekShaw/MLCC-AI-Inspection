@@ -17,7 +17,10 @@ from styles import MAIN_STYLE, COLORS, set_theme, get_theme_name, register_resty
 from production_view import ProductionView, CAMERA_NAMES
 from debug_view import DebugView
 from new_product_dialog import NewProductDialog
-from product_manager_dialog import ProductManagerDialog, _make_template_products
+from product_manager_dialog import (
+    ProductManagerDialog, _make_template_products,
+    load_products, save_products,
+)
 from user_manager import (
     UserManager, CATEGORIES, DEFAULT_CATEGORY_PERMISSIONS,
     NAV_PERMISSION_KEY, ALARM_TAB_PERMISSIONS, DEVICE_TAB_PERMISSIONS,
@@ -393,8 +396,9 @@ class MainWindow(QMainWindow):
         self.nav_buttons = []
         self._func_nav = {}  # key -> 功能按钮（用于权限可见性控制）
 
-        # 已创建产品列表；默认存在两个不可删除的母版：电容 0402 与电阻 0603
-        self.products = _make_template_products()
+        # 已创建产品列表；默认存在两个不可删除的母版：电容 0402 与电阻 0603。
+        # 持久化到 products_config.json（与 exe/脚本同目录），退出再打开保留编辑/新增内容。
+        self.products = load_products()
         self.current_product = self.products[0]
 
         # 用户与权限：启动登录账号优先取「用户中心 → 设为默认登录」设置的账号（★ 标记）；
@@ -1236,6 +1240,8 @@ class MainWindow(QMainWindow):
             on_clear_valve_counts=lambda key=None: self.production.reset_valve_counts(key),
             is_super_admin=is_super,
             get_valve_counts=self.production.get_valve_counts,
+            # 「次数清零」回调：清零玻璃盘累计旋转圈数（已旋转次数）
+            on_reset_glass_rotation=self.production.reset_glass_rotation,
         )
         self._bind_tab_permissions(dlg, ALARM_TAB_PERMISSIONS)
         if dlg.exec() == QDialog.DialogCode.Accepted:
@@ -1533,10 +1539,10 @@ class MainWindow(QMainWindow):
                 f"font-size: 9px; font-weight: 600; border: none;")
 
     def _place_nav_badges(self):
-        """把尾标贴到图标（emoji）自身的右上角，使其作为图标角标/上标。
+        """把尾标贴到图标（emoji）自身的右下角，使其作为图标角标。
 
-        按钮文字（emoji）在按钮内水平+垂直居中渲染，尾标若钉在按钮右上角会与
-        居中的图标错位；这里用字体度量算出图标包围盒，把尾标定位于图标右上角、
+        按钮文字（emoji）在按钮内水平+垂直居中渲染，尾标若钉在按钮边角会与
+        居中的图标错位；这里用字体度量算出图标包围盒，把尾标定位于图标右下角、
         略微内嵌，视觉上贴合图标而非远离按钮边缘。
         """
         for btn, tag in getattr(self, "_nav_badges", []):
@@ -1545,9 +1551,9 @@ class MainWindow(QMainWindow):
             text_w = fm.horizontalAdvance(btn.text()) or 18
             icon_left = (btn.width() - text_w) / 2.0
             icon_top = (btn.height() - fm.height()) / 2.0
-            # 图标右缘略左一点起笔，避免完全贴边；上缘略低于图标顶，作上标观感
+            # 图标右缘略左一点起笔，避免完全贴边；下缘略低于图标底，作右下角标观感
             x = max(0, int(icon_left + text_w - tag.width() * 0.45))
-            y = max(0, int(icon_top - tag.height() * 0.15))
+            y = max(0, int(icon_top + fm.height() - tag.height() * 0.85))
             tag.move(x, y)
 
     def _nav_btn_style(self):
@@ -1833,11 +1839,17 @@ class MainWindow(QMainWindow):
             }
             self.products.append(product)
             self._switch_product(product)
+            save_products(self.products)  # 新增产品后立即持久化
 
     def _open_manage_product(self):
-        """点击「管理产品」：弹出产品管理窗口。"""
+        """点击「管理产品」：弹出产品管理窗口。
+
+        窗口内对产品列表的全部增删改都直接作用于 self.products（同一对象），
+        关闭后统一持久化到 products_config.json，确保退出软件再打开仍保留。
+        """
         dlg = ProductManagerDialog(self.products, self)
         dlg.exec()
+        save_products(self.products)  # 编辑/拷贝/删除/导入后统一落盘
 
     def _switch_product(self, product: dict):
         """切换产品：更新顶部状态栏的「当前产品」标签窗体。"""

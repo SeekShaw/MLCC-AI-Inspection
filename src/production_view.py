@@ -6737,6 +6737,17 @@ class ProductionView(_ReportExportMixin, QWidget):
         """返回各电磁阀当前已用动作次数（次），供报警设置对话框实时显示使用次数。"""
         return dict(getattr(self, "_valve_used", {}))
 
+    def reset_glass_rotation(self):
+        """把玻璃盘累计旋转圈数（已旋转次数）清零并重新开始计数。
+
+        2026-11-12 需求：报警设置「玻璃使用转数报警」区块新增「次数清零」按钮调用。
+        清零同时重置累计时间戳与已报警标志，下次生产运行从 0 重新累计。
+        """
+        self._glass_rotations = 0.0
+        self._last_rot_ts = None
+        self._glass_rota_alarmed = False
+        self._refresh_glass_rotation_row()
+
     def _on_play_tick(self):
         # 高级设置「主界面最小刷新间隔」修改即时生效：节拍间隔变化则按新间隔重启定时器
         _interval = self._play_interval_ms()
