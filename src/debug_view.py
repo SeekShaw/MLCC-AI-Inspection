@@ -14,7 +14,7 @@ from PyQt6.QtWidgets import (
     QGroupBox, QStackedWidget, QDoubleSpinBox,
 )
 from PyQt6.QtCore import Qt, QTimer, QPointF, QDateTime, QRect, QSize, QEvent
-from PyQt6.QtGui import QColor, QFont, QPainter, QPen, QBrush, QImage, QPixmap
+from PyQt6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPen, QBrush, QImage, QPixmap
 
 from styles import COLORS, register_restyle
 from permission_ui import bind
@@ -2486,18 +2486,27 @@ class SpecAutoAdjustDialog(QDialog):
         v.setSpacing(10)
 
         title = QLabel("依据各检测项历史分布样本自动计算推荐规格上下限"
-                       "（勾选后应用，推荐值可直接微调）")
+                       "（开关开启后按样本分布自动调整并填入推荐值，可直接微调；"
+                       "「应用调整」只处理开启的行）")
         title.setStyleSheet(
             f"color: {COLORS['text_primary']}; font-size: 13px; font-weight: bold;")
         v.addWidget(title)
 
-        # 顶部：全选 + 算法说明
+        # 顶部：全开 / 全关（2026-11-12 需求③：原「全选」勾选框改为两个按钮）+ 算法说明
         top = QHBoxLayout()
-        self._chk_all = QCheckBox("全选")
-        self._chk_all.setChecked(True)
-        self._chk_all.setStyleSheet(self._chk_style())
-        self._chk_all.toggled.connect(self._on_toggle_all)
-        top.addWidget(self._chk_all)
+        self._all_on_btn = QPushButton("全开")
+        self._all_off_btn = QPushButton("全关")
+        for b in (self._all_on_btn, self._all_off_btn):
+            b.setFixedHeight(26)
+            b.setCursor(Qt.CursorShape.PointingHandCursor)
+            b.setStyleSheet(
+                f"QPushButton {{ background-color: {COLORS['bg_card']}; "
+                f"color: {COLORS['text_primary']}; border: 1px solid "
+                f"{COLORS['border']}; border-radius: 4px; padding: 0 14px; "
+                f"font-size: 11px; }}")
+            top.addWidget(b)
+        self._all_on_btn.clicked.connect(lambda: self._on_toggle_all(True))
+        self._all_off_btn.clicked.connect(lambda: self._on_toggle_all(False))
         top.addStretch(1)
         tip = QLabel("推荐规格 = P0.5~P99.5 分位区间，两侧各留 10% 工艺余量")
         tip.setStyleSheet(f"color: {COLORS['text_secondary']}; font-size: 11px;")
@@ -2609,20 +2618,12 @@ class SpecAutoAdjustDialog(QDialog):
             rg = QHBoxLayout(row_w)
             rg.setContentsMargins(8, 0, 8, 0)
             rg.setSpacing(8)
-            chk = QCheckBox()
-            chk.setChecked(True)
-            chk.setStyleSheet(self._chk_style())
-            rg.addWidget(chk, 0)
-            lbl_code = self._fixed_label(str(raw[1]), 60)
-            lbl_name = self._fixed_label(name, 150)
-            lbl_cur = self._fixed_label(
-                f"{cur_lo:g} ~ {cur_hi:g} {raw[8]}", 170)
-            for w in (lbl_code, lbl_name, lbl_cur):
-                rg.addWidget(w, 0)
-            # 记录「当前规格」标签引用：应用/撤销后实时刷新显示
+            # ⚠️ 崩溃修复（2026-11-12 反馈：点击「规格设置」闪退）：原先在这里
+            # 就把 sp_lo/sp_hi 写进 lambda 默认参数，而两个 QDoubleSpinBox 在
+            # 下方才创建 → UnboundLocalError → 弹窗构造即崩。修复：先创建
+            # 输入框，再连接开关信号（添加顺序不变，布局不受影响）。
             sp_lo = QDoubleSpinBox()
             sp_hi = QDoubleSpinBox()
-            span = max(abs(cur_hi - cur_lo), 1.0)
             for sp in (sp_lo, sp_hi):
                 sp.setDecimals(dec)
                 sp.setRange(-999999999.0, 999999999.0)
@@ -2632,6 +2633,22 @@ class SpecAutoAdjustDialog(QDialog):
             sp_hi.setValue(sug_hi)
             sp_lo.setMinimumWidth(80)
             sp_hi.setMinimumWidth(80)
+            # 2026-11-12 需求③：行选择由勾选框改为开关，**默认关闭**；
+            # 开启后按该检测项样本分布自动计算推荐规格并填入下方两个输入框
+            # （自动调整结果即时刷新显示），可直接微调后「应用调整」。
+            sw = ToggleSwitch(on=False)
+            sw.setFixedSize(40, 20)
+            sw.toggled.connect(
+                lambda on, _lo=sp_lo, _hi=sp_hi, _slo=sug_lo, _shi=sug_hi:
+                self._on_row_switch(on, _lo, _hi, _slo, _shi))
+            rg.addWidget(sw, 0)
+            lbl_code = self._fixed_label(str(raw[1]), 60)
+            lbl_name = self._fixed_label(name, 150)
+            lbl_cur = self._fixed_label(
+                f"{cur_lo:g} ~ {cur_hi:g} {raw[8]}", 170)
+            for w in (lbl_code, lbl_name, lbl_cur):
+                rg.addWidget(w, 0)
+            # 记录「当前规格」标签引用：应用/撤销后实时刷新显示
             rg.addWidget(sp_lo, 0)
             rg.addWidget(QLabel("~"), 0)
             rg.addWidget(sp_hi, 0)
@@ -2641,7 +2658,7 @@ class SpecAutoAdjustDialog(QDialog):
             rg.addWidget(lbl_note, 0)
             rg.addStretch(1)
             self._body_lay.addWidget(row_w)
-            self._rows.append((r, chk, sp_lo, sp_hi, lbl_cur))
+            self._rows.append((r, sw, sp_lo, sp_hi, lbl_cur, sug_lo, sug_hi))
         if not self._rows:
             empty = QLabel("当前没有可自动调整的数值型检测项")
             empty.setStyleSheet(
@@ -2659,15 +2676,17 @@ class SpecAutoAdjustDialog(QDialog):
 
     @staticmethod
     def _chk_style():
+        # 2026-11-12 UI 需求：与全局统一——未勾选白色空心边框，
+        # 勾选蓝色实心（纯色填充，不依赖图片，规避勾选态不显示回归）
         return (
             f"QCheckBox {{ color: {COLORS['text_primary']}; font-size: 11px; "
             f"spacing: 4px; }}"
             f"QCheckBox::indicator {{ width: 14px; height: 14px; "
-            f"border: 1px solid {COLORS['border']}; border-radius: 3px; "
-            f"background-color: {COLORS['bg_card']}; }}"
+            f"border: 1px solid {COLORS['text_primary']}; border-radius: 3px; "
+            f"background-color: transparent; }}"
             f"QCheckBox::indicator:checked {{ "
-            f"background-color: {COLORS['accent_orange']}; "
-            f"border-color: {COLORS['accent_orange']}; }}")
+            f"background-color: {COLORS['accent_blue']}; "
+            f"border-color: {COLORS['accent_blue']}; }}")
 
     @staticmethod
     def _spin_style():
@@ -2680,20 +2699,34 @@ class SpecAutoAdjustDialog(QDialog):
             f"QDoubleSpinBox::up-button, QDoubleSpinBox::down-button {{ width: 14px; }}")
 
     # -- 交互 ---------------------------------------------------------
+    @staticmethod
+    def _on_row_switch(on, sp_lo, sp_hi, sug_lo, sug_hi):
+        """行开关切换（2026-11-12 需求③）：开启后按样本分布自动调整——把推荐
+        规格填入上下限输入框（调整结果即时刷新显示，仍可手动微调）。"""
+        if on:
+            sp_lo.setValue(float(sug_lo))
+            sp_hi.setValue(float(sug_hi))
+
     def _on_toggle_all(self, on):
-        for _r, chk, _lo, _hi, _cur in self._rows:
-            chk.setChecked(on)
+        """「全开 / 全关」：批量设置全部行的开关（全开同时填入各自推荐值）。"""
+        for _r, sw, sp_lo, sp_hi, _cur, sug_lo, sug_hi in self._rows:
+            if sw.is_on() != on:
+                sw.set_on(on)
+                sw.update()
+            if on:
+                sp_lo.setValue(float(sug_lo))
+                sp_hi.setValue(float(sug_hi))
 
     def _on_apply(self):
         changes = []
-        for r, chk, sp_lo, sp_hi, _cur in self._rows:
-            if chk.isChecked():
+        for r, sw, sp_lo, sp_hi, _cur in self._rows:
+            if sw.is_on():
                 lo, hi = sp_lo.value(), sp_hi.value()
                 if lo > hi:
                     lo, hi = hi, lo
                 changes.append((r, lo, hi))
         if not changes:
-            QMessageBox.information(self, "规格自动调整", "请先勾选需要调整的检测项。")
+            QMessageBox.information(self, "规格自动调整", "请先开启需要调整的检测项开关。")
             return
         # 备份「应用前」的规格（仅数值有效的行），供「应用撤销」回退；
         # 同时保留原始字符串（"-100"），避免撤销后显示成 "-100.0"
@@ -2901,6 +2934,254 @@ class SyncSchemeDialog(QDialog):
                 if cb.isEnabled() and cb.isChecked()]
 
 
+# ---------------------------------------------------------------------------
+# 良率预警设置（全局，2026-11-12 需求）
+# ---------------------------------------------------------------------------
+# 选择状态进程内全局共享：{"<相机名>|<检测编号>": {"enabled": bool, "threshold": int}}。
+# ``MainWindow.debug_views`` 的工位顺序固定，加上共享字典后，从任意相机工位
+# 的调试界面打开弹窗看到的内容与勾选状态完全一致；初始为空＝**默认全关、阈值 50%**。
+_YIELD_ALERT_SELECTION = {}
+_YIELD_ALERT_LOADED = False
+
+
+def _yield_alert_key(camera, code):
+    """全局选择字典的键：相机名 + 检测编号（同编号在不同工位互不影响）。"""
+    return f"{camera}|{code}"
+
+
+def _yield_alert_path():
+    return os.path.join(DebugView._config_dir(), "yield_alert_settings.json")
+
+
+def yield_alert_selection():
+    """返回全局良率预警选择字典（首次访问时从持久化配置恢复）。
+
+    兼容旧版 ``{key: bool}`` 格式：读取到 bool 值时自动迁移为
+    ``{"enabled": bool, "threshold": 50}``；新格式直接取 dict。
+    """
+    global _YIELD_ALERT_LOADED
+    if not _YIELD_ALERT_LOADED:
+        _YIELD_ALERT_LOADED = True
+        try:
+            with open(_yield_alert_path(), "r", encoding="utf-8") as f:
+                data = json.load(f) or {}
+            for k, v in data.items():
+                if isinstance(v, dict):
+                    _YIELD_ALERT_SELECTION[str(k)] = {
+                        "enabled": bool(v.get("enabled", False)),
+                        "threshold": int(v.get("threshold", 50)),
+                    }
+                else:
+                    _YIELD_ALERT_SELECTION[str(k)] = {
+                        "enabled": bool(v), "threshold": 50}
+        except Exception:
+            pass          # 无配置 / 配置损坏 → 保持默认全关
+    return _YIELD_ALERT_SELECTION
+
+
+def save_yield_alert_selection():
+    """把全局选择落盘（持久化目录，程序更新不覆盖、下次启动自动加载）。"""
+    try:
+        with open(_yield_alert_path(), "w", encoding="utf-8") as f:
+            json.dump(_YIELD_ALERT_SELECTION, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+
+class YieldAlertDialog(QDialog):
+    """「良率预警设置」全局弹窗（2026-11-12 需求，2026-11-12 反馈优化）。
+
+    - 按相机工位分页列出**所有工位的已勾选检测项目**（数据源为主窗
+      ``debug_views``，顺序固定，故从任意工位进入内容完全一致）；
+    - 每个项目一个 **iOS 风格开关（启用）+ 预警阈值(%) 编辑框**（原复选框改为开关，
+      并在右侧新增「预警阈值」列，与检测表「良率预警设置」列保持同一份数据）；
+    - 行控件按页签**懒加载**（首次切到该工位才构建），避免一次创建 8×109 个 QWidget
+      带来的可感知停顿；全量状态由字典维护，未构建页同样受「全开」/「全关」影响；
+    - 「全开」/「全关」一次设置全部工位的全部项目（原「全选」改名为「全开」）；
+    - 「确定」把快照写回各工位检测表「良率预警设置」列并落盘，「取消」不改动任何状态。
+    """
+
+    def __init__(self, parent=None, stations=None, selection=None):
+        super().__init__(parent)
+        self.setWindowTitle("良率预警设置")
+        self.setWindowFlags(self.windowFlags()
+                            | Qt.WindowType.WindowStaysOnTopHint)
+        self.setStyleSheet(
+            f"QDialog {{ background-color: {COLORS['bg_panel']}; }}")
+        self.resize(520, 620)
+        sel = selection if selection is not None else {}
+        self._stations = [(str(cam), list(items))
+                          for cam, items in (stations or [])]
+        # 全量状态字典在构造时建立（8×109 个键，纯 Python 字典，开销可忽略），
+        # 每行一个**开关（启用）+ 预警阈值(%)**；控件按页签**懒加载**构建。
+        # 2026-11-12 反馈：原「复选框」改为 iOS 风格开关，「全选」改为「全开」，
+        # 并在右侧新增「预警阈值(%)」列，与检测表「良率预警设置」列保持一致。
+        self._selection = {}
+        for cam, items in self._stations:
+            for code, _name in items:
+                key = _yield_alert_key(cam, code)
+                v = sel.get(key)
+                self._selection[key] = (
+                    {"enabled": bool(v.get("enabled", False)),
+                     "threshold": int(v.get("threshold", 50))}
+                    if isinstance(v, dict)
+                    else {"enabled": bool(v) if v is not None else False,
+                          "threshold": 50})
+        self._switches = {}        # {全局键: ToggleSwitch}，仅含已构建页
+        self._spins = {}           # {全局键: QSpinBox(阈值)}，仅含已构建页
+        self._page_built = [False] * len(self._stations)
+
+        v = QVBoxLayout(self)
+        v.setContentsMargins(14, 12, 14, 12)
+        v.setSpacing(8)
+        tip = QLabel("按工位显示所有已勾选的检测项目；开启开关＝纳入良率预警，"
+                     "右侧阈值(%)为该检测项预警阈值。全部工位共用同一份设置，默认全关、阈值 50%。")
+        tip.setStyleSheet(f"color:{COLORS['text_secondary']}; font-size:11px;")
+        tip.setWordWrap(True)
+        v.addWidget(tip)
+
+        bar = QHBoxLayout()
+        bar.setSpacing(8)
+        self._all_btn = QPushButton("全开")
+        self._none_btn = QPushButton("全关")
+        for b in (self._all_btn, self._none_btn):
+            b.setFixedHeight(26)
+            b.setCursor(Qt.CursorShape.PointingHandCursor)
+            b.setStyleSheet(
+                f"QPushButton {{ background-color:{COLORS['bg_card']}; "
+                f"color:{COLORS['text_primary']}; border:1px solid "
+                f"{COLORS['border']}; border-radius:4px; padding:0 14px; "
+                f"font-size:11px; }}")
+            bar.addWidget(b)
+        self._all_btn.clicked.connect(lambda: self.select_all(True))
+        self._none_btn.clicked.connect(lambda: self.select_all(False))
+        bar.addStretch(1)
+        v.addLayout(bar)
+
+        self.tabs = QTabWidget()
+        for cam, _items in self._stations:
+            self.tabs.addTab(QWidget(), cam)
+        if not self._stations:
+            self.tabs.addTab(QLabel("没有可用的相机工位"), "—")
+        self.tabs.currentChanged.connect(self._ensure_page)
+        v.addWidget(self.tabs, 1)
+        self._ensure_page(self.tabs.currentIndex())
+
+        btns = QHBoxLayout()
+        btns.addStretch(1)
+        self._ok_btn = QPushButton("确定")
+        self._ok_btn.setStyleSheet(
+            f"background-color:{COLORS['accent_blue']}; color:white; "
+            f"border:none; border-radius:4px; padding:6px 18px; font-size:12px;")
+        self._cancel_btn = QPushButton("取消")
+        self._cancel_btn.setStyleSheet(
+            f"background-color:{COLORS['bg_card']}; color:{COLORS['text_primary']}; "
+            f"border:1px solid {COLORS['border']}; border-radius:4px; "
+            f"padding:6px 18px; font-size:12px;")
+        self._ok_btn.clicked.connect(self.accept)
+        self._cancel_btn.clicked.connect(self.reject)
+        btns.addWidget(self._ok_btn)
+        btns.addWidget(self._cancel_btn)
+        v.addLayout(btns)
+
+    def _ensure_page(self, i):
+        """首次切换到某工位页时才创建该页的行（懒加载，避免打开卡顿）。"""
+        if not (0 <= i < len(self._stations)) or self._page_built[i]:
+            return
+        self._page_built[i] = True
+        cam, items = self._stations[i]
+        page = self.tabs.widget(i)
+        pl = QVBoxLayout(page)
+        pl.setContentsMargins(6, 6, 6, 6)
+        # 列头：检测项 / 启用开关 / 预警阈值(%)
+        hdr = QWidget()
+        hg = QHBoxLayout(hdr)
+        hg.setContentsMargins(6, 2, 6, 2)
+        hl = QLabel("检测项（编号 名称）")
+        hl.setStyleSheet(
+            f"color:{COLORS['text_secondary']}; font-size:11px; font-weight:bold;")
+        hg.addWidget(hl, 1)
+        he = QLabel("启用")
+        he.setStyleSheet(
+            f"color:{COLORS['text_secondary']}; font-size:11px; font-weight:bold;")
+        hg.addWidget(he)
+        ht = QLabel("预警阈值(%)")
+        ht.setStyleSheet(
+            f"color:{COLORS['text_secondary']}; font-size:11px; font-weight:bold;")
+        hg.addWidget(ht)
+        pl.addWidget(hdr)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setStyleSheet("QScrollArea { background: transparent; }")
+        body = QWidget()
+        bl = QVBoxLayout(body)
+        bl.setContentsMargins(4, 4, 4, 4)
+        bl.setSpacing(2)
+        if not items:
+            bl.addWidget(QLabel("该工位没有已勾选的检测项目"))
+        for code, name in items:
+            key = _yield_alert_key(cam, code)
+            rec = self._selection.get(
+                key, {"enabled": False, "threshold": 50})
+            row_w = QWidget()
+            rw = QHBoxLayout(row_w)
+            rw.setContentsMargins(4, 2, 4, 2)
+            rw.setSpacing(10)
+            lbl = QLabel(f"{code}  {name}")
+            lbl.setStyleSheet(f"color:{COLORS['text_primary']}; font-size:11px;")
+            rw.addWidget(lbl, 1)
+            # 启用开关（iOS 风格，与检测表「是否检测 / 良率预警设置」列一致）
+            sw = ToggleSwitch(on=bool(rec["enabled"]))
+            sw.setFixedSize(40, 20)
+            sw.toggled.connect(
+                lambda on, k=key: self._on_item_toggled(k, on))
+            rw.addWidget(sw)
+            # 预警阈值（%），默认 50
+            th = QSpinBox()
+            th.setRange(0, 100)
+            th.setValue(int(rec["threshold"]))
+            th.setSuffix(" %")
+            th.setFixedHeight(22)
+            th.setFixedWidth(84)
+            th.setStyleSheet(
+                f"QSpinBox {{ background-color: {COLORS['bg_card']}; "
+                f"color: {COLORS['text_primary']}; border: 1px solid {COLORS['border']}; "
+                f"border-radius: 4px; padding: 0 4px; font-size: 11px; }}")
+            th.valueChanged.connect(
+                lambda v, k=key: self._on_threshold_changed(k, v))
+            rw.addWidget(th)
+            self._switches[key] = sw
+            self._spins[key] = th
+            bl.addWidget(row_w)
+        bl.addStretch(1)
+        scroll.setWidget(body)
+        pl.addWidget(scroll, 1)
+
+    def _on_item_toggled(self, key, on):
+        """单个开关状态写回全量状态字典（懒加载页也保持一致）。"""
+        rec = self._selection.setdefault(
+            key, {"enabled": False, "threshold": 50})
+        rec["enabled"] = bool(on)
+
+    def _on_threshold_changed(self, key, value):
+        """单个预警阈值写回全量状态字典。"""
+        rec = self._selection.setdefault(
+            key, {"enabled": False, "threshold": 50})
+        rec["threshold"] = int(value)
+
+    def select_all(self, on):
+        """「全开 / 全关」：一次设置**全部工位**的全部项目（含尚未构建的页）。"""
+        for key in self._selection:
+            self._selection[key]["enabled"] = bool(on)
+        for sw in self._switches.values():
+            sw.set_on(bool(on))
+
+    def selection_snapshot(self):
+        """返回全量状态快照（{全局键: {"enabled": bool, "threshold": int}}）。"""
+        return {k: dict(v) for k, v in self._selection.items()}
+
+
 # 2026-11-11 需求：检测项列表出厂内置 **109 项**（编号 100~519，按检测类别分段），
 # 所有相机工位共用同一份出厂配置；「恢复至出厂」即**开启以下全部检测项**。
 # 规格上下限 / 单位暂按中性默认（0 / Dec），可在界面或「设置为默认」中调整。
@@ -3044,10 +3325,11 @@ class DebugView(QWidget):
         self._dist_cleared_at = {}          # 各检测项『清零』时刻，用于重置分布数据起点
         self._param_samples = {}            # 参数分布样本池：{(名称, key): [(datetime, value), ...]}
         self._param_cleared_at = {}         # 各参数『清零』时刻，用于重置分布数据起点
-        # 检测项筛选状态（显示所有/显示已选）：从持久化配置恢复上次状态，重启后保留
+        # 检测项筛选状态（显示所有/显示已选）：从持久化配置恢复上次状态，重启后保留；
+        # 2026-11-12 UI 需求：无持久化记录时**默认「显示已选」**
         _cfg = _load_debug_config()
         self._filter_show_checked = bool(
-            _cfg.get(self.camera_name, {}).get("filter_show_checked", False))
+            _cfg.get(self.camera_name, {}).get("filter_show_checked", True))
         self._play_timer = QTimer(self)
         self._play_timer.timeout.connect(self._on_play_tick)
         # 各路相机同步推进：主相机每节拍统一 +1 帧，其余通道同步同序号
@@ -3233,8 +3515,12 @@ class DebugView(QWidget):
 
         # 预览区：主相机画布 400×300；右侧 R/G/B 三通道（含间隙总高 300，每路 4:3）
         preview_row = QHBoxLayout()
-        preview_row.setSpacing(16)
-        main_preview = CameraPreview(f"相机：{self.camera_name}", 400, 300)
+        # 2026-11-12 UI 需求（二次修订）：主画布与 R/G/B 列的左右间隙收窄（16→10）
+        preview_row.setSpacing(10)
+        # 2026-11-12 需求：进入相机调试界面默认显示图像上的计算元素（眼睛按钮
+        # 初始为「已显示」态，与主画布叠加保持一致）
+        main_preview = CameraPreview(f"相机：{self.camera_name}", 400, 300,
+                                     show_elements=True)
         preview_row.addWidget(main_preview)
         # 相机卡片名称右侧「拍照设置」按钮：内容与左侧导航「拍照设置」窗口完全一致
         # （原「AI助手」入口已删除：顶部标题栏与左侧导航仍保留 AI助手入口）
@@ -3268,6 +3554,9 @@ class DebugView(QWidget):
             lambda on: main_preview.screen.set_crosshair_visible(on))
         main_preview.add_title_button(btn_cross)   # 顺序追加 → 位于「拍照设置」右侧
         self._btn_crosshair = btn_cross
+        # 2026-11-12 需求：进入相机调试界面后十字线默认显示（勾选态触发上方
+        # toggled 回调，立即在画布叠加中心十字线；用户仍可点击按钮随时隐藏）
+        btn_cross.setChecked(True)
 
         # 相机模式选择行：置于主画布底部左下角（覆盖层）
         overlay = QFrame(main_preview)
@@ -3317,11 +3606,19 @@ class DebugView(QWidget):
         overlay.raise_()
 
         side = QVBoxLayout()
-        side.setSpacing(6)
+        # 2026-11-12 UI 需求（二次修订）：三画布上下间隙收窄（6→4），卡片内边距
+        # 同步收窄（见 CameraPreview overlay_title 分支），画布区放大、更饱满；
+        # 列总高 3×97+2×4=299 ≤ 主画布 300——上下限位置保持不变
+        side.setSpacing(4)
         # 右侧 R/G/B 三通道预览：不显示通道下拉控件，固定展示各自真实通道分离效果
-        r_preview = CameraPreview("R 通道", 128, 96, show_channel_control=False)
-        g_preview = CameraPreview("G 通道", 128, 96, show_channel_control=False)
-        b_preview = CameraPreview("B 通道", 128, 96, show_channel_control=False)
+        # 2026-11-12 需求：R/G/B 通道画布右上角不再显示 128×96 分辨率标签；
+        # 2026-11-12 UI 需求：通道标题文字浮于画布上方，不再占用画布顶部一条高度
+        r_preview = CameraPreview("R", 130, 97, show_channel_control=False,
+                                  show_res_label=False, overlay_title=True)
+        g_preview = CameraPreview("G", 130, 97, show_channel_control=False,
+                                  show_res_label=False, overlay_title=True)
+        b_preview = CameraPreview("B", 130, 97, show_channel_control=False,
+                                  show_res_label=False, overlay_title=True)
         r_preview.screen.set_channel("r")
         g_preview.screen.set_channel("g")
         b_preview.screen.set_channel("b")
@@ -3393,18 +3690,21 @@ class DebugView(QWidget):
         _f_tbl = QFont("Microsoft YaHei")
         _f_tbl.setPixelSize(10)
         table.setFont(_f_tbl)
-        table.setColumnCount(14)
+        table.setColumnCount(16)
         # ⚠️ 2026-10-09 需求：把「检测值」整列移动到「检测结果」列的**左侧**。
+        # 2026-11-12 需求：在「检测项操作」右侧新增「OK数」「NG数」两列
+        # （列号 13 / 14），「良率预警设置」顺延为最后一列（15）。
         # 新列序：显示所有 / 是否检测 / 检测编号 / 检测项目 / 标称值 /
-        #        补偿值 / 规格下限 / 规格上限 / 单位 / 检测值 /检测结果 /
-        #        收料位置 / 检测项操作 / 良率预警设置
+        #        补偿值 / 规格下限 / 规格上限 / 单位 / 检测值 / 检测结果 /
+        #        收料位置 / 检测项操作 / OK数 / NG数 / 良率预警设置
         # （检测值列号由5 → 9；单位列号由 9 → 8；结果/收料位置仍是 10 / 11）
         # 「检测结果」位于「收料位置」左侧的约定保持不变。
         # 首列标题作为「显示所有 / 显示已选」切换开关，与参考图保持一致；
         # 数据行首列仍显示当前序号。
         headers = ["显示所有", "是否检测", "检测编号", "检测项目", "标称值",
                    "补偿值", "规格下限", "规格上限", "单位", "检测值",
-                   "检测结果", "收料位置", "检测项操作", "良率预警设置"]
+                   "检测结果", "收料位置", "检测项操作", "OK数", "NG数",
+                   "良率预警设置"]
         table.setHorizontalHeaderLabels(headers)
         # 列级权限（2026-11-10 需求）：检测项列表按列头细分权限，但列**始终可见**，
         # 无权限时整列只读；无权限用户双击文本列时弹「无权限」提示。
@@ -3430,7 +3730,10 @@ class DebugView(QWidget):
             f"color: {COLORS['text_primary']}; }}")
         # 行数随出厂清单数据长度设定（见下方 raw；2026-11-11 起 109 行，不再写死 10）
         # table.setRowCount(...) 在 raw 数据定义之后调用
-        # 12 列数据（是否检测, 编号, 项目, 标称, 检测值, 补偿, 下限, 上限, 单位, 收料, 结果, 有分布）
+        # 12 个数据字段（是否检测, 编号, 项目, 标称, 检测值, 补偿, 下限, 上限, 单位, 收料, 结果, 有分布）
+        # 2026-11-12 需求：表格由 14 列扩到 16 列（新增「OK数」「NG数」），底层 raw
+        # 仍保持 12 字段——计数是运行时统计，单独存 `_ok_ng_counts`，不进入
+        # `_collect_detect_settings`（方案同步 / 存默认 / 存出厂都不复制计数）。
         # 2026-11-11 需求：出厂内置 109 项（FACTORY_DETECT_ITEMS），全部默认启用；
         # 「恢复至出厂」即开启全部检测项。规格 / 单位暂按中性默认，可界面调整。
         raw = [
@@ -3440,6 +3743,12 @@ class DebugView(QWidget):
         table.setRowCount(len(raw))
         data = raw
         self._table_data = data
+        # 按表头名取列号（构建期 self._table 尚未赋值，不能走 _col_by_header）
+        _c_ok = headers.index("OK数")
+        _c_ng = headers.index("NG数")
+        _c_yield = headers.index("良率预警设置")
+        # OK数 / NG数：按运行节拍累计的判定次数，默认 0、只读、不落盘（重启归零）
+        self._ok_ng_counts = {r: [0, 0] for r in range(len(raw))}
         # 检测值列（数值标签）与单位列（UnitCell）的按行引用，供刷新/右键选择时同步
         self._val_labels = {}
         self._unit_cells = {}
@@ -3535,8 +3844,9 @@ class DebugView(QWidget):
                             b.setToolTip("示例占位（演示）")
                         hl.addWidget(b)
                     table.setCellWidget(r, c, btn_widget)
-                elif c == 13:
-                    # 良率预警设置：启用开关（iOS 风格滑块）+ 预警阈值（默认 50%），每行都有
+                elif c == _c_yield:
+                    # 良率预警设置（2026-11-12 起顺延为最后一列 15）：
+                    # 启用开关（iOS 风格滑块）+ 预警阈值（默认 50%），每行都有
                     warn = self._yield_warn.get(r, {"enabled": True, "threshold": 50})
                     btn_widget = QFrame()
                     hl = QHBoxLayout(btn_widget)
@@ -3560,6 +3870,13 @@ class DebugView(QWidget):
                         lambda v, rr=r: self._on_yield_warn_threshold(rr, v))
                     hl.addWidget(th)
                     table.setCellWidget(r, c, btn_widget)
+                elif c in (_c_ok, _c_ng):
+                    # 2026-11-12 需求：OK数 / NG数（「检测项操作」右侧），
+                    # 由 refresh_detection_values 按判定结果累计，系统计算列一律只读。
+                    item = QTableWidgetItem("0")
+                    item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                    item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                    table.setItem(r, c, item)
                 else:
                     # 普通文本列：按 `_data_index_for_col` 查表映射到原始数据 row 的对应字段。
                     # ⚠️ 2026-10-09「检测值」列移到「检测结果」左侧后，列号与
@@ -3600,9 +3917,15 @@ class DebugView(QWidget):
         # 所有列按内容宽度自适应；超出可视范围时出现横向滚动条
         h.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
         table.resizeColumnsToContents()
+        # 2026-11-12（调试界面周期性卡顿根治）：ResizeToContents 模式下，每个单元格
+        # setText 都会触发 Qt 对该列全部行重测宽度（实测 109 行表每次 setText ~7ms，
+        # 每 3 拍刷新 218 次 setText ≈ 1.3s，UI 线程被整拍阻塞——图像/统计/表格
+        # 三者一起周期性卡顿；生产运行界面未用该模式所以流畅）。初始自适应完成后
+        # 全部切换 Interactive：列宽沿用已按内容算好的值（视觉不变），此后每拍
+        # setText 成本≈0（实测整次刷新 1308ms → 2.9ms）。
+        h.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         # 「是否检测」列加宽为固定宽：列头文字左对齐 + 右侧全开/全关开关，
-        # 两者互不遮挡（ResizeToContents 模式下 setColumnWidth 不生效，需切 Interactive）
-        h.setSectionResizeMode(1, QHeaderView.ResizeMode.Interactive)
+        # 两者互不遮挡（Interactive 模式下列宽固定为显式设置值）
         table.setColumnWidth(1, 120)
 
         # 「显示所有 / 显示已选」切换开关已放到首列表头位置，与参考图一致；
@@ -3622,7 +3945,8 @@ class DebugView(QWidget):
         self._yield_all_btn.raise_()
 
         # 「是否检测」列头右侧的下拉批量模式：全开 / 全关 / 调试。
-        # 调试：仅勾选「歪料」(102) 与「碎料」(104)，其余检测项均不检测。
+        # 调试：仅勾选 100 有无（飞料）/101 偏位/102 歪料/103 连料，
+        #       其余检测项均不检测（2026-11-12 UI 需求，原 102+104）。
         # ⚠️ 2026-11-11 需求：任意工位选「调试」→ 联动全部相机工位；
         #    「全开 / 全关」只作用于当前相机工位。
         self._detect_mode_combo = QComboBox(h.viewport())
@@ -3634,8 +3958,8 @@ class DebugView(QWidget):
         self._detect_mode_combo.setToolTip(
             "全开：全部检测项启用检测（仅当前相机工位）\n"
             "全关：全部检测项停用检测（仅当前相机工位）\n"
-            "调试：仅启用 102 歪料、104 碎料，\n"
-            "　　　并联动全部相机工位一起进入调试")
+            "调试：仅启用 100 有无（飞料）/101 偏位/\n"
+            "　　　102 歪料/103 连料，并联动全部相机工位一起进入调试")
         # 下拉选项文字居中：QComboBox 的弹出项由 delegate 读取 TextAlignmentRole，
         # 非编辑态控件本体则用左内边距把当前项文字视觉居中。
         _cm = self._detect_mode_combo.model()
@@ -3668,48 +3992,76 @@ class DebugView(QWidget):
             lambda *_: self._reposition_overlay_buttons())
 
         # 检测项列表上方工具条（从左到右）：
-        # 设置为默认 → 恢复至默认 → 恢复至出厂 → 单位设置 → 出料设置 → 方案同步
-        # → 规格自动调整（2026-10-20 新增：基于分布样本自动调整检测项规格上下限）
+        # 设置为默认 → 恢复至默认 → 设置为出厂 → 恢复至出厂 → 单位设置
+        # → 出料设置 → 良率预警设置（2026-11-12 新增，出料设置右侧）
+        # → 方案同步 → 规格自动调整
         # （「是否检测」批量模式下拉已移到「是否检测」列头右侧）
         self._yield_all_on = True     # 「预警全开/关」初始为「全开」态
         toolbar = QHBoxLayout()
         toolbar.setSpacing(8)
         toolbar.setContentsMargins(0, 0, 0, 0)
-        # 2026-11-09 需求：图标按钮左侧增加说明文字，标明这一排按钮的用途
-        _tb_hint = self._tb_hint = QLabel("检测列表设置：")
-        _tb_hint.setStyleSheet(
-            f"color: {COLORS['text_primary']}; font-size: 11px; background: transparent;")
-        toolbar.addWidget(_tb_hint)
         TOOLBAR_BTN = (
             f"QPushButton {{ background-color: {COLORS['bg_card']}; color: {COLORS['text_primary']}; "
             f"border: 1px solid {COLORS['border']}; border-radius: 4px; padding: 2px 10px; font-size: 11px; }}"
             f"QPushButton:hover {{ background-color: {COLORS['bg_panel']}; }}")
-        # 2026-10-21 需求：本排按钮改为「图标 + 悬浮提示」显示，节省横向空间；
-        # 同日需求：前 6 个按钮补齐功能（此前 handler=None 为占位）
+        # 2026-11-12 需求：本排按钮由「图标 + 悬浮提示」改为**文字按钮**直接显示名称，
+        # 并删除左侧「检测列表设置：」说明标签（按钮自身文字已标明用途）。
+        # 2026-11-12：新增「表格管理」按钮（原图标排第一个），把原独立的
+        # 「设置为默认 / 恢复至默认 / 设置为出厂 / 恢复至出厂 / 方案同步」收进其下拉
+        # 菜单（方案同步在菜单内改名「表格同步至」），相当于把这些入口从平铺按钮改
+        # 为下拉表单入口。权限：按钮本身按父权限 detect_list，菜单项各自按子权限在
+        # 打开时动态显隐。其余按钮顺序：单位设置 → 出料设置 → 良率预警设置 → 规格设置。
         toolbar_defs = [
-            ("设置为默认", "default_set", self._on_set_default),
-            ("恢复至默认", "restore", self._on_restore_default),
-            # 2026-11-11 需求：恢复至出厂左侧新增「设置为出厂」——把当前方案存为
-            # 出厂基准；默认仅超级管理员拥有（权限键 detect_set_factory，可配置）
-            ("设置为出厂", "factory_set", self._on_set_factory),
-            ("恢复至出厂", "factory", self._on_restore_factory),
-            ("单位设置", "unit", self._on_unit_settings),
-            ("出料设置", "output", self._on_output_settings),
-            ("方案同步", "sync", self._on_scheme_sync),
-            ("规格自动调整", "params", self._on_auto_spec_adjust),
+            ("表格管理", "table_manage", None, "detect_list"),
+            ("单位设置", "unit", self._on_unit_settings, "detect_unit"),
+            ("出料设置", "output", self._on_output_settings, "detect_output"),
+            # 2026-11-12 需求：「出料设置」右侧「良率预警设置」按钮（保留），
+            # 权限键 detect_yield_alert 默认仅超级管理员拥有。
+            ("良率预警设置", "yield_alert", self._on_yield_alert_settings, "detect_yield_alert"),
+            # 2026-11-12：原「规格自动调整」改名「规格设置」（功能不变）。
+            ("规格设置", "params", self._on_auto_spec_adjust, "detect_auto_spec"),
         ]
         self._toolbar_buttons = []
-        for label, icon_kind, handler in toolbar_defs:
-            tb = QPushButton()
-            tb.setIcon(_make_icon(icon_kind, COLORS['text_primary']))
-            tb.setIconSize(QSize(16, 16))
-            tb.setFixedSize(28, 28)
+        for label, _icon_kind, handler, perm in toolbar_defs:
+            tb = QPushButton(label)
+            tb.setFixedHeight(28)
             tb.setToolTip(label)
             tb.setStyleSheet(TOOLBAR_BTN)
+            tb.setProperty("perm_key",
+                           perm if perm == "detect_list" else "detect_list+" + perm)
             if handler is not None:
                 tb.clicked.connect(handler)
             toolbar.addWidget(tb)
             self._toolbar_buttons.append(tb)
+        # 「表格管理」按钮挂下拉菜单：收纳数据/方案管理类操作入口
+        self._table_manage_menu = QMenu(self)
+        for _label, _h, _p in (
+            ("设置为默认", self._on_set_default, "detect_default_set"),
+            ("恢复至默认", self._on_restore_default, "detect_restore_default"),
+            ("设置为出厂", self._on_set_factory, "detect_set_factory"),
+            ("恢复至出厂", self._on_restore_factory, "detect_restore_factory"),
+            ("表格同步至", self._on_scheme_sync, "detect_sync_all"),
+        ):
+            _a = self._table_manage_menu.addAction(_label)
+            _a.triggered.connect(_h)
+            _a.setProperty("perm_key", "detect_list+" + _p)
+        self._table_manage_menu.aboutToShow.connect(
+            lambda: self._refresh_table_manage_menu(self._table_manage_menu))
+        self._toolbar_buttons[0].setMenu(self._table_manage_menu)
+        # 2026-11-12 UI 需求（三次修订）：检测项检索框**并入工具条行**、位于
+        # 「规格设置」右侧同一行（不再另起一行），占位文字「输入检索内容」，
+        # 固定窄宽不改变工具条/卡片原有宽高与布局；功能不变——输入名称/编号
+        # 快速定位，高亮匹配行并把首个匹配行滚动至可视首行（不改变原有顺序）
+        self._search_edit = QLineEdit()
+        self._search_edit.setPlaceholderText("输入检索内容")
+        self._search_edit.setFixedSize(116, 28)
+        self._search_edit.setStyleSheet(
+            f"QLineEdit {{ background-color: {COLORS['bg_card']}; "
+            f"color: {COLORS['text_primary']}; border: 1px solid {COLORS['border']}; "
+            f"border-radius: 4px; padding: 0 6px; font-size: 11px; }}"
+            f"QLineEdit:focus {{ border: 1px solid {COLORS['accent_blue']}; }}")
+        self._search_edit.textChanged.connect(self._on_search_text_changed)
+        toolbar.addWidget(self._search_edit)
         toolbar.addStretch()
         # 工具条放在网格左列第二行（相机画布正下方）——右侧信号卡片跨两行与其底边对齐
         top_grid.addLayout(toolbar, 1, 0)
@@ -3770,6 +4122,62 @@ class DebugView(QWidget):
             self._load_persisted_scheme()
         except Exception:
             pass
+
+        # 检测表列宽按文字自适应（在字体样式与持久化方案都就绪后执行一次；
+        # 另在 showEvent 中界面首次显示时再精确测量一次，二者叠加保证文字完整）。
+        self._auto_fit_columns()
+
+    # ------------------------------------------------------------------
+    # 检测表列宽自适应（2026-11-12 反馈：检测表格文字显示不完整）
+    # ------------------------------------------------------------------
+    def _auto_fit_columns(self):
+        """检测表列宽按文字多少自适应，保证各列文字完整显示（可横向滚动查看超宽列）。
+
+        策略：列头保持 ``Interactive`` 模式（运行期每拍 ``setText`` 不再触发全列重测——
+        见 ``_build_detection_table`` 中 ResizeToContents→Interactive 的卡顿根治），
+        仅在**离散时机**（初始化完成 / 界面显示 / 方案同步载入后）临时切到
+        ResizeToContents 测量一次内容宽度，再切回 Interactive 锁定，避免运行期性能回退。
+
+        2026-11-12 二次修订（用户复测列头/列内文字仍截断）根因：全局样式
+        ``QHeaderView::section`` 以 QSS 强制 ``font-weight:bold`` 且 ``padding:6px``，
+        ``QTableWidget::item`` 也有 ``padding:6px``；而 ``resizeColumnsToContents``
+        按列头 widget 当前字体（**非粗体**）测量且不完全计入 QSS 内边距，测量值
+        偏窄 → 文字截断。修复：按**粗体**列头字体逐列实测文字宽度并补足
+        QSS padding + 边框余量，数据列统一再加安全余量。
+
+        ⚠️ Qt 的 ``resizeColumnsToContents`` 不计入 cell widget（开关/按钮）尺寸，
+        故对含控件的列（1 是否检测 / 9 检测值 / 15 良率预警设置）单独补最小宽，
+        避免控件被压窄导致文字截断。
+        """
+        table = getattr(self, "_table", None)
+        if table is None or table.columnCount() == 0:
+            return
+        h = table.horizontalHeader()
+        h.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
+        table.resizeColumnsToContents()
+        # 恢复 Interactive：运行期每拍 setText 不再触发全列重测（性能关键）
+        h.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+        # 列头按**粗体** 10px 字体逐列实测宽度补足（QSS 将列头渲染为粗体并带
+        # 6px 内边距，resizeColumnsToContents 以非粗体测量且不计 padding，
+        # 测量值偏窄导致「检测编号/规格下限/良率预警设置」等列头截断）
+        _bf = QFont("Microsoft YaHei")
+        _bf.setPixelSize(10)
+        _bf.setBold(True)
+        fm = QFontMetrics(_bf)
+        for c in range(table.columnCount()):
+            it = table.horizontalHeaderItem(c)
+            if it is None:
+                continue
+            need = fm.horizontalAdvance(it.text()) + 6 * 2 + 10  # QSS padding+边框余量
+            if table.columnWidth(c) < need:
+                table.setColumnWidth(c, need)
+        # 数据单元格：QSS item padding 6px 同理可能未完全计入，统一加安全余量
+        for c in range(table.columnCount()):
+            table.setColumnWidth(c, table.columnWidth(c) + 6)
+        # 含 cell widget 的列补最小宽（resizeColumnsToContents 不计入控件尺寸）
+        for c, mw in ((1, 120), (9, 150), (15, 150)):
+            if c < table.columnCount():
+                table.setColumnWidth(c, max(table.columnWidth(c), mw))
 
     # ------------------------------------------------------------------
     # 主题重绘
@@ -4056,6 +4464,47 @@ class DebugView(QWidget):
         if section == 0:
             self._toggle_filter()
 
+    # ---- 检测项检索（2026-11-12 UI 需求）----
+    def _on_search_text_changed(self, text):
+        """输入名称/编号快速定位：高亮所有匹配行，并把首个匹配行滚动至可视首行。
+
+        不改变原有顺序（仅高亮 + 滚动），与「显示所有/显示已选」过滤独立共存——
+        被过滤隐藏的行不参与定位。
+        """
+        table = getattr(self, "_table", None)
+        if table is None:
+            return
+        q = (text or "").strip().lower()
+        first_match = None
+        for r in range(table.rowCount()):
+            if table.isRowHidden(r):
+                continue
+            code = str(self._table_data[r][1]).lower()   # 检测编号
+            name = str(self._table_data[r][2]).lower()   # 检测项目
+            hit = bool(q) and (q in code or q in name)
+            self._set_search_highlight(r, hit)
+            if hit and first_match is None:
+                first_match = r
+        if first_match is not None:
+            table.scrollTo(table.model().index(first_match, 0),
+                           QAbstractItemView.ScrollHint.PositionAtTop)
+
+    def _set_search_highlight(self, row, on):
+        """对匹配/取消匹配的检测项（编号/项目两列）做高亮，便于快速定位。"""
+        table = getattr(self, "_table", None)
+        if table is None:
+            return
+        for c in (2, 3):   # 检测编号 / 检测项目
+            it = table.item(row, c)
+            if it is None:
+                continue
+            if on:
+                it.setBackground(QColor(COLORS["accent_blue"]))
+                it.setForeground(QColor("#FFFFFF"))
+            else:
+                it.setBackground(QColor(0, 0, 0, 0))
+                it.setForeground(QColor(COLORS["text_primary"]))
+
     def _toggle_filter(self):
         """首列标题即切换开关：显示所有 / 只显示已选行（无空行）。"""
         table = getattr(self, "_table", None)
@@ -4303,6 +4752,8 @@ class DebugView(QWidget):
         """切到本调试界面时：若已处于播放态则确保定时器在跑，并立即重绘最新画面，
         避免『从别的界面点设备启动后切过来，画布/示例数据停在旧帧』的观感。"""
         super().showEvent(event)
+        # 界面首次显示时布局/字体已就绪，精确测量并自适应列宽（确保文字完整显示）
+        self._auto_fit_columns()
         if self._playing:
             self._begin_play()
             for cam in self._cams:
@@ -4340,20 +4791,26 @@ class DebugView(QWidget):
                 if self._tick_count % 3 == 0:
                     self.refresh_detection_values()
                     self._accumulate_distribution_samples()
-        # 统计刷新降频（每 2 拍一次）：调试界面生产信息镜像生产运行界面，随节拍同步。
-        # 与生产运行界面的 _refresh_every=2 保持一致，避免调试界面刷新偏慢。
-        if self._tick_count % 2 == 0:
-            sp = getattr(self, "stats_panel", None)
-            if sp is not None:
-                sp.tick_live()
-                # 同步刷新调试界面「统计信息」卡片标题栏的实时重检率标签
-                # （数值来自生产运行界面的滚动窗口计算，与主界面严格一致）
-                lab = getattr(self, "_rt_rechk_label", None)
-                if lab is not None:
-                    prod = getattr(self.main_window, "production", None)
-                    if prod is not None:
+        # 统计刷新：与生产运行界面**严格同节奏**（单一数据源镜像）——每一拍都拉取生产运行
+        # 界面的最新统计快照刷新，保证调试界面统计与生产运行界面刷新速度、数值完全一致。
+        # ⚠️ 2026-11-12 反馈：此前每 12 拍降频（≈2.4s 才刷一次）导致调试界面统计明显比
+        # 生产运行界面慢。该降频原为规避旧版 _render_mirror 全量重建卡顿，现统计面板已改为
+        # 增量刷新（S-4.293/S-4.294 图例/子视图复用单元格），每拍渲染无感知；生产运行界面
+        # 本身即每拍刷新，调试界面应保持同一频率（同一份数据，速度理应一致）。
+        sp = getattr(self, "stats_panel", None)
+        if sp is not None:
+            sp.tick_live()
+            # 同步刷新调试界面「统计信息」卡片标题栏的实时重检率标签
+            # （数值来自生产运行界面的滚动窗口计算，与主界面严格一致）
+            lab = getattr(self, "_rt_rechk_label", None)
+            if lab is not None:
+                prod = getattr(self.main_window, "production", None)
+                if prod is not None:
+                    try:
                         lab.setText(
                             f"实时重检率: {prod._realtime_rechk_rate():.2f}%")
+                    except Exception:
+                        pass
 
     def _accumulate_distribution_samples(self):
         """生产运行态下，把当前各检测项的实时『检测值』作为样本追加进分布样本池，
@@ -4490,15 +4947,28 @@ class DebugView(QWidget):
         读规格上下限，「检测值」列移到「检测结果」左侧后列序变成
         6=规格下限 / 7=规格上限 / 8=单位 → 读成 (上限, None)，
         表现为「规格下限显示成上限值、曲线图缺失下限线」。故统一走表头查列。
+
+        2026-11-12 性能优化：列头名→列号映射固定（仅首列文字在「显示所有 /
+        显示已选」间切换），故惰性缓存一次，避免每次都遍历全部列并跨语言读取
+        `horizontalHeaderItem`。剖析显示切换用户时本函数被调用 43,600 次、
+        独占主线程 0.79s；缓存后降为字典查找。列数变化时自动重建。
         """
         table = getattr(self, "_table", None)
         if table is None:
             return default
-        for c in range(table.columnCount()):
-            it = table.horizontalHeaderItem(c)
-            if it is not None and it.text() == name:
-                return c
-        return default
+        n = table.columnCount()
+        if getattr(self, "_col_index_cache_n", -1) != n:
+            cache = {}
+            for c in range(n):
+                it = table.horizontalHeaderItem(c)
+                if it is not None:
+                    cache[it.text()] = c
+            # 首列表头文字会在两种状态间切换，两个名字都映射到列 0
+            cache.setdefault("显示所有", 0)
+            cache.setdefault("显示已选", 0)
+            self._col_index_cache = cache
+            self._col_index_cache_n = n
+        return self._col_index_cache.get(name, default)
 
     def _detect_spec(self, r):
         """读取某检测项的规格下限/上限（按**表头名**定位列，列序调整后依然正确）。"""
@@ -4687,16 +5157,17 @@ class DebugView(QWidget):
         """表头列号 -> 原始数据 row 索引。
 
         ⚠️ 2026-10-09 列序调整：「检测值」整列移到「检测结果」左侧。
-        当前列序：0 序号 / 1 是否检测 / 2 检测编号 / 3 检测项目 / 4 标称值 /
-        5 补偿值 / 6 规格下限 / 7 规格上限 / 8 单位 / 9 检测值 /
-        10 检测结果 / 11 收料位置 / 12 检测项操作 / 13 良率预警设置
-        （「数值分布」列的按钮已并入「检测值」列，该列已移除）
+        2026-11-12 列序（16 列）：0 序号 / 1 是否检测 / 2 检测编号 / 3 检测项目 /
+        4 标称值 / 5 补偿值 / 6 规格下限 / 7 规格上限 / 8 单位 / 9 检测值 /
+        10 检测结果 / 11 收料位置 / 12 检测项操作 / 13 OK数 / 14 NG数 /
+        15 良率预警设置（「数值分布」列的按钮已并入「检测值」列）
 
         原始 row 结构（与列号**不再**一一对应，必须走本函数查表）：
         row[0]=是否检测 row[1]=检测编号 row[2]=检测项目 row[3]=标称值
         row[4]=检测值 row[5]=补偿值 row[6]=规格下限 row[7]=规格上限
         row[8]=单位 row[9]=收料位置 row[10]=检测结果
-        ⚠️ 新增/调整列时**务必同步更新本映射**，否则会出现「值串列」。
+        ⚠️ 列 13/14「OK数」「NG数」是系统累计计数，存在 `_ok_ng_counts`，
+        不走本映射（构建与刷新均有独立分支）；新增/调整列时**务必同步更新本映射**。
         """
         # 列号 -> row 索引（显式查表，避免改列序时漏改）
         _COL_TO_ROW = {
@@ -4819,16 +5290,18 @@ class DebugView(QWidget):
                 f"QPushButton {{ background-color: {COLORS['bg_card']}; color: {COLORS['text_primary']}; "
                 f"border: 1px solid {COLORS['border']}; border-radius: 4px; padding: 2px 10px; font-size: 10px; }}")
 
-    # 「调试」模式下仅启用的检测项：102 歪料、104 碎料（2026-11-11 出厂清单新名称）
-    _DEBUG_DETECT_CODES = {"102", "104"}
-    _DEBUG_DETECT_NAMES = {"歪料", "碎料"}
+    # 「调试」模式下仅启用的检测项：100 有无（飞料）/101 偏位/102 歪料/103 连料
+    # （2026-11-12 UI 需求：由原 102+104 调整为前 4 项外观基础项）
+    _DEBUG_DETECT_CODES = {"100", "101", "102", "103"}
+    _DEBUG_DETECT_NAMES = {"有无（飞料）", "偏位", "歪料", "连料"}
 
     def _on_detect_mode_changed(self, mode, broadcast=True):
         """「是否检测」列头下拉的批量模式：全开 / 全关 / 调试。
 
         - 全开：全部检测项启用检测（仅作用于当前相机工位）；
         - 全关：全部检测项停用检测（仅作用于当前相机工位）；
-        - 调试：仅启用 102 歪料、104 碎料，其余检测项停用；
+        - 调试：仅启用 100 有无（飞料）/101 偏位/102 歪料/103 连料，其余停用
+          （2026-11-12 UI 需求：默认检测项由 102+104 改为 100~103）；
           ⚠️ 2026-11-11 需求：任意相机工位选择「调试」时，联动**全部**相机工位，
           其它工位的检测项与列头下拉同步变为「调试」。
         开关 set_on() 不发信号，故同时手动同步底层 _table_data 的「是否检测」
@@ -4856,7 +5329,7 @@ class DebugView(QWidget):
             row[0] = bool(on)
             # 重判结果列：停用/无有效规格 → 待定，启用 → 按规格上下限判定
             lo, hi = _to_float(row[6]), _to_float(row[7])
-            result = self._judge_result(on, row[4], lo, hi)
+            result = self._judge_result(on, row[4], lo, hi, unit=row[8])
             row[10] = result
             if c_res >= 0:
                 it = table.item(r, c_res)
@@ -4910,15 +5383,32 @@ class DebugView(QWidget):
         self._reposition_one_overlay(getattr(self, "_detect_mode_combo", None), 1)
 
     def _reposition_one_overlay(self, btn, col):
-        """把单个覆盖按钮贴到指定列列头的右侧并置顶。"""
+        """把单个覆盖按钮贴到指定列列头的右侧并置顶。
+
+        2026-11-12 UI 反馈修复：横向滚动时列头随滚动平移，此前按钮位置仅
+        ``max(0, x)`` 夹住左边界——目标列滚出视口后按钮停留在 x=0 处、
+        压在其它列头（如「标称值」）上。现改为：
+        - 目标列整体滚出列头视口 → 隐藏覆盖控件；
+        - 列可见（含部分可见）→ 按钮夹在「该列列头 ∩ 视口」范围内，
+          保证始终处于该列的列头窗口内。
+        """
         if btn is None or self._table is None:
             return
         hh = self._table.horizontalHeader()
         if hh is None or col < 0:
             return
-        x = hh.sectionViewportPosition(col) + hh.sectionSize(col) - btn.width() - 4
+        vw = hh.viewport().width()
+        pos = hh.sectionViewportPosition(col)
+        size = hh.sectionSize(col)
+        if pos + size <= 0 or pos >= vw:
+            btn.hide()
+            return
+        btn.show()
         y = max(0, (hh.viewport().height() - btn.height()) // 2)
-        btn.move(max(0, int(x)), y)
+        x = pos + size - btn.width() - 4        # 贴该列列头右侧
+        x = max(x, pos, 0)                      # 不越出列头左边界 / 视口左边界
+        x = min(x, max(0, vw - btn.width()))    # 不越出视口右边界
+        btn.move(int(x), y)
         btn.raise_()
 
     _CHANNEL_LABELS = {"r": "R通道", "g": "G通道", "b": "B通道"}
@@ -4941,12 +5431,27 @@ class DebugView(QWidget):
         self._prewarm_channel_cache()
         main.screen.update()
 
+    def _refresh_table_manage_menu(self, menu):
+        """打开「表格管理」下拉前按当前用户权限显隐各菜单项（无权限项不显示）。"""
+        mw = getattr(self, "main_window", None)
+        um = getattr(mw, "user_manager", None) if mw else None
+        user = getattr(mw, "current_user", None) if mw else None
+        for a in menu.actions():
+            key = a.property("perm_key")
+            if not key:
+                continue
+            if um is None:
+                a.setVisible(True)
+                continue
+            ok = all(bool(um.can(user, part)) for part in key.split("+") if part)
+            a.setVisible(ok)
+
     def bind_permission_ui(self):
         """调试界面内按细分权限显隐的功能元素（8 路相机各自调用一次）。
 
         页面本身能否进入由 MainWindow.switch_page 的 camera_debug 硬拦截决定；
         页内再按「相机工作模式 / 标定 / 拍照设置 / 4 个目标页签 / 检测列表
-        设置及其 7 个操作」逐项授权，保证无权限用户看不到任何相关内容。
+        设置及其 9 个操作」逐项授权，保证无权限用户看不到任何相关内容。
         """
         # 标题行：拍照设置 / 十字显示（十字线仍随相机调试总入口）
         bind(getattr(self, "_btn_photo_settings", None), "photo_settings")
@@ -4955,11 +5460,13 @@ class DebugView(QWidget):
         # 否则会连带隐藏同排的冻结 / 抓取 / 运行与「标定」按钮。
         bind(getattr(self, "_mode_label", None), "camera_work_mode")
         bind(getattr(self, "_trigger_mode", None), "camera_work_mode")
-        # 检测列表设置：父权限控制说明标签；7 个操作 = 父权限 AND 各自子权限
-        bind(getattr(self, "_tb_hint", None), "detect_list")
-        for btn, key in zip(getattr(self, "_toolbar_buttons", []),
-                            DETECT_LIST_PERMISSIONS):
-            bind(btn, "detect_list+" + key)
+        # 检测列表设置工具条：各按钮按自身 perm_key 绑定（2026-11-12 起为文字按钮，
+        # 「检测列表设置：」说明标签已删除；表格管理按钮为父权限 detect_list，
+        # 其余为 detect_list+子权限；收进其下拉的各菜单项由 aboutToShow 按子权限动态显隐）
+        for btn in getattr(self, "_toolbar_buttons", []):
+            _pk = btn.property("perm_key")
+            if _pk:
+                bind(btn, _pk)
         # 右侧内容：统计信息 / 运行日志分别对应报表与日志权限
         bind(getattr(self, "stats_card", None), "production_report")
         bind(getattr(self, "_run_log", None), "log_manage")
@@ -5023,6 +5530,23 @@ class DebugView(QWidget):
         for _k in set(self._col_perm.values()):
             _perm_cache[_k] = bool(can(_k))
         _pos_editable = self._reject_pos_editable()
+        # 2026-11-12 三次优化：列权限签名未变化时（例如切换用户后又因用户中心
+        # 关闭重复刷新一次、或同一类别账号间切换），flags 布局完全不需要重算，
+        # 直接跳过 4360 次 flags()/setFlags()。签名含列映射、各权限结果、剔除模式。
+        _sig = (tuple(sorted((c, k, bool(_perm_cache.get(k, False)))
+                             for c, k in self._col_perm.items())),
+                _pos_editable)
+        if getattr(self, "_col_perm_sig", None) == _sig:
+            return
+        self._col_perm_sig = _sig
+        # 2026-11-12 卡顿根因修复：QTableWidgetItem.setFlags() 同样会发射
+        # cellChanged 信号 → 触发 _on_cell_changed → _refresh_row_display（整行刷新）。
+        # 切换用户时 8 工位 × 5 文本列 × 109 行 = 4360 次 setFlags，此前每次都
+        # 触发一次整行刷新（剖析显示独占主线程 1.35s）。批量改 flags 属程序化刷新，
+        # 必须屏蔽提交回调；只在 flags **确实变化**时才调用 setFlags，进一步减少
+        # 信号发射（用户无权限/权限未变化时几乎全部跳过）。
+        _prev_suppress = getattr(self, "_cell_commit_suppress", False)
+        self._cell_commit_suppress = True
         table.setUpdatesEnabled(False)
         try:
             for c, key in self._col_perm.items():
@@ -5037,13 +5561,13 @@ class DebugView(QWidget):
                     if it is None:
                         continue
                     flags = it.flags()
-                    if permitted:
-                        flags |= Qt.ItemFlag.ItemIsEditable
-                    else:
-                        flags &= ~Qt.ItemFlag.ItemIsEditable
-                    it.setFlags(flags)
+                    new_flags = (flags | Qt.ItemFlag.ItemIsEditable) if permitted \
+                        else (flags & ~Qt.ItemFlag.ItemIsEditable)
+                    if new_flags != flags:
+                        it.setFlags(new_flags)
         finally:
             table.setUpdatesEnabled(True)
+            self._cell_commit_suppress = _prev_suppress
 
     def _on_table_cell_double_clicked(self, r, c):
         """文本列双击即编辑手势：无对应列权限时拦截并提示「当前用户无权限」。"""
@@ -5099,8 +5623,9 @@ class DebugView(QWidget):
         target = self._yield_all_on
         for r in self._yield_warn:
             self._yield_warn[r]["enabled"] = target
+        _yc = self._col_by_header("良率预警设置")
         for r in range(self._table.rowCount()):
-            w = self._table.cellWidget(r, 13)
+            w = self._table.cellWidget(r, _yc) if _yc >= 0 else None
             sw = w.findChild(ToggleSwitch) if w is not None else None
             if sw is not None:
                 sw.set_on(target)
@@ -5309,9 +5834,34 @@ class DebugView(QWidget):
         item = table.item(row, col)
         if item is None:
             return
+        # 2026-11-12：值未变化时不写、不刷新——程序化 setText/setFlags 也会发射
+        # cellChanged（即使内容相同），短路可避免无谓的整行刷新与结果重判。
+        text = item.text()
+        if str(self._table_data[row][di]) == text:
+            return
         # 规格/标称/补偿/收料位置统一以字符串存储，与 _collect_detect_settings 约定一致
-        self._table_data[row][di] = item.text()
+        self._table_data[row][di] = text
         self._refresh_row_display(row)
+
+    def _set_ok_ng_display(self, r):
+        """把 `_ok_ng_counts[r]` 的累计值写到「OK数」「NG数」两列。
+
+        2026-11-12：按表头名定位列号；值未变化时跳过 setText，避免每拍无谓
+        触发 cellChanged（该两列是只读系统计算列，不参与文本编辑回写）。
+        """
+        table = getattr(self, "_table", None)
+        if table is None:
+            return
+        counts = getattr(self, "_ok_ng_counts", {}).get(r, [0, 0])
+        for name, idx in (("OK数", 0), ("NG数", 1)):
+            c = self._col_by_header(name)
+            if c < 0:
+                continue
+            it = table.item(r, c)
+            if it is not None:
+                text = str(counts[idx])
+                if it.text() != text:
+                    it.setText(text)
 
     def _refresh_row_display(self, r):
         """按底层数据刷新一行的控件与单元格显示（开关/单位/预警/规格/结果）。"""
@@ -5339,7 +5889,9 @@ class DebugView(QWidget):
                 it = table.item(r, c)
                 if it is not None:
                     it.setText(str(row[idx]))
-            # 4) 检测值列（cellWidget 内的数值标签）
+                # 3b) OK数 / NG数：只同步显示，不在整行刷新时累加计数
+                self._set_ok_ng_display(r)
+                # 4) 检测值列（cellWidget 内的数值标签）
             lbl = self._val_labels.get(r)
             if lbl is not None:
                 lbl.setText(str(row[4]))
@@ -5355,7 +5907,8 @@ class DebugView(QWidget):
             # 6) 规格变化后按新限重判检测结果
             lo, hi = _to_float(row[6]), _to_float(row[7])
             if lo is not None and hi is not None and lo <= hi:
-                result = self._judge_result(bool(row[0]), row[4], lo, hi)
+                result = self._judge_result(
+                    bool(row[0]), row[4], lo, hi, unit=row[8])
                 row[10] = result
                 c = self._col_by_header("检测结果")
                 if c >= 0:
@@ -5526,8 +6079,22 @@ class DebugView(QWidget):
         btns.addWidget(ok_btn)
         btns.addWidget(cancel_btn)
         v.addLayout(btns)
-        if dlg.exec() != QDialog.DialogCode.Accepted:
+        # 非模态：打开后不影响生产运行界面 / 调试界面其它页面的操作
+        # （2026-11-12 反馈：之前 exec() 模态会卡住「设置为默认」弹出的子窗口、
+        # 且无法操作其它页面）。「确定」通过 accepted 信号写回，不阻塞事件循环。
+        dlg.accepted.connect(lambda: self._unit_apply(combos))
+        dlg.setModal(False)
+        dlg.setWindowModality(Qt.WindowModality.NonModal)
+        prev = getattr(self, "_unit_dlg", None)
+        if prev is not None and prev.isVisible():
+            prev.raise_()
+            prev.activateWindow()
             return
+        self._unit_dlg = dlg
+        dlg.show()
+
+    def _unit_apply(self, combos):
+        """「单位设置」弹窗「确定」写回：把当前选择按检测项编号全局联动到所有工位。"""
         n = 0
         for r, cb in combos:
             unit = cb.currentText()
@@ -5596,6 +6163,108 @@ class DebugView(QWidget):
                 json.dump({"units": code_unit}, f, ensure_ascii=False, indent=2)
         except Exception:
             pass
+
+    def _on_yield_alert_settings(self):
+        """工具条「良率预警设置」（2026-11-12 需求，出料设置右侧）。
+
+        打开全局设置窗：按工位分页列出**所有工位**的已勾选检测项目；工位数据
+        统一取 ``MainWindow.debug_views``（顺序固定），状态默认取自各工位检测表
+        「良率预警设置」列的当前值（单一数据源），因此从任意相机工位进入看到的
+        列表与开关/阈值状态完全一致。
+        该按钮默认仅超级管理员拥有，进入前再校验一次权限防止绕过入口。
+        弹窗为**非模态**：打开后不影响生产运行界面 / 调试界面其它页面的操作
+        （2026-11-12 反馈：之前 exec() 模态会卡住子窗口、无法操作其它页面）。
+        """
+        mw = getattr(self, "main_window", None)
+        um = getattr(mw, "user_manager", None)
+        user = getattr(mw, "current_user", None)
+        if um is not None and (not um.can(user, "detect_list")
+                               or not um.can(user, "detect_yield_alert")):
+            QMessageBox.warning(self, "无权限",
+                                "当前用户无权限使用「良率预警设置」")
+            return
+        views = [v for v in (getattr(mw, "debug_views", None) or [self])
+                 if hasattr(v, "_table_data")]
+        if not views:
+            views = [self]
+        stations = []
+        warn_defaults = {}
+        for v in views:
+            cam = getattr(v, "camera_name", "?")
+            items = []
+            for r, row in enumerate(v._table_data):
+                if not bool(row[0]):
+                    continue
+                code = str(row[1])
+                items.append((code, str(row[2])))
+                rec = v._yield_warn.get(
+                    r, {"enabled": True, "threshold": 50})
+                warn_defaults[_yield_alert_key(cam, code)] = {
+                    "enabled": bool(rec["enabled"]),
+                    "threshold": int(rec["threshold"])}
+            stations.append((cam, items))
+        # 已打开则置顶聚焦（单实例，避免堆叠）
+        prev = getattr(self, "_yield_alert_dlg", None)
+        if prev is not None and prev.isVisible():
+            prev.raise_()
+            prev.activateWindow()
+            return
+        dlg = YieldAlertDialog(self, stations, warn_defaults)
+        dlg.finished.connect(
+            lambda _r, d=dlg, vs=views, st=stations:
+                self._yield_alert_apply(d, vs, st))
+        dlg.setModal(False)
+        dlg.setWindowModality(Qt.WindowModality.NonModal)
+        self._yield_alert_dlg = dlg
+        dlg.show()
+
+    def _yield_alert_apply(self, dlg, views, stations):
+        """「良率预警设置」弹窗确定后写回：把开关与阈值同步到各工位检测表
+        「良率预警设置」列（enabled + 阈值），并持久化到全局选择字典。
+
+        弹窗为批量编辑入口，与检测表该列直接操作保持同一份数据（单一数据源）。
+        """
+        if dlg.result() != QDialog.DialogCode.Accepted:
+            return
+        snap = dlg.selection_snapshot()
+        view_by_cam = {getattr(v, "camera_name", "?"): v for v in views}
+        for cam, items in stations:
+            v = view_by_cam.get(cam)
+            if v is None:
+                continue
+            t = getattr(v, "_table", None)
+            col = v._col_by_header("良率预警设置") if t is not None else -1
+            for code, _name in items:
+                rec = snap.get(_yield_alert_key(cam, code))
+                if rec is None:
+                    continue
+                for r in range(len(v._table_data)):
+                    if (str(v._table_data[r][1]) == code
+                            and str(v._table_data[r][2] or "").strip()):
+                        yw = v._yield_warn.setdefault(
+                            r, {"enabled": True, "threshold": 50})
+                        yw["enabled"] = bool(rec["enabled"])
+                        yw["threshold"] = int(rec["threshold"])
+                        # 同步该列 cell widget（开关 + 阈值 spinbox）
+                        if t is not None and col >= 0:
+                            w = t.cellWidget(r, col)
+                            if w is not None:
+                                sw = w.findChild(ToggleSwitch)
+                                sp = w.findChild(QSpinBox)
+                                if sw is not None:
+                                    sw.set_on(bool(rec["enabled"]))
+                                if sp is not None:
+                                    sp.blockSignals(True)
+                                    sp.setValue(int(rec["threshold"]))
+                                    sp.blockSignals(False)
+                        break
+        selection = yield_alert_selection()
+        selection.clear()
+        selection.update(snap)
+        save_yield_alert_selection()
+        picked = sum(1 for st in snap.values() if st.get("enabled"))
+        self._dv_log(
+            f"检测项设置：良率预警设置已保存（{picked} 项纳入预警）")
 
     def _on_output_settings(self):
         """出料设置：对应检测表「收料位置」列——列出检测表中的所有检测项，
@@ -5687,8 +6356,22 @@ class DebugView(QWidget):
         btns.addWidget(ok_btn)
         btns.addWidget(cancel_btn)
         v.addLayout(btns)
-        if dlg.exec() != QDialog.DialogCode.Accepted:
+        # 非模态：打开后不影响生产运行界面 / 调试界面其它页面的操作
+        # （2026-11-12 反馈：之前 exec() 模态会卡住子窗口、无法操作其它页面）。
+        # 「确定」通过 accepted 信号写回，不阻塞事件循环。
+        dlg.accepted.connect(lambda: self._output_apply(combos))
+        dlg.setModal(False)
+        dlg.setWindowModality(Qt.WindowModality.NonModal)
+        prev = getattr(self, "_output_dlg", None)
+        if prev is not None and prev.isVisible():
+            prev.raise_()
+            prev.activateWindow()
             return
+        self._output_dlg = dlg
+        dlg.show()
+
+    def _output_apply(self, combos):
+        """「出料设置」弹窗「确定」写回：收料位置按检测项编号全局联动到所有工位。"""
         n = 0
         code_ports = {}
         for r, cb in combos:
@@ -5794,7 +6477,8 @@ class DebugView(QWidget):
                 chk = self._row_checks.get(r)
                 checked = bool(chk.is_on()) if chk else True
                 result = self._judge_result(
-                    checked, self._table_data[r][4], lo, hi)
+                    checked, self._table_data[r][4], lo, hi,
+                    unit=self._table_data[r][8])
                 if c_res >= 0:
                     res_item = table.item(r, c_res)
                     if res_item is not None:
@@ -5805,32 +6489,38 @@ class DebugView(QWidget):
             self._cell_commit_suppress = False
         return n
 
-    def _judge_result(self, checked, new_val, lo, hi):
-        """依据检测值相对规格上下限的实际结果判定 OK / NG / 待定。"""
+    def _judge_result(self, checked, new_val, lo, hi, unit=""):
+        """依据检测值相对规格上下限的实际结果判定 OK / NG / 待定。
+
+        - 未勾选 / 规格缺失异常 → 待定；
+        - **Dec 检测单位 + 规格 0/0（2026-11-12 需求①）**：二值判定，0 = OK、1 = NG；
+        - 其余：规格区间 ``[lo, hi]`` 内 = OK，越界 = NG。
+        """
         if not checked:
             return "待定"
         fv = _to_float(new_val)
         if fv is None or lo is None or hi is None:
             return "待定"
-        if lo == 0 and hi == 0:
-            # 中性出厂默认规格（0/0）视为未设置：示例演示值不判 NG（2026-11-11）
-            return "OK"
+        unit = str(unit or "").strip()
+        if unit == "Dec" and lo == 0 and hi == 0:
+            # 缺陷计数（Dec）：结果只能 0/1，0=OK 1=NG（2026-11-12 需求①）
+            return "OK" if fv == 0 else "NG"
         if lo <= fv <= hi:
             return "OK"
         return "NG"
 
     def refresh_detection_values(self, image_index=None):
         """本地图像窗口切换 / 运行一张图时调用：把各检测项的『检测值』按示例
-        基准波动生成新值（每运行一张图均会变化，用于示例演示），并据其相对规格
+        规则生成新值（每运行一张图均会变化，用于示例演示），并据其相对规格
         上下限的实际结果刷新『检测结果』列（OK / NG / 待定）。
 
-        - 已勾选且默认检测值为非 0 数值的项：围绕默认值浮动后取整
-          （整数类项目 ±25%、带小数类项目 ±12%，保证每次都有可见变化）。
-        - 默认值为 0 / 空（中性出厂默认）的项：生成**非 0 示例演示值**（2026-11-11）：
-          ① 已设有效规格（下限<上限）→ 围绕规格中值 ±12% 波动（大概率 OK、偶发 NG）；
-          ② 规格仍为中性默认 → 按（检测项编号, 相机序号）生成 1.00~9.99 的确定性
-          基准（同一检测项各相机略有差异），每次刷新 ±12% 波动，保留 2 位小数。
         - 未勾选：检测值保持默认，结果记为『待定』。
+        - **Dec 检测单位 + 规格 0/0（2026-11-12 需求①）**：示例值为 0/1 随机，
+          二值判定 0=OK、1=NG。
+        - **非 Dec 检测单位（2026-11-12 需求②）**：示例值按默认设置的上限/下限范围
+          给出（区间内大概率 OK，约 12% 概率轻微越界以演示 NG）；区间内=OK、越界=NG。
+          Dec 已设有效规格（非 0/0）亦按规格区间取示例值。
+        - 无有效规格（lo/hi 缺失/异常）：保留确定性基准演示值（1.00~9.99，各相机略异）。
         """
         table = getattr(self, "_table", None)
         if table is None:
@@ -5841,46 +6531,75 @@ class DebugView(QWidget):
         _digits = "".join(ch for ch in str(getattr(self, "camera_name", ""))
                           if ch.isdigit())
         cam_no = int(_digits) if _digits else 0
-        for r in range(table.rowCount()):
-            raw = self._table_data[r]
-            chk = self._row_checks.get(r)
-            checked = bool(chk.is_on()) if chk else True
-            default_val = raw[4]          # 默认检测值（字符串）
-            center = _to_float(default_val)
-            lo = _to_float(raw[6])        # 规格下限
-            hi = _to_float(raw[7])        # 规格上限
-            if not checked:
-                # 未勾选：检测值维持默认，结果=待定
-                new_val = default_val
-            elif center is not None and center != 0:
-                s = str(default_val)
-                dec = len(s.split(".")[-1]) if "." in s else 0
-                amp = 0.25 if dec == 0 else 0.12
-                noise = rnd.uniform(-amp, amp)
-                new_val = _round_like(center * (1.0 + noise), default_val)
-            else:
-                # 中性默认（0/空）：生成非 0 示例演示值，各相机略异、范围波动
-                if lo is not None and hi is not None and hi > lo:
-                    base = (lo + hi) / 2.0
+        c_res = self._col_by_header("检测结果")
+        counts_map = getattr(self, "_ok_ng_counts", None)
+        if counts_map is None:
+            counts_map = self._ok_ng_counts = {}
+        # 2026-11-12：每拍要写 109 行 × 3 列（检测结果 / OK数 / NG数），
+        # QTableWidgetItem.setText 会发射 cellChanged；这里全部是程序化刷新，
+        # 屏蔽表格信号避免每拍数百次回调（播放 / 切换用户卡顿防护）。
+        table.blockSignals(True)
+        try:
+            for r in range(table.rowCount()):
+                raw = self._table_data[r]
+                chk = self._row_checks.get(r)
+                checked = bool(chk.is_on()) if chk else True
+                default_val = raw[4]          # 默认检测值（字符串）
+                center = _to_float(default_val)
+                lo = _to_float(raw[6])        # 规格下限
+                hi = _to_float(raw[7])        # 规格上限
+                unit = str(raw[8] or "").strip()   # 检测单位（Dec 等）
+                if not checked:
+                    # 未勾选：检测值维持默认，结果=待定
+                    new_val = default_val
+                elif unit == "Dec" and lo == 0 and hi == 0:
+                    # 需求①：缺陷计数（Dec）规格 0/0 → 二值演示，0=OK 1=NG
+                    new_val = "0" if rnd.random() < 0.5 else "1"
+                elif lo is not None and hi is not None and lo <= hi:
+                    # 需求②：非 Dec（及 Dec 已设规格）的检测项，示例值按规格上下限
+                    # 范围给出；区间内大概率 OK，少量越界以演示 NG（越界幅度 ≤12% 区间跨度）
+                    if lo == hi:
+                        new_val = _round_like(lo, default_val)
+                    elif rnd.random() < 0.12:
+                        span = hi - lo
+                        if rnd.random() < 0.5:
+                            new_val = _round_like(
+                                lo - span * rnd.uniform(0.02, 0.12), default_val)
+                        else:
+                            new_val = _round_like(
+                                hi + span * rnd.uniform(0.02, 0.12), default_val)
+                    else:
+                        new_val = _round_like(
+                            lo + rnd.random() * (hi - lo), default_val)
                 else:
+                    # 无有效规格（lo/hi 缺失/异常）：保留确定性基准演示值
+                    # （同一检测项各相机略异、每次刷新 ±12% 波动）
                     try:
                         num = int(str(raw[1]).strip() or r)
                     except ValueError:
                         num = r
                     base = 1.0 + ((num * 37 + cam_no * 53) % 900) / 100.0
-                new_val = f"{base * (1.0 + rnd.uniform(-0.12, 0.12)):.2f}"
-            # 更新『检测值』列（**列号 9**，位于『检测结果』左侧）：为
-            # 「数值标签 + 值分布按钮」组合控件，
-            # 同步刷新底层数据（self._table_data[r][4]），供分布样本/中心值读取。
-            if 0 <= r < len(self._table_data):
-                self._table_data[r][4] = str(new_val)
-            val_lbl = self._val_labels.get(r)
-            if val_lbl is not None:
-                val_lbl.setText(str(new_val))
-            # 计算并刷新『检测结果』列（按表头名定位，位于收料位置左侧）
-            result = self._judge_result(checked, new_val, lo, hi)
-            c_res = self._col_by_header("检测结果")
-            res_item = table.item(r, c_res) if c_res >= 0 else None
-            if res_item is not None:
-                res_item.setText(result)
-                self._apply_result_color(res_item, result)
+                    new_val = f"{base * (1.0 + rnd.uniform(-0.12, 0.12)):.2f}"
+                # 更新『检测值』列（**列号 9**，位于『检测结果』左侧）：为
+                # 「数值标签 + 值分布按钮」组合控件，
+                # 同步刷新底层数据（self._table_data[r][4]），供分布样本/中心值读取。
+                if 0 <= r < len(self._table_data):
+                    self._table_data[r][4] = str(new_val)
+                val_lbl = self._val_labels.get(r)
+                if val_lbl is not None:
+                    val_lbl.setText(str(new_val))
+                # 计算并刷新『检测结果』列（按表头名定位，位于收料位置左侧）
+                result = self._judge_result(checked, new_val, lo, hi, unit=unit)
+                # 2026-11-12：按判定结果累计 OK数 / NG数（待定不计），并刷新两列
+                counts = counts_map.setdefault(r, [0, 0])
+                if result == "OK":
+                    counts[0] += 1
+                elif result == "NG":
+                    counts[1] += 1
+                self._set_ok_ng_display(r)
+                res_item = table.item(r, c_res) if c_res >= 0 else None
+                if res_item is not None:
+                    res_item.setText(result)
+                    self._apply_result_color(res_item, result)
+        finally:
+            table.blockSignals(False)

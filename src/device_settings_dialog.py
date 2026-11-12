@@ -1301,18 +1301,30 @@ class RejectSettingsDialog(QDialog):
             ("all_ng2", "全踢NG2料盒"),
             ("all_rst", "全踢RST料盒"),
         ]
+        # 2026-11-12 UI 需求（二次修订）：方块/圆形勾选框——未勾选：白色空心边框；
+        # 勾选：蓝色实心（方块 / 圆形同规格，纯色填充不依赖图片）。补 `:disabled`
+        # 态——无 reject_debug 权限被禁用时视觉可辨（半透明白描边 + 暗底），
+        # 避免"看着能点、点了没反应"的困惑
         radio_style = (
             f"QRadioButton {{ color: {COLORS['text_primary']}; font-size: 12px; spacing: 6px; }}"
             f"QRadioButton::indicator {{ width: 14px; height: 14px; border-radius: 7px; "
-            f"border: 1px solid {COLORS['text_secondary']}; background-color: {COLORS['bg_card']}; }}"
-            f"QRadioButton::indicator:checked {{ border: 4px solid {COLORS['accent_blue']}; "
-            f"background-color: {COLORS['bg_card']}; }}")
+            f"border: 1px solid #FFFFFF; background-color: transparent; }}"
+            f"QRadioButton::indicator:checked {{ border: 1px solid {COLORS['accent_blue']}; "
+            f"background-color: {COLORS['accent_blue']}; }}"
+            f"QRadioButton::indicator:disabled {{ border: 1px solid rgba(255,255,255,90); "
+            f"background-color: rgba(255,255,255,18); }}"
+            f"QRadioButton::indicator:checked:disabled {{ border: 1px solid #3450E0; "
+            f"background-color: #3450E0; }}")
         cb_style = (
             f"QCheckBox {{ color: {COLORS['text_primary']}; font-size: 12px; spacing: 6px; }}"
-            f"QCheckBox::indicator {{ width: 14px; height: 14px; border-radius: 2px; "
-            f"border: 1px solid {COLORS['text_secondary']}; background-color: {COLORS['bg_card']}; }}"
-            f"QCheckBox::indicator:checked {{ background-color: {COLORS['accent_blue']}; "
-            f"border-color: {COLORS['accent_blue']}; }}")
+            f"QCheckBox::indicator {{ width: 14px; height: 14px; border-radius: 3px; "
+            f"border: 1px solid #FFFFFF; background-color: transparent; }}"
+            f"QCheckBox::indicator:checked {{ border: 1px solid {COLORS['accent_blue']}; "
+            f"background-color: {COLORS['accent_blue']}; }}"
+            f"QCheckBox::indicator:disabled {{ border: 1px solid rgba(255,255,255,90); "
+            f"background-color: rgba(255,255,255,18); }}"
+            f"QCheckBox::indicator:checked:disabled {{ border: 1px solid #3450E0; "
+            f"background-color: #3450E0; }}")
         self._debug_group = QButtonGroup(self)
         self._debug_group.setExclusive(True)   # 5 种位置剔除模式只能单选
         self._debug_radios = {}

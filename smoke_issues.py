@@ -337,22 +337,25 @@ dv._playing = False
 # ============ 新需求：调试界面检测项表格工具条与「良率预警设置」列 ============
 src_dv = open("C:/Users/Lenovo/WorkBuddy/Teruo/src/debug_view.py", encoding="utf-8").read()
 # 1) 工具条顺序（运行时校验从左到右）：
-#    设置为默认 → 恢复至默认 → 恢复至出厂 → 单位设置 → 出料设置 → 方案同步
-#    → 规格自动调整（2026-10-20 新增）
+#    设置为默认 → 恢复至默认 → 设置为出厂 → 恢复至出厂 → 单位设置
+#    → 出料设置 → 良率预警设置（2026-11-12 新增，出料设置右侧）→ 方案同步
+#    → 规格自动调整
 #    （「检测项全开/关」已移到「是否检测」列头右侧，不再出现在工具条）
 from PyQt6.QtWidgets import QPushButton as _QPushButton, QHBoxLayout as _QHBoxLayout
-_TOOLBAR_ORDER = ["设置为默认", "恢复至默认", "设置为出厂", "恢复至出厂",
-                  "单位设置", "出料设置", "方案同步", "规格自动调整"]
+# 2026-11-12：新增「表格管理」按钮（检测列表设置右侧第一个），把原独立的
+# 「设置为默认 / 恢复至默认 / 设置为出厂 / 恢复至出厂 / 方案同步」收进其下拉菜单
+# （方案同步在菜单内改名「表格同步至」）；「规格自动调整」改名为「规格设置」。
+_TOOLBAR_ORDER = ["表格管理", "单位设置", "出料设置", "良率预警设置", "规格设置"]
 _toolbar_found = None
 for _lay in dv.findChildren(_QHBoxLayout):
     _widgets = [_lay.itemAt(i).widget() for i in range(_lay.count())]
-    # 工具条为「图标 + 悬浮提示」按钮，text() 为空，须按 toolTip() 校验顺序
-    _tips = [w.toolTip() for w in _widgets if isinstance(w, _QPushButton)]
+    # 工具条为文字按钮（2026-11-12 起按钮文字直接显示名称），按 text() 校验顺序
+    _tips = [w.text() for w in _widgets if isinstance(w, _QPushButton)]
     if _tips == _TOOLBAR_ORDER:
         _toolbar_found = _lay
         break
 check(_toolbar_found is not None,
-      "工具条: 运行时按钮从左到右顺序为 设置为默认→恢复至默认→设置为出厂→恢复至出厂→单位设置→出料设置→方案同步→规格自动调整")
+      "工具条: 运行时按钮从左到右顺序为 表格管理→单位设置→出料设置→良率预警设置→规格设置")
 _toolbar_texts = ([(_toolbar_found.itemAt(i).widget().text() or
                     _toolbar_found.itemAt(i).widget().toolTip())
                    for i in range(_toolbar_found.count())
@@ -360,9 +363,21 @@ _toolbar_texts = ([(_toolbar_found.itemAt(i).widget().text() or
                   if _toolbar_found is not None else [])
 check("检测项全开" not in _toolbar_texts,
       "工具条: 「检测项全开」已移出工具条（改为是否检测列头覆盖按钮）")
-# 2) 检测项表格新增「良率预警设置」列（位于「检测项操作」右侧，第 14 列）
-check(dv._table.columnCount() == 14,
-      f"良率预警列: 表格列数=14（实际 {dv._table.columnCount()}）")
+# 2026-11-12 需求②：工具条由「图标 + 悬浮提示」改为文字按钮，并删除左侧
+# 「检测列表设置：」说明标签（按钮自身文字已标明用途）
+from PyQt6.QtWidgets import QLabel as _QLabel
+check(all(b.text() == b.toolTip() and b.text() for b in dv._toolbar_buttons),
+      "工具条: 5 个按钮均为文字按钮（文字直接显示名称，不再纯图标 + 悬浮提示）")
+check(all(not (isinstance(w, _QLabel) and "检测列表设置" in w.text())
+          for w in dv.findChildren(_QLabel)),
+      "工具条: 「检测列表设置：」说明标签已删除")
+# 2) 检测项表格列序（2026-11-12：14 列 → 16 列，「检测项操作」右侧新增 OK数 / NG数）
+_hdrs_all = [dv._table.horizontalHeaderItem(c).text()
+             for c in range(dv._table.columnCount())]
+check(dv._table.columnCount() == 16,
+      f"检测列表: 表格列数=16（实际 {dv._table.columnCount()}）")
+check(_hdrs_all[12:16] == ["检测项操作", "OK数", "NG数", "良率预警设置"],
+      "2026-11-12: 「检测项操作」右侧新增 OK数 / NG数，良率预警设置顺延为最后一列")
 # 最后一列列头名称左对齐显示
 _last_hdr = dv._table.horizontalHeaderItem(dv._table.columnCount() - 1)
 check(_last_hdr.text() == "良率预警设置"
@@ -371,11 +386,11 @@ check(_last_hdr.text() == "良率预警设置"
 # 计算元素精确查找列表：行距放宽（不拥挤）
 check("inner_lay.setSpacing(10)" in src_dv and "padding-left: 6px" in src_dv,
       "精确查找列表: 行间距 10px + 名称左内边距（不再拥挤）")
-check(dv._table.horizontalHeaderItem(13).text() == "良率预警设置",
-      "良率预警列: 第14列表头为「良率预警设置」")
+check(dv._table.horizontalHeaderItem(15).text() == "良率预警设置",
+      "良率预警列: 第16列表头为「良率预警设置」")
 check(dv._yield_warn.get(0) == {"enabled": True, "threshold": 50},
       "良率预警列: 默认启用且阈值 50%")
-_cw = dv._table.cellWidget(0, 13)
+_cw = dv._table.cellWidget(0, _hdrs_all.index("良率预警设置"))
 from components import ToggleSwitch as _TS
 from PyQt6.QtWidgets import QSpinBox as _QSpinBox
 _spin = _cw.findChildren(_QSpinBox)
@@ -658,9 +673,17 @@ dv._reposition_overlay_buttons()   # 显式重定位（未 show 时 timer 可能
 check(_yield_all.width() > 0 and _yield_all.height() > 0,
       "预警开关: 按钮已初始化且可点击")
 if _hh.viewport().width() > 0:   # 表头视口有效时才校验精确几何（未展示时跳过）
-    _exp = _hh.sectionViewportPosition(_last) + _hh.sectionSize(_last) - _yield_all.width() - 4
-    check(abs(_yield_all.x() - max(0, int(_exp))) <= 6,
-          "预警开关: 重定位到「良率预警设置」列头右侧")
+    _posL = _hh.sectionViewportPosition(_last)
+    _vwL = _hh.viewport().width()
+    if _posL >= _vwL or _posL + _hh.sectionSize(_last) <= 0:
+        # 2026-11-12 UI 反馈修复：目标列滚出列头视口 → 覆盖控件隐藏（不压其它列头）
+        check(_yield_all.isHidden(),
+              "预警开关: 目标列滚出列头视口时隐藏（不压在其它列头上）")
+    else:
+        _exp = _posL + _hh.sectionSize(_last) - _yield_all.width() - 4
+        check(_yield_all.x() >= max(_posL, 0)
+              and abs(_yield_all.x() - max(0, int(_exp))) <= 6,
+              "预警开关: 重定位到「良率预警设置」列头右侧")
 else:
     check(True, "预警开关: 未展示时跳过几何校验（覆盖在列头视口，show 后在列头右侧）")
 _yield_all.click(); app.processEvents()
@@ -2222,6 +2245,49 @@ check(_rsd._debug_radios["by_settings"].isChecked()
       "位置调试: 默认「按剔除设置剔除」")
 check(not _rsd.debug_filter_recheck.isChecked() and not _rsd.debug_skip_feed.isChecked(),
       "位置调试: 过滤重检/隔料剔除默认均不勾选")
+# 2026-11-12 UI 需求（二次修订→四次修订）：未勾选白色空心；勾选蓝色实心
+# （方块纯色填充，不依赖图片，规避勾选态不显示回归）
+_rsd_cb_style = _rsd.debug_filter_recheck.styleSheet()
+check("border: 1px solid #FFFFFF" in _rsd_cb_style
+      and "checked { border: 1px solid #4261FF" in _rsd_cb_style
+      and "background-color: #4261FF" in _rsd_cb_style
+      and "image: url(" not in _rsd_cb_style,
+      "位置调试样式: 方块勾选框白色空心、勾选蓝色实心、无 image 依赖")
+_rsd_rb_style = next(iter(_rsd._debug_radios.values())).styleSheet()
+check("border: 1px solid #FFFFFF" in _rsd_rb_style
+      and "checked { border: 1px solid #4261FF" in _rsd_rb_style
+      and "background-color: #4261FF" in _rsd_rb_style,
+      "位置调试样式: 单选框白色空心边框、勾选态蓝色实心圆")
+# 2026-11-12 UI 需求（四次修订）：统一勾选框规格——未勾选白色空心、勾选蓝色实心，
+# 方块(QCheckBox) / 圆形(QRadioButton) 同规格；**纯色填充、不依赖图片**，
+# 彻底规避 QSS image: url() 加载失败时整条 :checked 规则被丢弃导致的
+# 「已勾选但不显示」（权限配置 / 剔除设定勾选框历史回归：框已勾选却看着没勾）
+def _has_image_url(style):
+    return "image: url(" in style
+_rsd_cb_style = _rsd.debug_filter_recheck.styleSheet()
+check("border: 1px solid #FFFFFF" in _rsd_cb_style
+      and "checked { border: 1px solid #4261FF" in _rsd_cb_style
+      and "background-color: #4261FF" in _rsd_cb_style
+      and not _has_image_url(_rsd_cb_style),
+      "位置调试样式: 方块勾选框白空心/蓝实心/无 image 依赖（修勾选态不显示回归）")
+import styles as _st
+import re as _re
+_gqss = _st.build_main_style()
+_cb_block = _re.search(r"QCheckBox::indicator:checked[^}]*\}", _gqss)
+_cb_block = _cb_block.group(0) if _cb_block else ""
+check("QCheckBox::indicator:checked" in _gqss
+      and "QRadioButton::indicator:checked" in _gqss
+      and "image: url(" not in _cb_block
+      and "background-color" in _cb_block,
+      "全局勾选框样式: 方/圆勾选态规则为纯蓝实心、勾选态无 image 依赖")
+_dv_chk = __import__("debug_view").SpecAutoAdjustDialog._chk_style()
+check("border: 1px solid #FFFFFF" in _dv_chk
+      and not _has_image_url(_dv_chk),
+      "检测表勾选框样式: 与全局统一（白空心/蓝实心，无 image 依赖）")
+_USERMOD_CHK = __import__("user_module").CHECK_QSS
+check("1px solid #FFFFFF" in _USERMOD_CHK
+      and not _has_image_url(_USERMOD_CHK),
+      "权限配置勾选框: 与全局统一（白空心/蓝实心，无 image 依赖）")
 _rsd._debug_radios["all_ng1"].setChecked(True)
 check(_rj["debug_mode"] == "all_ng1"
       and sum(rb.isChecked() for rb in _rsd._debug_radios.values()) == 1,
@@ -2803,6 +2869,17 @@ for _nm, _sb in (("缩放比例", _isd._scale), ("图像质量", _isd._quality),
           f"图片保存: {_nm} 箭头样式与「触发设定」一致（未覆盖箭头/未自绘）")
 check(_isd._path_edit.text().strip() != "",
       f"图片保存: 保存路径有默认值 (实际 {_isd._path_edit.text()})")
+# 2026-11-12 UI 需求：对话框加宽 640 + 光标移到末尾（长路径总是显示尾部）
+check(_isd.minimumWidth() >= 640,
+      f"图片保存: 对话框加宽到 ≥640（实际 {_isd.minimumWidth()}）")
+check(_isd._path_edit.cursorPosition() == len(_isd._path_edit.text()),
+      "图片保存: 保存路径光标位于末尾（长路径显示尾部）")
+_long_path = os.path.normpath(os.path.join(_tempfile.gettempdir(),
+                                           "a" * 80, "sub", "images"))
+_isd._path_edit.setText(_long_path)
+_isd._path_edit.setCursorPosition(len(_long_path))
+check(_isd._path_edit.cursorPosition() == len(_long_path),
+      "图片保存: 长路径（>输入框宽）光标同样可置于末尾")
 
 # —— 配置保存（落临时目录，不污染工程）——
 _isd._strategy.setCurrentText("指定检测项不良")
@@ -3530,6 +3607,13 @@ from vision_copilot import VisionCopilotDialog, CopilotConfigDialog
 from PyQt6.QtGui import QImage as _QI, QColor as _QC
 _vcd = VisionCopilotDialog(_mw, _mw)
 check(isinstance(_vcd, VisionCopilotDialog), "Copilot: 可构造 VisionCopilotDialog")
+# 2026-11-12 UI 需求：默认页面高度 = 能完整显示欢迎页内容的最小高度
+# （adjustSize 后默认高即最小高，确保内容不出现内部截断）
+_vcd_h = _vcd.height()
+check(_vcd.minimumSize().height() == _vcd_h
+      and 440 <= _vcd_h <= 820,
+      f"Copilot: 主对话窗默认高度=完整显示最小高度 (实际 {_vcd.width()}×{_vcd_h}，"
+      f"最小高 {_vcd.minimumSize().height()})")
 check(len(_vcd._pending) == 0, "Copilot: 初始无待发送图片")
 _img = _QI(40, 30, _QI.Format.Format_RGB32)
 _img.fill(_QC(255, 0, 0))
@@ -3649,8 +3733,8 @@ from user_manager import (
     PERMISSION_MODULE as _PMOD, permission_rows as _prows,
     NAV_PERMISSION_KEY as _NPK, DEFAULT_CATEGORY_PERMISSIONS as _PDEF,
 )
-check(len(_PGRP) == 12 and len(_PP) == 57,
-      f"权限细化: 12 个模块 / 57 项功能（实际 {len(_PGRP)} / {len(_PP)}）")
+check(len(_PGRP) == 12 and len(_PP) == 58,
+      f"权限细化: 12 个模块 / 58 项功能（实际 {len(_PGRP)} / {len(_PP)}）")
 check(_PP.get("reject_debug") == "剔除位置调试"
       and _PMOD["reject_debug"] == "检测与分选",
       "权限细化: 新增「剔除位置调试」可配置权限项")
@@ -3800,6 +3884,71 @@ for _dv in _mw.debug_views:
     check(_dv._btn_crosshair.isCheckable()
           and _dv._btn_crosshair.text() == "十字显示",
           f"十字显示: {_dv.camera_name} 为可切换功能按钮")
+    # 2026-11-12 需求：进入相机调试界面十字线默认显示（按钮默认勾选态）
+    check(_dv._btn_crosshair.isChecked()
+          and _dv._cams[0].screen.crosshair_visible() is True,
+          f"十字显示: {_dv.camera_name} 进入界面默认显示十字线（按钮默认勾选）")
+    # 2026-11-12 需求：进入相机调试界面默认显示图像上的计算元素
+    check(getattr(_dv._cams[0], "_elements_on", False) is True,
+          f"计算元素: {_dv.camera_name} 主画布默认显示图像上的计算元素")
+    # 2026-11-12 需求：通道下拉框大小与「十字显示」按钮一致（高 22px）
+    check(_dv._cams[0]._chan_combo.minimumHeight() == 22
+          and _dv._cams[0]._chan_combo.maximumHeight() == 22,
+          f"通道下拉: {_dv.camera_name} 大小与「十字显示」按钮一致（高 22px）")
+    # 2026-11-12 需求：R/G/B 通道画布右上角不再显示 128×96 分辨率标签
+    check(all(_dv._cams[i]._res_label.isHidden() for i in (1, 2, 3)),
+          f"通道画布: {_dv.camera_name} R/G/B 画布右上角 128×96 标签已删除")
+    # 2026-11-12 UI 需求：眼睛按钮放大（22×22）并与通道下拉上下居中对齐
+    _eye = _dv._cams[0]._eye_btn
+    _ctrl = _dv._cams[0]._ctrl
+    check(_eye.width() == 22 and _eye.height() == 22,
+          f"眼睛按钮: {_dv.camera_name} 已放大（22×22，与下拉同高）")
+    check(abs(_eye.geometry().center().y() - _ctrl.geometry().center().y()) <= 1,
+          f"眼睛按钮: {_dv.camera_name} 与通道下拉上下居中对齐")
+    # 2026-11-12 UI 需求：R/G/B 通道标题文字浮于画布上方（不占画布顶部一条）
+    check(all(_dv._cams[i]._overlay_title is True
+              and _dv._cams[i]._title_row is None
+              and _dv._cams[i]._name.parentWidget() is _dv._cams[i]
+              and _dv._cams[i]._name.geometry().intersects(_dv._cams[i].screen.geometry())
+              for i in (1, 2, 3)),
+          f"通道标题浮层: {_dv.camera_name} R/G/B 标题文字浮于画布上方")
+    # 2026-11-12 UI 需求（二次修订）：浮层小字号 10px + 更透明底色（0.45）
+    check(all("font-size: 10px" in _dv._cams[i]._name.styleSheet()
+              and "rgba(20,22,26,0.45)" in _dv._cams[i]._name.styleSheet()
+              for i in (1, 2, 3)),
+          f"通道标题浮层: {_dv.camera_name} R/G/B 浮层字号 10px、底色更透明")
+    # 2026-11-12 UI 需求（二次修订）：R/G/B 画布放大 130×97、卡片内边距收窄，
+    # 列总高 3×97+2×4=299 ≤ 主画布 300（上下限位置不变）
+    check(all(_dv._cams[i].width() == 130 and _dv._cams[i].height() == 97
+              for i in (1, 2, 3)),
+          f"通道画布: {_dv.camera_name} R/G/B 画布放大为 130×97（间隙收窄）")
+    check(3 * 97 + 2 * 4 <= _dv._cams[0].height(),
+          f"通道画布: {_dv.camera_name} R/G/B 列总高不超过主画布高度（上下限不动）")
+    # 2026-11-12 UI 需求（二次修订）：画布卡片恢复边框/底色样式（V3.8.5.2 误删修复）
+    check("border: 1px solid" in _dv._cams[0].styleSheet()
+          and "border: 1px solid" in pv.cam_grid.cams[0].styleSheet(),
+          f"画布边框: {_dv.camera_name} 调试/生产画布卡片均有边框样式（边界感）")
+    # 2026-11-12 UI 需求（二次修订）：眼睛按钮底窗透明；下拉文字居中+内边距收窄
+    check("background-color: transparent" in _eye.styleSheet(),
+          f"眼睛按钮: {_dv.camera_name} 底窗透明（无黑底）")
+    # 2026-11-12 UI 需求（二次修订）：当前项文字居中改用 _CenterCombo 子类
+    # （PyQt6 QComboBox 无 setAlignment、QSS qproperty-alignment 也不生效），
+    # 宽度收窄 54px 只需显示完整 3 字项
+    import components as _components
+    check(isinstance(_dv._cams[0]._chan_combo, _components._CenterCombo)
+          and _dv._cams[0]._chan_combo.minimumWidth() == 54
+          and _dv._cams[0]._chan_combo.maximumWidth() == 54
+          and "padding:1px 2px" in _dv._cams[0]._chan_combo.styleSheet(),
+          f"通道下拉: {_dv.camera_name} 当前项文字居中（_CenterCombo 子类）、宽度 54px、内边距收窄")
+    # 2026-11-12 UI 需求（三次修订）：标题改为「R/G/B」单字并**与各自画布左上角
+    # 严格对齐**（状态点顶到画布左沿、文字顶到画布上沿，无额外空隙）
+    check(all(_dv._cams[i]._name.text() == "RGB"[i - 1]
+              for i in (1, 2, 3)),
+          f"通道标题: {_dv.camera_name} R/G/B 标题去掉「通道」两字（仅 R/G/B）")
+    check(all(_dv._cams[i]._dot.x() == _dv._cams[i].screen.x()
+              and _dv._cams[i]._name.y() == _dv._cams[i].screen.y()
+              for i in (1, 2, 3)),
+          f"通道标题: {_dv.camera_name} R/G/B 浮层与画布左上角严格对齐（无空隙）")
     _dv._btn_crosshair.setChecked(True)
     check(_dv._cams[0].screen.crosshair_visible() is True,
           f"十字显示: {_dv.camera_name} 点击后画布开启十字线")
@@ -3826,6 +3975,40 @@ check(_hrow >= 110 and _vcol >= 70,
       f"十字显示: 中心横线/竖线贯穿画布（{_hrow}/{_vcol} 像素）")
 check(_offrow <= 4,
       f"十字显示: 非中心行无横线，交点居中（实际 {_offrow} 像素）")
+
+# ============ 2026-11-12 UI 改善：列头批量下拉始终处于「是否检测」列头窗口内 ============
+# 此前横向滚动后按钮被 max(0,x) 夹在 x=0 处、压在其它列头（如「标称值」）上。
+_dv0 = _mw.debug_views[0]
+_hh0 = _dv0._table.horizontalHeader()
+_sb0 = _dv0._table.horizontalScrollBar()
+_dm = _dv0._detect_mode_combo
+_dv0._reposition_overlay_buttons()
+_pos1 = _hh0.sectionViewportPosition(1)
+_size1 = _hh0.sectionSize(1)
+if 0 <= _pos1 and _pos1 + _size1 <= _hh0.viewport().width():
+    check(not _dm.isHidden() and _dm.x() >= _pos1
+          and _dm.x() + _dm.width() <= _pos1 + _size1,
+          "列头批量下拉: 列可见时处于「是否检测」列头窗口内")
+else:
+    check(True, "列头批量下拉: 未展示/视口过窄时跳过可见几何校验")
+# 滚动到最右：「是否检测」列滚出视口 → 下拉隐藏（不压在其它列头上）
+_sb0.setValue(_sb0.maximum())
+app.processEvents()
+_dv0._reposition_overlay_buttons()
+_pos1 = _hh0.sectionViewportPosition(1)
+if _pos1 + _hh0.sectionSize(1) <= 0:
+    check(_dm.isHidden(),
+          "列头批量下拉: 「是否检测」列滚出视口后下拉隐藏（不再压在其它列头上）")
+else:
+    check(True, "列头批量下拉: 视口内列未滚出，跳过隐藏校验")
+# 滚回最左：下拉重新显示并回到「是否检测」列头窗口内
+_sb0.setValue(0)
+app.processEvents()
+_dv0._reposition_overlay_buttons()
+_pos1 = _hh0.sectionViewportPosition(1)
+check(not _dm.isHidden() and _dm.x() >= _pos1
+      and _dm.x() + _dm.width() <= _pos1 + _hh0.sectionSize(1),
+      "列头批量下拉: 滚回后重新显示并处于「是否检测」列头窗口内")
 
 # ============ 新需求 2：按登录用户权限隐藏无权限的按钮 / 页面 / 窗口 / 内容 ============
 _bw = _PU.bound_widgets(_mw)
@@ -4008,12 +4191,12 @@ check(all(_PMOD[k] == "相机与图像" for k in
 check([_PP[k] for k in _TTP] == ["检测流程设计", "产品目标检索",
                                  "计算元素精确查找", "图像效果调节"],
       "相机调试细分: 4 个目标页签权限标签与功能名对应")
-check(len(_DLP) == 8 and all(_PMOD[k] == "检测列表设置" for k in _DLP),
-      "检测列表细分: 8 个操作归属独立「检测列表设置」模块")
+check(len(_DLP) == 9 and all(_PMOD[k] == "检测列表设置" for k in _DLP),
+      "检测列表细分: 9 个操作归属独立「检测列表设置」模块")
 check([_PP[k] for k in _DLP] == ["设置为默认", "恢复至默认", "设置为出厂",
                                  "恢复至出厂", "单位设置", "出料设置",
-                                 "方案同步", "规格自动调整"],
-      "检测列表细分: 8 个权限项标签与工具条按钮提示逐一对应")
+                                 "良率预警设置", "方案同步", "规格自动调整"],
+      "检测列表细分: 9 个权限项标签与工具条按钮提示逐一对应")
 check(_PP["detect_sync_all"] == "方案同步",
       "检测列表细分: 方案同步显示名已生效，权限键仍为 detect_sync_all 兼容旧配置")
 _dv0 = _mw.debug_views[0]
@@ -4029,13 +4212,30 @@ check(all(_PU.perm_key_of(_dv0._target_tabs.widget(i)) == k
 check(all(_dv0._target_tabs.isTabVisible(i) == _mw._can(k)
           for i, k in enumerate(_TTP)),
       "相机调试细分: 页签显隐 == 对应细分权限")
-check(_PU.perm_key_of(_dv0._tb_hint) == "detect_list"
-      and all(_PU.perm_key_of(b) == "detect_list+" + k
-              for b, k in zip(_dv0._toolbar_buttons, _DLP)),
-      "检测列表细分: 父权限 + 7 个子操作组合绑定")
-check(all((not b.isHidden()) == (_mw._can("detect_list") and _mw._can(k))
-          for b, k in zip(_dv0._toolbar_buttons, _DLP)),
-      "检测列表细分: 按钮显隐 == 父权限 AND 子权限")
+_tb = _dv0._toolbar_buttons
+check(_PU.perm_key_of(_tb[0]) == "detect_list",
+      "检测列表细分: 表格管理按钮绑定父权限 detect_list")
+_toolbar_perm_map = {"单位设置": "detect_unit", "出料设置": "detect_output",
+                     "良率预警设置": "detect_yield_alert", "规格设置": "detect_auto_spec"}
+check(all(_PU.perm_key_of(b) == "detect_list+" + _toolbar_perm_map[b.toolTip()]
+        for b in _tb[1:]),
+      "检测列表细分: 工具条 4 个操作按钮绑定 detect_list+子权限（表格管理收纳其余）")
+check(all((not b.isHidden()) == (_mw._can("detect_list")
+        and _mw._can(_toolbar_perm_map[b.toolTip()])) for b in _tb[1:]),
+      "检测列表细分: 工具条按钮显隐 == 父权限 AND 子权限")
+check("规格设置" in _TOOLBAR_ORDER and "规格自动调整" not in _TOOLBAR_ORDER,
+      "规格设置: 原「规格自动调整」改名「规格设置」")
+# 「表格管理」下拉菜单收纳原平铺按钮（5 项，各自带子权限标记）
+_tm = getattr(_dv0, "_table_manage_menu", None)
+check(_tm is not None and len(_tm.actions()) == 5,
+      "表格管理: 下拉菜单收纳 5 个操作（设置为默认/恢复至默认/设置为出厂/恢复至出厂/表格同步至）")
+check(any(a.text() == "表格同步至" for a in _tm.actions()),
+      "表格同步至: 原「方案同步」在表格管理菜单内改名")
+check(all(a.property("perm_key") in
+          ("detect_list+detect_default_set", "detect_list+detect_restore_default",
+           "detect_list+detect_set_factory", "detect_list+detect_restore_factory",
+           "detect_list+detect_sync_all") for a in _tm.actions()),
+      "表格管理: 菜单项各自绑定子权限")
 
 # 检测项列表按 8 个列头细分权限（标称值 / 补偿值 / 规格下限 / 规格上限 /
 # 单位 / 收料位置 / 检测项操作 / 良率预警设置）：列始终可见，无权限时只读
@@ -4084,8 +4284,8 @@ for _c in _PCATS:
     check(all(_PDEF[_c][k] == _PDEF[_c]["run_settings"] for k in _DTP),
           f"权限细分兼容: {_c} 设备子页默认继承入口权限")
     check(all(_PDEF[_c][k] == _PDEF[_c]["camera_debug"] for k in _DLP
-              if k != "detect_set_factory"),
-          f"权限细分兼容: {_c} 检测列表子项默认继承相机调试权限（设置为出厂除外，默认仅超级管理员）")
+              if k not in ("detect_set_factory", "detect_yield_alert")),
+          f"权限细分兼容: {_c} 检测列表子项默认继承相机调试权限（设置为出厂 / 良率预警设置除外，默认仅超级管理员）")
 check(_PDEF["设备工程师"]["element_find"]
       == _PDEF["设备工程师"]["camera_calibration"],
       "权限细分兼容: 计算元素精确查找默认继承相机标定权限")
@@ -4129,12 +4329,12 @@ def _pick_mode(_v, _m):
     app.processEvents()
 
 def _in_debug_mode(_v):
-    """该工位是否处于「调试」模式：仅 102 歪料 / 104 碎料 启用（2026-11-11 新名称）。"""
+    """该工位是否处于「调试」模式：仅 100~103 启用（2026-11-12 UI 需求）。"""
     _flags = []
     for _r, _sw in _v._row_checks.items():
         _row = _v._table_data[_r]
-        _expect = (str(_row[1]) in ("102", "104")
-                   or str(_row[2]) in ("歪料", "碎料"))
+        _expect = (str(_row[1]) in ("100", "101", "102", "103")
+                   or str(_row[2]) in ("有无（飞料）", "偏位", "歪料", "连料"))
         _flags.append(_sw.is_on() == _expect)
     return bool(_flags) and all(_flags)
 
@@ -4146,7 +4346,7 @@ for _v in _views_all:
 # 1) 从工位 1 选择「调试」→ 8 个工位全部进入调试
 _pick_mode(_views_all[0], "调试")
 check(all(_in_debug_mode(_v) for _v in _views_all),
-      "检测项调试联动: 工位1 选「调试」→ 全部 8 个相机工位检测项均只启用 102/104")
+      "检测项调试联动: 工位1 选「调试」→ 全部 8 个相机工位检测项均只启用 100~103")
 check(all(_v._detect_mode_combo.currentText() == "调试" for _v in _views_all),
       "检测项调试联动: 全部工位列头下拉同步显示「调试」")
 
@@ -4330,10 +4530,20 @@ check(bool(_ver) and "def zip_path" in _mpz_src and "V{ver}.zip" in _mpz_src
       and 'PKG_NAME = "EcompVision Inspector"' in _mpz_src
       and "LEGACY_ZIP_PREFIX" in _mpz_src,
       f"程序包命名: 按「名字 + V{_ver}」生成压缩包，名字与顶层文件夹均不含「便携版」")
+# 2026-11-12 UI 需求：重新打包时删除之前的 ZIP 压缩包，只保留最新一份
+check("os.path.abspath(_p) != os.path.abspath(out_zip)" in _mpz_src
+      and "清理旧压缩包" in _mpz_src,
+      "打包清理: make_portable_zip 打包后删除所有旧版本 ZIP（仅保留最新）")
 _legacy_zips = [n for n in os.listdir(_ROOT)
                 if n.lower().endswith(".zip") and "便携版" in n]
 check(not _legacy_zips,
       "程序包命名: 含「便携版」的旧命名压缩包已全部清理")
+_old_zips = [n for n in os.listdir(_ROOT)
+             if n.lower().endswith(".zip")
+             and n.startswith("EcompVision Inspector V")
+             and n != f"EcompVision Inspector V{_ver}.zip"]
+check(not _old_zips,
+      f"打包清理: 无旧版本 ZIP 残留 (实际 {_old_zips or '无'})")
 
 # ==== 2026-11-11：检测项出厂清单改为 109 项（100~519），恢复至出厂开启全部 ====
 _fi = _dvmod.FACTORY_DETECT_ITEMS
@@ -4363,6 +4573,38 @@ check(all(_mw.debug_views[i]._table_data[r][2] == _fi_map[_mw.debug_views[i]._ta
 
 # 模拟生产模式：节拍触发检测项示例值刷新（每一项给结果示例值并按生产节奏刷新，2026-11-11）
 _dv = _dvmod.DebugView()
+# 2026-11-12 UI 需求：检测项检索——输入名称/编号定位高亮、首个匹配滚动至首行、不改原顺序
+_se = _dv._search_edit
+_test_r = next((r for r in range(_dv._table.rowCount())
+                if not _dv._table.isRowHidden(r)), 0)
+_test_code = str(_dv._table_data[_test_r][1])
+_se.setText(_test_code)
+app.processEvents()
+check(_dv._table.item(_test_r, 2).background().color().alpha() > 0,
+      f"检测项检索: 输入编号 {_test_code} 命中行高亮")
+check(_dv._table.visualRow(_test_r) == 0,
+      f"检测项检索: 命中行滚动至可视首行 (visualRow={_dv._table.visualRow(_test_r)})")
+check(_dv._table.rowCount() == len(_dv._table_data),
+      "检测项检索: 不改变原有行顺序（行数不变）")
+_se.setText("")
+app.processEvents()
+check(_dv._table.item(_test_r, 2).background().color().alpha() == 0,
+      "检测项检索: 清空后高亮恢复")
+# 2026-11-12 UI 需求（三次修订）：检索框并入工具条行——「规格设置」按钮右侧同一行，
+# 占位「输入检索内容」、窄宽 116×28，不再另起一行
+check(_dv._toolbar_buttons[-1].text() == "规格设置"
+      and _dv._search_edit.placeholderText() == "输入检索内容"
+      and _dv._search_edit.minimumWidth() == 116
+      and _dv._search_edit.maximumWidth() == 116
+      and _dv._search_edit.minimumHeight() == 28,
+      "检测项检索: 并入工具条行（规格设置右侧同一行、占位「输入检索内容」、116×28 窄框）")
+# 2026-11-12 反馈：点击「规格设置」软件崩溃退出——根因 _collect_rows 里 lambda
+# 默认参数引用了尚未创建的 sp_lo/sp_hi（UnboundLocalError → 弹窗构造即崩）。
+# 回归校验：弹窗可正常构造出全部数值型检测项行
+_dsp = _dvmod.SpecAutoAdjustDialog(_dv, _dv)
+check(len(_dsp._rows) > 0,
+      f"规格设置: 弹窗可正常构造不崩溃（{len(_dsp._rows)} 行数值型检测项）")
+_dsp.deleteLater()
 _dv._accepted_mode = "模拟生产"
 _dv._playing = True
 _refr = {"n": 0}
@@ -4385,15 +4627,26 @@ else:
     _nz_bad = [(r, _dv._table_data[r][4])
                for r in range(109)
                if (_dv._row_checks.get(r) is None or _dv._row_checks[r].is_on())
-               and _to_float(_dv._table_data[r][4]) in (None, 0)]
+               and _to_float(_dv._table_data[r][4]) in (None, 0)
+               and str(_dv._table_data[r][8]) != "Dec"   # Dec 二值 0/1：0 合法
+               and not (float(_dv._table_data[r][6] or 0) == 0
+                        and float(_dv._table_data[r][7] or 0) == 0)]
     check(not _nz_bad,
-          f"示例值非 0: 启用检测项均生成非 0 示例演示值（异常 {_nz_bad[:3]}）")
-    _okn = sum(1 for r in range(109) if str(_dv._table_data[r][10]) in ("OK", "NG", "待定"))
-    check(_okn == 109 and all(str(_dv._table_data[r][10]) == "OK" for r in range(109)),
-          "示例值非 0: 中性规格（0/0）下示例演示值判 OK（不误报 NG）")
+          f"示例值非 0: 启用且应产生非零示例值的检测项均生成非 0 示例演示值（异常 {_nz_bad[:3]}）")
+    _okn = sum(1 for r in range(109)
+               if str(_dv._table_data[r][10]) in ("OK", "NG", "待定"))
+    # 中性规格（0/0）非 Dec 检测项：判定应为 OK（不误报 NG）；有效规格项可 OK 可 NG
+    _neutral_ok = all(str(_dv._table_data[r][10]) == "OK"
+                      for r in range(109)
+                      if float(_dv._table_data[r][6] or 0) == 0
+                      and float(_dv._table_data[r][7] or 0) == 0
+                      and str(_dv._table_data[r][8]) != "Dec")
+    check(_okn == 109 and _neutral_ok,
+          "示例值非 0: 中性规格（0/0）非 Dec 项示例演示值判 OK（不误报 NG）")
 _dv.close()
 
-# 示例值各相机略有差异：同一检测项在相机1/相机2 的演示基准不同（2026-11-11）
+# 示例值各相机略有差异：同一检测项在相机1/相机2 的演示基准不同（2026-11-11，
+# 2026-11-12 修订：非 Dec+规格0/0 项示例值恒为 0、各相机一致，不计入差异）
 _dv1 = _dvmod.DebugView(camera_name="相机1")
 _dv2 = _dvmod.DebugView(camera_name="相机2")
 for _d in (_dv1, _dv2):
@@ -4401,12 +4654,35 @@ for _d in (_dv1, _dv2):
     _d._playing = True
     for _ in range(3):
         _d._on_play_tick()
+# 可变行 = 具备有效规格（lo<hi）的检测项（0/0 与 lo==hi 项示例值固定，不计入）
+_var_rows = [r for r in range(109)
+             if (lambda lo, hi: lo is not None and hi is not None and lo < hi)
+                (_to_float(_dv1._table_data[r][6]), _to_float(_dv1._table_data[r][7]))]
+_diff_var = sum(1 for r in _var_rows
+                if str(_dv1._table_data[r][4]) != str(_dv2._table_data[r][4]))
 _diff_n = sum(1 for r in range(109)
               if str(_dv1._table_data[r][4]) != str(_dv2._table_data[r][4]))
-check(_diff_n >= 100,
-      f"示例值各机差异: 同一检测项在相机1/相机2 的示例值不同（差异 {_diff_n}/109 项）")
-check(all(0.85 <= _to_float(_dv1._table_data[r][4]) <= 11.3 for r in range(109)),
-      "示例值范围: 中性默认项示例值在 1.00~9.99 基准 ±12% 内波动")
+check(_diff_var >= len(_var_rows) - 1,
+      f"示例值各机差异: 可变规格项在相机1/相机2 示例值不同（差异 {_diff_n}/109 项，可变项内 {_diff_var}/{len(_var_rows)}）")
+# 示例值范围：所有检测项示例值均为有效数值；具备规格的项落在规格上下限范围内
+# （区间内 OK，偶发轻微越界演示 NG）；Dec+规格0/0 二值 0/1 单独豁免范围校验
+_range_ok = True
+for r in range(109):
+    v = _to_float(_dv1._table_data[r][4])
+    if v is None:
+        _range_ok = False
+        break
+    lo = _to_float(_dv1._table_data[r][6]); hi = _to_float(_dv1._table_data[r][7])
+    u = str(_dv1._table_data[r][8])
+    if u == "Dec" and lo == 0 and hi == 0:
+        continue
+    if lo is not None and hi is not None and lo <= hi:
+        span = hi - lo
+        if v < lo - span * 0.25 or v > hi + span * 0.25:
+            _range_ok = False
+            break
+check(_range_ok,
+      "示例值范围: 所有检测项示例值均为有效数值，且具备规格的项落在规格上下限范围内")
 _dv1.close(); _dv2.close()
 
 # 运行中切换用户：刷新不再停止（2026-11-11 二次修订）——模态弹窗（登录/设置）打开时
@@ -4481,15 +4757,17 @@ try:
 except OSError:
     pass
 
-# 「设置为出厂」（2026-11-11）：恢复至出厂左侧新增按钮；默认仅超级管理员拥有（可配置）
+# 「设置为出厂」（2026-11-11）：默认仅超级管理员拥有（可配置）；2026-11-12 起与
+# 「恢复至默认 / 恢复至出厂 / 表格同步至」一起收进「表格管理」下拉菜单（不再是独立工具条按钮）。
 from user_manager import DEFAULT_CATEGORY_PERMISSIONS as _DCP
 check(_DCP["超级管理员"].get("detect_set_factory") is True
       and _DCP["设备操作员"].get("detect_set_factory") is False
       and _DCP["设备技术员"].get("detect_set_factory") is False,
       "设置为出厂: 默认仅超级管理员拥有权限（其余类别默认无、可在权限配置放开）")
-_tb_tips = [b.toolTip() for b in _mw.debug_views[0]._toolbar_buttons]
-check(_tb_tips[:4] == ["设置为默认", "恢复至默认", "设置为出厂", "恢复至出厂"],
-      "设置为出厂: 工具条「恢复至出厂」左侧新增按钮（图标 + 悬浮提示）")
+_tb_menu = getattr(_mw.debug_views[0], "_table_manage_menu", None)
+_tb_tips = [_a.text() for _a in _tb_menu.actions()] if _tb_menu is not None else []
+check("设置为出厂" in _tb_tips and "表格同步至" in _tb_tips,
+      "设置为出厂: 已收进「表格管理」下拉菜单（与表格同步至等并列）")
 class _UMAllow:
     def can(self, u, k): return True
 class _UMDeny:
@@ -4611,9 +4889,14 @@ check(len(_dv0._table_data) == 109
       "出厂配置: 检测项列表内置 109 项且默认全部启用")
 check(all(v._table_data[r][0] for v in _mw.debug_views[1:] for r in (0, 50, 108)),
       "出厂配置: 全部相机工位共用同一份出厂检测项清单")
-check(_dvmod.DebugView._DEBUG_DETECT_CODES == {"102", "104"}
-      and _dvmod.DebugView._DEBUG_DETECT_NAMES == {"歪料", "碎料"},
-      "调试模式: 白名单仍为编号 102/104，名称同步为「歪料 / 碎料」")
+check(_dvmod.DebugView._DEBUG_DETECT_CODES == {"100", "101", "102", "103"}
+      and _dvmod.DebugView._DEBUG_DETECT_NAMES == {"有无（飞料）", "偏位", "歪料", "连料"},
+      "调试模式(2026-11-12): 白名单改为编号 100~103（有无飞料/偏位/歪料/连料）")
+# 2026-11-12 UI 需求：进入相机调试界面首列筛选默认「显示已选」（无持久化记录时）
+check(all(v._filter_show_checked is True
+          and v._table.horizontalHeaderItem(0).text() == "显示已选"
+          for v in _mw.debug_views),
+      "首列筛选: 相机调试界面检测表默认「显示已选」")
 # 恢复至出厂走数据路径验证（避免模态消息框）：改动后按 _factory_data 还原 → 全部开启
 _dv0._table_data[0][0] = False
 _dv0._table_data[5][7] = "9.9"
@@ -4709,6 +4992,278 @@ _PU.apply_permissions(_root, lambda k: k != "perm_B")
 check((not _combo.testAttribute(_VIS)) and _top.testAttribute(_VIS),
       "权限DFS: 父+子组合键两级都授权才显示（子拒绝→隐藏）")
 _root.close()
+
+# ============ 2026-11-12 需求①：检测列表「OK数 / NG数」两列 ============
+_ok_c = dv._col_by_header("OK数")
+_ng_c = dv._col_by_header("NG数")
+check(_ok_c == 13 and _ng_c == 14 and _hdrs_all[12] == "检测项操作",
+      "OK数/NG数: 列号 13 / 14，紧邻「检测项操作」列右侧")
+check(dv._ok_ng_counts.get(0) == [0, 0]
+      and dv._table.item(0, _ok_c).text() == "0"
+      and dv._table.item(0, _ng_c).text() == "0",
+      "OK数/NG数: 初始计数与两列显示均为 0")
+check(not (dv._table.item(0, _ok_c).flags() & _Qt.ItemFlag.ItemIsEditable)
+      and not (dv._table.item(0, _ng_c).flags() & _Qt.ItemFlag.ItemIsEditable),
+      "OK数/NG数: 系统计算列只读（双击不可编辑）")
+_cnt0 = list(dv._ok_ng_counts[0])
+dv.refresh_detection_values()
+_cnt1 = list(dv._ok_ng_counts[0])
+check(_cnt1[0] + _cnt1[1] >= _cnt0[0] + _cnt0[1]
+      and dv._table.item(0, _ok_c).text() == str(_cnt1[0])
+      and dv._table.item(0, _ng_c).text() == str(_cnt1[1]),
+      "OK数/NG数: 运行一张图按 OK/NG 判定结果累计并同步两列显示")
+
+# ============ 2026-11-12 需求③/④：示例值生成规则（Dec 二值 / 非 Dec 按规格范围） ============
+# 判定逻辑（纯函数）：Dec+规格0/0 → 0=OK 1=NG；其余按规格区间 OK/NG
+check(dv._judge_result(False, "0", 0, 0, unit="Dec") == "待定",
+      "示例值判定: 未勾选→待定（Dec+0/0 亦适用）")
+check(dv._judge_result(True, "0", 0, 0, unit="Dec") == "OK"
+      and dv._judge_result(True, "1", 0, 0, unit="Dec") == "NG",
+      "示例值判定(需求③): Dec+规格0/0 → 0=OK 1=NG")
+check(dv._judge_result(True, "0", 0, 0, unit="mm") == "OK"
+      and dv._judge_result(True, "3", 1, 5, unit="Dec") == "OK"
+      and dv._judge_result(True, "9", 1, 5, unit="Dec") == "NG",
+      "示例值判定(需求④): 非 Dec+0/0 / Dec+有效规格 → 按规格区间 OK/NG")
+
+# 生成逻辑：非 Dec 有效规格项的示例值恒落在规格上下限范围内（区间内 OK，偶发越界演示 NG）
+_c_res = dv._col_by_header("检测结果")
+def _fnum(x):
+    try:
+        return float(str(x).strip())
+    except Exception:
+        return None
+_nondec_spec = [r for r in range(len(dv._table_data))
+                if str(dv._table_data[r][8]) != "Dec"
+                and _fnum(dv._table_data[r][6]) is not None
+                and _fnum(dv._table_data[r][7]) is not None
+                and _fnum(dv._table_data[r][6]) < _fnum(dv._table_data[r][7])]
+_nd_gen_ok = True
+for _ in range(80):
+    dv.refresh_detection_values()
+    for r in _nondec_spec:
+        lo = _fnum(dv._table_data[r][6]); hi = _fnum(dv._table_data[r][7])
+        span = hi - lo
+        v = _fnum(dv._table_data[r][4])
+        if v is None or v < lo - span * 0.2 or v > hi + span * 0.2:
+            _nd_gen_ok = False
+            break
+    if not _nd_gen_ok:
+        break
+check(_nd_gen_ok,
+      "示例值生成(需求④): 非 Dec 检测项示例值落在规格上下限范围内（区间内 OK，偶发轻微越界演示 NG）")
+
+# 生成逻辑：Dec+规格0/0 的检测项示例值恒为 0/1，且判定与结果显示一致（受控单行验证）
+_rd = 5
+_sw = dv._row_checks.get(_rd)
+_sw_bak = _sw.is_on() if _sw else True
+if _sw is not None and not _sw_bak:
+    _sw.set_on(True)
+_val5 = dv._val_labels.get(_rd)
+_val5_bak = _val5.text() if _val5 is not None else ""
+_row_bak = dv._table_data[_rd][:]
+_res_bak = dv._table.item(_rd, _c_res).text() if _c_res >= 0 else ""
+try:
+    dv._table_data[_rd][8] = "Dec"
+    dv._table_data[_rd][6] = "0"
+    dv._table_data[_rd][7] = "0"
+    _dec_gen_ok = True
+    for _ in range(80):
+        dv.refresh_detection_values()
+        v = str(dv._table_data[_rd][4])
+        if v not in ("0", "1"):
+            _dec_gen_ok = False
+            break
+        if dv._table.item(_rd, _c_res).text() \
+                != dv._judge_result(True, v, 0, 0, unit="Dec"):
+            _dec_gen_ok = False
+            break
+    check(_dec_gen_ok,
+          "示例值生成(需求③): Dec+规格0/0 的检测项示例值恒为 0/1，0=OK 1=NG 与显示一致")
+finally:
+    dv._table_data[_rd] = _row_bak
+    if _val5 is not None:
+        _val5.setText(_val5_bak)
+    if _sw is not None:
+        _sw.set_on(_sw_bak)
+    if _c_res >= 0:
+        dv._table.item(_rd, _c_res).setText(_res_bak)
+
+check(all("ok_count" not in it and "ng_count" not in it
+          for it in dv._collect_detect_settings()),
+      "OK数/NG数: 运行时计数不写入检测方案（方案同步 / 存默认不复制计数）")
+check("cellWidget(r, 13)" not in src_dv and "elif c == 13:" not in src_dv,
+      "OK数/NG数: 16 列后无遗留的良率预警硬编码列号 13")
+
+# ============ 2026-11-12 需求②：良率预警设置按钮 / 图标 / 默认权限 ============
+from user_manager import DEFAULT_CATEGORY_PERMISSIONS as _DEFYA
+check(_DEFYA["超级管理员"].get("detect_yield_alert") is True
+      and all(_DEFYA[c].get("detect_yield_alert") is False
+              for c in ("设备操作员", "设备技术员", "设备工程师", "设备管理员")),
+      "良率预警设置按钮: 默认权限仅超级管理员拥有（权限配置可放开）")
+_ya_idx = _TOOLBAR_ORDER.index("良率预警设置")
+_ya_tips = [b.toolTip() for b in _mw.debug_views[0]._toolbar_buttons]
+check(_ya_tips[_ya_idx - 1:_ya_idx + 1] == ["出料设置", "良率预警设置"],
+      "良率预警设置按钮: 位于「出料设置」右侧（文字按钮直接显示名称）")
+check(_PU.perm_key_of(_mw.debug_views[0]._toolbar_buttons[_ya_idx])
+      == "detect_list+detect_yield_alert",
+      "良率预警设置按钮: 权限键 detect_list+detect_yield_alert")
+from flow_design import _make_icon as _mi_ya
+check(not _mi_ya("yield_alert").isNull(),
+      "良率预警设置按钮: 新增 yield_alert 警示图标可正常渲染")
+
+# ============ 2026-11-12 需求②：良率预警设置全局弹窗 ============
+_ya_stations = [(v.camera_name,
+                 [(str(r[1]), str(r[2])) for r in v._table_data if bool(r[0])])
+                for v in _mw.debug_views]
+check(not any(v.get("enabled") if isinstance(v, dict) else bool(v)
+              for v in _dvmod.yield_alert_selection().values()),
+      "良率预警设置: 全局选择初始为空（默认全关）")
+_ya_dlg = _dvmod.YieldAlertDialog(None, _ya_stations,
+                                  _dvmod.yield_alert_selection())
+check(_ya_dlg.windowTitle() == "良率预警设置",
+      "良率预警设置弹窗: 标题「良率预警设置」")
+check(_ya_dlg.tabs.count() == len(_mw.debug_views) == 8,
+      "良率预警设置弹窗: 按工位分开显示（8 个相机工位页签）")
+check(len(_ya_dlg.selection_snapshot()) ==
+      sum(len(items) for _cam, items in _ya_stations),
+      "良率预警设置弹窗: 列出所有工位的已勾选检测项目")
+check(all(not v["enabled"] for v in _ya_dlg.selection_snapshot().values()),
+      "良率预警设置弹窗: 每一项默认全关")
+check(_ya_dlg._all_btn.text() == "全开",
+      "良率预警设置弹窗: 「全选」按钮已改名为「全开」")
+_ya_dlg.select_all(True)
+check(all(v["enabled"] for v in _ya_dlg.selection_snapshot().values()),
+      "良率预警设置弹窗: 「全开」勾中所有工位所有项目")
+_ya_dlg.select_all(False)
+check(not any(v["enabled"] for v in _ya_dlg.selection_snapshot().values()),
+      "良率预警设置弹窗: 「全关」清空所有工位所有项目")
+check(sum(_ya_dlg._page_built) == 1
+      and len(_ya_dlg._switches) == len(_ya_stations[0][1]),
+      "良率预警设置弹窗: 开关/阈值按页签懒加载（打开时只构建当前工位页，避免 872 控件卡顿）")
+_ya_dlg.tabs.setCurrentIndex(3)
+check(_ya_dlg._page_built[3]
+      and len(_ya_dlg._switches) ==
+      len(_ya_stations[0][1]) + len(_ya_stations[3][1]),
+      "良率预警设置弹窗: 首次切到第 4 个工位页才构建该页控件")
+_ya_dlg.select_all(True)
+check(all(v["enabled"] for v in _ya_dlg.selection_snapshot().values()),
+      "良率预警设置弹窗: 「全开」覆盖尚未构建页的项目（全量状态字典）")
+# 每行控件：启用为 iOS 风格开关 + 预警阈值(%) 编辑框（默认 50）
+_ya_key0 = _dvmod._yield_alert_key(_ya_stations[0][0], _ya_stations[0][1][0][0])
+check(isinstance(_ya_dlg._switches.get(_ya_key0), _dvmod.ToggleSwitch),
+      "良率预警设置弹窗: 每行启用控件为 iOS 开关（非复选框）")
+check(isinstance(_ya_dlg._spins.get(_ya_key0), _dvmod.QSpinBox)
+      and _ya_dlg._spins[_ya_key0].value() == 50,
+      "良率预警设置弹窗: 每行含预警阈值(%)编辑框，默认 50")
+_ya_dlg.close()
+
+# 从任意相机工位进入：工位列表与共享勾选状态一致（用假弹窗捕获参数，避免模态阻塞）
+_orig_ya_cls = _dvmod.YieldAlertDialog
+_orig_ya_um = _mw.user_manager
+_ya_cap = {}
+class _YAFake:
+    def __init__(self, parent, stations, selection):
+        _ya_cap["stations"] = [(cam, list(items)) for cam, items in stations]
+        _ya_cap["selection"] = selection
+        _ya_cap["opens"] = _ya_cap.get("opens", 0) + 1
+    @property
+    def finished(self):
+        class _Sig:
+            def connect(self, cb): pass
+        return _Sig()
+    def setModal(self, *a, **k): pass
+    def setWindowModality(self, *a, **k): pass
+    def show(self, *a, **k): pass
+    def raise_(self, *a, **k): pass
+    def activateWindow(self, *a, **k): pass
+    def isVisible(self, *a, **k): return False
+    def result(self, *a, **k): return 0
+class _YAUmAllow:
+    def can(self, u, k): return True
+class _YAUmDeny:
+    def can(self, u, k): return k != "detect_yield_alert"
+_dvmod.YieldAlertDialog = _YAFake
+_mw.user_manager = _YAUmAllow()
+try:
+    _mw.debug_views[0]._on_yield_alert_settings()
+    _st0 = _ya_cap["stations"]
+    _mw.debug_views[5]._on_yield_alert_settings()
+    check(_st0 == _ya_cap["stations"]
+          and isinstance(_ya_cap["selection"], dict)
+          and all(isinstance(v, dict) and "enabled" in v and "threshold" in v
+                  for v in _ya_cap["selection"].values()),
+          "良率预警设置: 任意相机工位进入，工位列表一致、选择初始化为各工位检测表当前状态(enabled/threshold)")
+    check(len(_st0) == len(_mw.debug_views),
+          "良率预警设置: 数据来源为主窗全部工位而非当前工位")
+finally:
+    _dvmod.YieldAlertDialog = _orig_ya_cls
+    _mw.user_manager = _orig_ya_um
+# 无权限用户直接调用 handler 也被拦截（防止绕过按钮隐藏）
+_ya_msgs = []
+_ya_warn = _dvmod.QMessageBox.warning
+_dvmod.QMessageBox.warning = staticmethod(
+    lambda *a, **k: _ya_msgs.append(a[2] if len(a) > 2 else ""))
+_mw.user_manager = _YAUmDeny()
+_ya_opens_before = _ya_cap.get("opens", 0)
+try:
+    _mw.debug_views[0]._on_yield_alert_settings()
+    check(any("无权限" in m for m in _ya_msgs)
+          and _ya_cap.get("opens", 0) == _ya_opens_before,
+          "良率预警设置: 无权限用户直接调用入口被「无权限」提示拦截且不打开弹窗")
+finally:
+    _dvmod.QMessageBox.warning = _ya_warn
+    _mw.user_manager = _orig_ya_um
+# 设置结果落盘 + 重启恢复（临时配置目录，不污染工程配置）
+import json as _json_ya
+_dvmod.yield_alert_selection()["相机1|100"] = {"enabled": True, "threshold": 50}
+_dvmod.save_yield_alert_selection()
+with open(_dvmod._yield_alert_path(), encoding="utf-8") as _ya_f:
+    _ya_saved = _json_ya.load(_ya_f)
+check(_ya_saved.get("相机1|100") == {"enabled": True, "threshold": 50},
+      "良率预警设置: 确定后全局选择落盘 yield_alert_settings.json（enabled/threshold）")
+_dvmod.yield_alert_selection().clear()
+_dvmod._YIELD_ALERT_LOADED = False
+check(_dvmod.yield_alert_selection().get("相机1|100") == {"enabled": True, "threshold": 50},
+      "良率预警设置: 下次启动自动加载已保存的选择（兼容新格式）")
+_dvmod.yield_alert_selection().clear()
+_dvmod.save_yield_alert_selection()   # 复位默认全关
+
+# 调试界面统计刷新：与生产运行界面同节奏（每拍刷新，已移除每 12 拍降频）
+_tick_src = _inspect.getsource(_dvmod.DebugView._on_play_tick)
+check("tick_live()" in _tick_src and "% 12" not in _tick_src,
+      "调试界面统计: 与生产运行界面同节奏每拍刷新（已移除每 12 拍降频）")
+# 单位/出料/良率预警设置弹窗：改为非模态，不阻塞其它页面操作
+_dv_src = _inspect.getsource(_dvmod.DebugView)
+check("setModal(False)" in _dv_src and "WindowModality.NonModal" in _dv_src,
+      "单位/出料/良率预警设置: 弹窗改为非模态，不阻塞其它页面操作")
+# 检测表格列宽：提供按文字自适应方法，并在 showEvent / 初始化后调用
+check(hasattr(_dvmod.DebugView, "_auto_fit_columns")
+      and "self._auto_fit_columns()" in _dv_src,
+      "检测表格: 提供列宽按文字自适应方法（_auto_fit_columns）并在显示/初始化时调用")
+# 2026-11-12 二次修订：QSS 将列头渲染为粗体 + 6px 内边距，resizeColumnsToContents
+# 以非粗体测量且不计 padding 导致仍截断 —— 自适应改为按粗体列头实测宽度补足。
+# 功能级校验：自适应后每列宽度 ≥ 粗体列头文字宽 + padding + 余量（文字完整显示）
+_dv_fit = _mw.debug_views[0]
+_dv_fit._auto_fit_columns()
+_tbl_fit = _dv_fit._table
+_bf_fit = _dvmod.QFont("Microsoft YaHei")
+_bf_fit.setPixelSize(10)
+_bf_fit.setBold(True)
+_fm_fit = _dvmod.QFontMetrics(_bf_fit)
+_fit_bad = []
+for _c in range(_tbl_fit.columnCount()):
+    _need = _fm_fit.horizontalAdvance(
+        _tbl_fit.horizontalHeaderItem(_c).text()) + 6 * 2 + 10
+    if _tbl_fit.columnWidth(_c) < _need:
+        _fit_bad.append((_c, _tbl_fit.horizontalHeaderItem(_c).text(),
+                         _tbl_fit.columnWidth(_c), _need))
+check(not _fit_bad,
+      f"检测表格: 自适应后各列宽度足以完整显示粗体列头文字（不足列 {_fit_bad[:3]}）")
+# 2026-11-12 版本号规则补充：仅 UI 改善第 4 位递增（可到 99，满 100 进位第 3 位）
+check("仅 UI 改善" in (_meta.__doc__ or "")
+      and "--ui" in open("build_b.py", encoding="utf-8").read()
+      and "bu >= 100" in open("build_b.py", encoding="utf-8").read(),
+      "版本号规则: 纯 UI 改善第 4 位递增（满 100 进位第 3 位），构建支持 --ui")
 
 # ============ 收尾：确认未污染 src/ 下的工程配置（写盘已重定向到临时目录） ============
 check(all((open(_p, "rb").read() if os.path.exists(_p) else None) == _o

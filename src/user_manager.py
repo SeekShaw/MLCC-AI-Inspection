@@ -60,6 +60,9 @@ PERMISSION_GROUPS = [
         ("detect_restore_factory", "恢复至出厂"),
         ("detect_unit", "单位设置"),
         ("detect_output", "出料设置"),
+        # 2026-11-12 需求：工具条「出料设置」右侧新增「良率预警设置」，
+        # 打开全局预警项目选择窗；默认仅超级管理员拥有（见 _CHILD_GRANTS 排除）。
+        ("detect_yield_alert", "良率预警设置"),
         ("detect_sync_all", "方案同步"),
         ("detect_auto_spec", "规格自动调整"),
     ]),
@@ -140,7 +143,8 @@ DEVICE_TAB_PERMISSIONS = (
 DETECT_LIST_PERMISSIONS = (
     "detect_default_set", "detect_restore_default", "detect_set_factory",
     "detect_restore_factory",
-    "detect_unit", "detect_output", "detect_sync_all", "detect_auto_spec",
+    "detect_unit", "detect_output", "detect_yield_alert", "detect_sync_all",
+    "detect_auto_spec",
 )
 # 检测项列表按**列头**细分的权限项：(列头名, 权限键)。
 # 列头名用于在 debug_view 里按表头定位列号（列序调整后依然正确）。
@@ -226,10 +230,12 @@ _CHILD_GRANTS = {
     "camera_debug": {
         "camera_work_mode", "flow_design", "target_search", "image_effect",
         "detect_list", "jog_debug",
-        # 检测列表各操作按钮随相机调试入口默认继承，**「设置为出厂」除外**：
-        # 该操作会把当前方案覆盖为出厂基准，破坏性大，默认仅超级管理员拥有
-        # （超级管理员在上方 set(PERMISSIONS) 已全量授予；权限配置界面可再放开）。
-        *(k for k in DETECT_LIST_PERMISSIONS if k != "detect_set_factory"),
+        # 检测列表各操作按钮随相机调试入口默认继承，**两项除外**：
+        # 「设置为出厂」会覆盖出厂基准、「良率预警设置」是全局预警项目配置，
+        # 二者默认仅超级管理员拥有（超级管理员在上方 set(PERMISSIONS)
+        # 已全量授予；权限配置界面可再放开）。
+        *(k for k in DETECT_LIST_PERMISSIONS
+          if k not in ("detect_set_factory", "detect_yield_alert")),
         # 检测项列表 8 个列头权限：拆分前列一直可见，默认随相机调试入口继承
         *(k for _h, k in DETECT_COL_PERMISSIONS),
     },

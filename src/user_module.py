@@ -37,11 +37,12 @@ NAV_ACTIVE_BG = "#26304F"   # 导航选中态底色（暗蓝）
 NAV_ACTIVE_TXT = "#8FA8FF"  # 导航选中态文字（亮蓝）
 
 # 权限配置勾选框：显式绘制指示块，暗底上已勾选也能清晰看见
+# 2026-11-12 UI 需求：与全局统一——未勾选白色空心边框，勾选蓝色实心 + 白色 √
 CHECK_QSS = (
     "QCheckBox { spacing: 6px; color: #FFFFFF; }"
-    "QCheckBox::indicator { width: 16px; height: 16px; border-radius: 3px; }"
+    "QCheckBox::indicator { width: 14px; height: 14px; border-radius: 3px; }"
     "QCheckBox::indicator:unchecked { "
-    "border: 1px solid #3A3E47; background-color: #1A1B1F; }"
+    "border: 1px solid #FFFFFF; background-color: transparent; }"
     "QCheckBox::indicator:checked { "
     "border: 1px solid #4261FF; background-color: #4261FF; }"
     "QCheckBox::indicator:disabled { "

@@ -85,8 +85,16 @@ VSVersionInfo(
     print(">> 版本资源:", VERSION_FILE, "->", ver)
 
 
-def bump_version():
-    """递增版本号：第 3 位 +1，到 10 向第 2 位进位（3.0.9.0→3.1.0.0）。
+def bump_version(bug_fix=False):
+    """按 2026-11-12 版本号规则递增（用户指定）：
+
+    - 仅修复 bug（``--bug``）：第 4 位（build）+1（如 3.8.3.0 → 3.8.3.1）；
+    - 仅 UI 改善（界面观感 / 布局调整，不含功能与数据逻辑变化，2026-11-12 补充）：
+      同样第 4 位（build）+1，可递增到 99，满 100 向第 3 位进位归 0
+      （如 3.8.5.0 → 3.8.5.1 → … → 3.8.5.99 → 3.8.6.0，构建用 ``--ui``）；
+    - 功能改善或新增（默认）：第 3 位（patch）+1，第 4 位重新从 0 计数
+      （如 3.8.2.x → 3.8.3.0，此后 bug 修复从 3.8.3.1 开始递增）；
+    - patch 到 10 向第 2 位进位（3.0.9.0→3.1.0.0）。
 
     写回 src/app_meta.py（唯一来源），exe 详细信息 / 启动画面 / 关于页均读取
     该文件。⚠️ 2026-10-21 决定在**构建前**递增：否则上一次发布的恰好是本次
@@ -101,13 +109,24 @@ def bump_version():
         print("!! 未找到 APP_VERSION，跳过版本递增")
         return
     maj, mi, pa, bu = (int(x) for x in m.groups())
-    pa += 1
-    if pa >= 10:
-        pa, mi = 0, mi + 1
+    if bug_fix or "--ui" in sys.argv:
+        bu += 1
+        if bu >= 100:          # 第 4 位满 100 向第 3 位进位归 0
+            bu, pa = 0, pa + 1
+            if pa >= 10:
+                pa, mi = 0, mi + 1
+        rule = ("UI 改善：第 4 位 +1（满 100 进位第 3 位）" if "--ui" in sys.argv
+                else "bug 修复：第 4 位 +1")
+    else:
+        pa += 1
+        bu = 0
+        if pa >= 10:
+            pa, mi = 0, mi + 1
+        rule = "功能变更：第 3 位 +1，第 4 位重新计数"
     src = src[:m.start()] + f'APP_VERSION = "{maj}.{mi}.{pa}.{bu}"' + src[m.end():]
     with open(path, "w", encoding="utf-8") as f:
         f.write(src)
-    print(f">> 版本号已递增: {maj}.{mi}.{pa}.{bu}（下一次发布生效）")
+    print(f">> 版本号已递增（{rule}）: {maj}.{mi}.{pa}.{bu}（本次发布生效）")
 
 
 def sync_docs(root=None):
@@ -175,7 +194,10 @@ def main():
 
     print(">> 递增版本号（构建前，本次发布即取新号）...")
     if "--no-bump" not in sys.argv:
-        bump_version()
+        # 2026-11-12 版本号规则：仅 bug 修复用 --bug（第 4 位 +1）、
+        # 仅 UI 改善用 --ui（第 4 位 +1，满 100 进位第 3 位）、
+        # 功能改善/新增默认（第 3 位 +1，第 4 位重新计数）
+        bump_version(bug_fix="--bug" in sys.argv)
     print(">> 构建中 ...")
     _write_version_file()
     # 通过 pyi_bootstrap 启动 PyInstaller，该引导会把被「安全删除 shim」包裹的

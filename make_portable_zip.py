@@ -4,7 +4,8 @@
 - 压缩包内顶层为单一文件夹，解压后双击其中的 exe 即可运行，无需安装；
 - 压缩包文件名＝名字 + 版本号（版本唯一来源 src/app_meta.py），
   例如「EcompVision Inspector V3.6.7.0.zip」；名称不含「便携版」；
-  同版本重打覆盖，不同版本各自留档，便于按版本回溯交付物；
+  同版本重打覆盖；**2026-11-12 UI 需求：重新打包时删除之前的 ZIP 压缩包**，
+  只保留最新一份；
 - 压缩包内顶层文件夹名取同一个 PKG_NAME（不含「便携版」），解压路径稳定；
 - 由 build_b.py 在每次重新生成 exe 后自动调用。
 """
@@ -84,11 +85,17 @@ def build():
                 z.write(full, rel)
     # 4) 删除临时目录，只保留 zip
     shutil.rmtree(BUILD_TMP, ignore_errors=True)
-    # 5) 迁移：清理所有带「便携版」的旧命名压缩包（无版本号 / 带版本号均清理）
+    # 5) 清理旧压缩包（2026-11-12 UI 需求：重新打包时**删除之前的 ZIP 压缩包**，
+    #    只保留本次生成的最新一份交付物——原「不同版本各自留档」策略废止；
+    #    旧「便携版」命名压缩包同样清理）
     for _fn in os.listdir(ROOT):
-        if _fn.startswith(LEGACY_ZIP_PREFIX) and _fn.lower().endswith(".zip"):
-            os.remove(os.path.join(ROOT, _fn))
-            print("   清理旧命名压缩包:", _fn)
+        if not _fn.lower().endswith(".zip"):
+            continue
+        if _fn.startswith(f"{PKG_NAME} V") or _fn.startswith(LEGACY_ZIP_PREFIX):
+            _p = os.path.join(ROOT, _fn)
+            if os.path.abspath(_p) != os.path.abspath(out_zip):
+                os.remove(_p)
+                print("   清理旧压缩包:", _fn)
     size = os.path.getsize(out_zip)
     print(f">> 程序压缩包已生成 -> {out_zip} ({size:,} bytes)")
 

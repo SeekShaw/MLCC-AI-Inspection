@@ -219,6 +219,40 @@ QGroupBox::title {{
     padding: 0 5px;
     color: {COLORS["text_secondary"]};
 }}
+
+/* 2026-11-12 UI 需求：全局统一方形/圆形勾选框样式——
+   未勾选：白色（暗色主题 text_primary）空心边框；
+   勾选：蓝色实心。**纯色填充、不依赖图片**——规避 QSS `image: url()` 加载失败时
+   整条 `:checked` 规则被丢弃导致的「已勾选但外观不变」（如权限/剔除勾选框
+   勾选态不显示）。方块(QCheckBox) / 圆形(QRadioButton) 同规格。 */
+QCheckBox::indicator, QGroupBox::indicator {{
+    width: 14px;
+    height: 14px;
+    border-radius: 3px;
+    border: 1px solid {COLORS["text_primary"]};
+    background-color: transparent;
+}}
+QCheckBox::indicator:hover, QGroupBox::indicator:hover {{
+    border-color: {COLORS["accent_blue"]};
+}}
+QCheckBox::indicator:checked, QGroupBox::indicator:checked {{
+    border: 1px solid {COLORS["accent_blue"]};
+    background-color: {COLORS["accent_blue"]};
+}}
+QRadioButton::indicator {{
+    width: 14px;
+    height: 14px;
+    border-radius: 7px;
+    border: 1px solid {COLORS["text_primary"]};
+    background-color: transparent;
+}}
+QRadioButton::indicator:hover {{
+    border-color: {COLORS["accent_blue"]};
+}}
+QRadioButton::indicator:checked {{
+    border: 1px solid {COLORS["accent_blue"]};
+    background-color: {COLORS["accent_blue"]};
+}}
 """
 
 MAIN_STYLE = build_main_style()

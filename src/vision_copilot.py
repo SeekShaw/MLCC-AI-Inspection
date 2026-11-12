@@ -263,12 +263,16 @@ class VisionCopilotDialog(QDialog):
         self._worker = None
         self._thinking_item = None
         self.setWindowTitle("Vision Copilot")
-        self.resize(600, 780)
-        self.setMinimumSize(520, 620)
         self.setStyleSheet(f"QDialog {{ background-color: {COLORS['bg_dark']}; }}")
         self.setAcceptDrops(True)
         self._build()
         self._refresh_header()
+        # 2026-11-12 UI 需求：默认页面高度 = 能完整显示欢迎页内容的最小高度
+        # （不出现内部滚动截断）；聊天区为独立滚动区域，不影响此默认高度。
+        self.adjustSize()
+        _fit = max(self.height(), 460)
+        self.setMinimumSize(520, _fit)
+        self.resize(600, _fit)
 
     # ---------------- UI 构建 ----------------
     def _build(self):

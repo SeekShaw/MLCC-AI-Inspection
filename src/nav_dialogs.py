@@ -790,7 +790,10 @@ class ImageSaveDialog(QDialog):
         # ⚠️ 2026-10-09：配置区改为「每字段一行」后行数变少（原双列竖排占两行），
         # 高度从 620 收到 480：实测内容需要 ≈450px（检测项显示时），
         # 留少量余量即可，避免底部大片空白。
-        _dialog_base(self, "图片保存", 500, 480)
+        # 2026-11-12 UI 需求：宽度 500 → 640——「保存路径」输入框过长时尾部
+        # 显示不完整；同时载入/浏览后把光标移到末尾，保证总是显示路径**尾部**
+        # （最关键的子目录部分），进一步缓解长路径截断。
+        _dialog_base(self, "图片保存", 640, 480)
         lay = QVBoxLayout(self)
         lay.setContentsMargins(16, 16, 16, 16)
         lay.setSpacing(10)
@@ -1065,6 +1068,8 @@ class ImageSaveDialog(QDialog):
         if full_action in self.FULL_ACTIONS:
             self._full_action.setCurrentText(full_action)
         self._path_edit.setText(str(cfg.get("path") or self._default_save_path()))
+        # 长路径显示尾部：光标移到末尾（QLineEdit 滚动跟随光标）
+        self._path_edit.setCursorPosition(len(self._path_edit.text()))
         defects = cfg.get("defects")
         if isinstance(defects, list):
             self._defect_combo.set_checked(defects)
@@ -1093,6 +1098,8 @@ class ImageSaveDialog(QDialog):
             self, "选择保存路径", self._path_edit.text().strip() or "")
         if d:
             self._path_edit.setText(os.path.normpath(d))
+            # 浏览选择后同样把光标移到末尾，显示路径尾部
+            self._path_edit.setCursorPosition(len(self._path_edit.text()))
 
     def _on_save(self):
         strategy = self._strategy.currentText()

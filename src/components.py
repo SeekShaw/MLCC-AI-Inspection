@@ -2,7 +2,7 @@ from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QPushButton,
     QFrame, QSizePolicy, QProgressBar, QTableWidget, QTableWidgetItem,
     QHeaderView, QCheckBox, QApplication, QScrollArea, QFileDialog, QMessageBox,
-    QComboBox,
+    QComboBox, QStyle, QStyleOptionComboBox,
 )
 from PyQt6.QtCore import Qt, QSize, QEvent, QRect, pyqtSignal
 from PyQt6.QtGui import QPainter, QColor, QFont, QPen, QBrush, QPixmap, QImage, QIcon
@@ -697,6 +697,31 @@ class CameraScreen(QWidget):
                                int(abs(x1 - x0)), int(abs(y1 - y0)))
 
 
+class _CenterCombo(QComboBox):
+    """当前项文字**水平垂直居中**的下拉框（2026-11-12 UI 需求二次修订）。
+
+    ⚠️ PyQt6 的 QComboBox 未暴露 setAlignment（PyQt5 有、PyQt6 无），且 QSS
+    `qproperty-alignment:AlignCenter` 实测对非可编辑下拉也不生效——文字一直
+    左对齐（生产界面「源图」偏左）。用自定义 paintEvent：先按 Qt 原样画外框
+    与下拉箭头（currentText 置空），再把当前文字居中画回编辑区。
+    """
+
+    def paintEvent(self, e):  # noqa: N802
+        opt = QStyleOptionComboBox()
+        self.initStyleOption(opt)
+        opt.currentText = ""
+        opt.editText = ""
+        p = QPainter(self)
+        self.style().drawComplexControl(
+            QStyle.ComplexControl.CC_ComboBox, opt, p, self)
+        edit_rect = self.style().subControlRect(
+            QStyle.ComplexControl.CC_ComboBox, opt,
+            QStyle.SubControl.SC_ComboBoxEditField, self)
+        p.setPen(QColor("#E6E6E6"))
+        p.setFont(self.font())
+        p.drawText(edit_rect, Qt.AlignmentFlag.AlignCenter, self.currentText())
+
+
 class CameraPreview(QFrame):
     """相机预览占位卡片（固定尺寸，保持 4:3 观感）。
 
@@ -707,7 +732,8 @@ class CameraPreview(QFrame):
     内置 CameraScreen 显示区：未播放时显示「实时画面模拟」提示；
     点击启动后由外部驱动 set_strip + set_offset 实现垂直滚动播放样张。
     """
-    def __init__(self, name, w=360, h=270, parent=None, show_channel_control=True):
+    def __init__(self, name, w=360, h=270, parent=None, show_channel_control=True,
+                 show_elements=False, show_res_label=True, overlay_title=False):
         super().__init__(parent)
         self.name = name
         self.setFixedSize(w, h)
@@ -725,19 +751,42 @@ class CameraPreview(QFrame):
         top.addStretch()
         self._res_label = QLabel(f"{w}×{h}")
         top.addWidget(self._res_label)
-        layout.addLayout(top)
-        self._title_row = top   # 标题行（点 + 名称 + 扩展区），供 add_title_button 在名称右侧插入按钮
+        self._overlay_title = overlay_title
+        if overlay_title:
+            # 2026-11-12 UI 需求：标题文字浮于画布上方（半透明底色），
+            # 不再占用画布顶部一条高度——画布占满整个卡片
+            self._title_row = None
+            self._res_label.setParent(self)
+            self._dot.setParent(self)
+            self._name.setParent(self)
+            # 2026-11-12 UI 需求（二次修订）：缩小卡片内边距与布局间距——
+            # R/G/B 三画布左右上下间隙过大，画布（图像区）尽量占满卡片，
+            # 卡片外轮廓（列高/列宽与主画布对齐的上下限）保持不变
+            layout.setContentsMargins(3, 2, 3, 2)
+            layout.setSpacing(0)
+        else:
+            layout.addLayout(top)
+            self._title_row = top   # 标题行（点 + 名称 + 扩展区），供 add_title_button 在名称右侧插入按钮
 
         # 画布显示区：占满剩余高度，由外部驱动滚动播放
         self.screen = CameraScreen()
-        # 监听画布自身尺寸变化，保证覆盖层（下拉/眼睛）始终贴合画布左上/中/右上
+        # 监听画布自身尺寸变化，保证覆盖层（下拉/眼睛/标题浮层）始终贴合画布
         self.screen.installEventFilter(self)
         layout.addWidget(self.screen, 1)
-        self._elements_on = False
+        # 2026-11-12 需求：相机调试界面主画布默认显示图像上的计算元素
+        self._elements_on = show_elements
+        if show_elements:
+            self.screen.set_elements_visible(True)
+        if not show_res_label:
+            # 2026-11-12 需求：R/G/B 通道画布右上角不显示 128×96 分辨率标签
+            self._res_label.hide()
         if show_channel_control:
             self._build_channel_control()
             self._res_label.hide()   # 下拉占据卡片右上角，隐藏分辨率标签避免重叠
-            self._position_control()
+        if overlay_title:
+            self._dot.show()
+            self._name.show()
+        self._position_control()
         self._apply_style()
         register_restyle(self._restyle)
 
@@ -751,6 +800,13 @@ class CameraPreview(QFrame):
         """)
         self._name.setStyleSheet(f"color: {COLORS['text_primary']}; font-size: 12px; font-weight: bold;")
         self._res_label.setStyleSheet(f"color: {COLORS['text_secondary']}; font-size: 10px;")
+        if getattr(self, "_overlay_title", False):
+            # 标题浮层（2026-11-12 UI 需求二次修订）：字号 12→10px、底色更透明
+            # （0.72→0.45），小巧地浮于画布左上角、尽量不遮挡画面
+            self._dot.setStyleSheet("color: #0D822B; font-size: 8px;")
+            self._name.setStyleSheet(
+                f"color: {COLORS['text_primary']}; font-size: 10px; font-weight: bold; "
+                "background-color: rgba(20,22,26,0.45); border-radius: 3px; padding: 0 4px;")
 
     def _restyle(self):
         self._apply_style()
@@ -817,21 +873,29 @@ class CameraPreview(QFrame):
         hb.setContentsMargins(1, 1, 1, 1)
         hb.setSpacing(4)
 
-        combo = QComboBox()
+        combo = _CenterCombo()
         combo.addItems(["源图", "灰度图", "R通道", "G通道", "B通道"])
-        # 下拉框高度与卡片「上表面」标题行等高（约 14px）：9px 文字可完整容纳于 12px 框高
-        combo.setFixedHeight(12)
-        # 收窄下拉框宽度：缩小字号 / 箭头 / 内边距，使框宽逼近原宽的 2/3，
-        # 但仍以最长选项「灰度图」能完整显示为准（不裁切文字）。
-        combo.setMinimumWidth(34)
-        # 缩小下拉弹出窗体的行高，使整体弹窗高度更矮
+        # 2026-11-12 需求：下拉框大小与左侧「十字显示」按钮一致（高度 22px、
+        # 字号 10px），原先 12px 矮框视觉上过小、与标题行按钮不协调
+        combo.setFixedHeight(22)
+        # 2026-11-12 UI 需求（二次修订）：宽度收窄到 54px——只需完整显示
+        # 「源图 / 灰度图 / R通道」等 3 字项即可，原 sizeAdjust 由最长项
+        # 自动撑大显得过宽
+        combo.setFixedWidth(54)
+        # 下拉弹出窗体行高与框体等比放大
         view = combo.view()
         view.setStyleSheet(
-            "QListView{font-size:9px; background:#15171B; border:1px solid #2A2D34; outline:0;}"
-            "QListView::item{height:16px; padding:0 4px;}")
+            "QListView{font-size:10px; background:#15171B; border:1px solid #2A2D34; outline:0;}"
+            "QListView::item{height:20px; padding:0 6px;}")
+        # 2026-11-12 UI 需求：当前项文字在框内居中显示。⚠️ 二次修订：QSS
+        # `qproperty-alignment:AlignCenter` 实测不生效、PyQt6 又未暴露
+        # setAlignment —— 改用 _CenterCombo 子类居中绘制（见类注释）；
+        # 左右内边距收窄（6px→2px）保证文字完整不被截断
         combo.setStyleSheet(
-            "QComboBox{font-size:9px; color:#E6E6E6; padding:1px 2px;}"
-            "QComboBox::drop-down{border:none; width:8px;}"
+            "QComboBox{font-size:10px; color:#E6E6E6; padding:1px 2px; "
+            "border:1px solid #2A2D34; border-radius:4px; "
+            "background-color:rgba(20,22,26,0.72);}"
+            "QComboBox::drop-down{border:none; width:12px;}"
             "QComboBox QAbstractItemView{selection-background-color:#2A2D34;}")
         combo.setCurrentText("源图")
         combo.currentTextChanged.connect(self._on_channel_changed)
@@ -840,26 +904,27 @@ class CameraPreview(QFrame):
         self._ctrl = ctrl
 
         # 计算元素显隐按钮：与通道下拉组成右上角控件组，置于下拉「左边」并隔开距离；
-        # 按钮高度与下拉框保持一致（紧凑），与卡片上表面标题行观感统一
+        # 2026-11-12 UI 需求：按钮放大到与下拉框同高（22px、图标 16px），
+        # 由 _position_control 与下拉框上下居中对齐
         eye = QPushButton(self)
-        eye.setFixedSize(16, 16)
+        eye.setFixedSize(22, 22)
         eye.setCursor(Qt.CursorShape.PointingHandCursor)
+        # 2026-11-12 UI 需求：眼睛按钮底窗改为透明（去掉黑底），仅显示图标
         eye.setStyleSheet(
-            "QPushButton{background-color: rgba(20,22,26,0.72); border:none; border-radius:4px;}")
-        eye.setIcon(self._eye_icon(False))
-        eye.setIconSize(QSize(12, 12))
+            "QPushButton{background-color: transparent; border:none; border-radius:4px;}")
+        # 初始图标与默认显隐状态一致（主画布默认显示计算元素 → 睁眼图标）
+        eye.setIcon(self._eye_icon(self._elements_on))
+        eye.setIconSize(QSize(16, 16))
         eye.setToolTip("显示 / 隐藏图像上的计算元素")
         eye.clicked.connect(self._toggle_elements)
         self._eye_btn = eye
 
     def _position_control(self):
-        ctrl = getattr(self, "_ctrl", None)
-        eye = getattr(self, "_eye_btn", None)
-        if ctrl is None and eye is None:
-            return
         margin = 6
         gap = 6
         card_w = self.width()
+        ctrl = getattr(self, "_ctrl", None)
+        eye = getattr(self, "_eye_btn", None)
         # 通道下拉：固定在相机卡片（即 400*300 / 210*158「画布」）的右上角
         ctrl_x = card_w - margin
         if ctrl is not None:
@@ -867,11 +932,28 @@ class CameraPreview(QFrame):
             ch = ctrl.sizeHint().height()
             ctrl_x = card_w - cw - margin
             ctrl.setGeometry(ctrl_x, margin, cw, ch)
-        # 显隐眼睛按钮：放在通道下拉的「左边」，中间隔开 gap 距离，二者组成右上角控件组
+        # 显隐眼睛按钮：放在通道下拉的「左边」，中间隔开 gap 距离，二者组成右上角控件组；
+        # 2026-11-12 UI 需求：与下拉框上下居中对齐（下拉外框比按钮高出的部分上下均分）
         if eye is not None:
             ew, eh = eye.width(), eye.height()
             eye_x = (ctrl_x - gap - ew) if ctrl is not None else (card_w - ew - margin)
-            eye.setGeometry(max(margin, eye_x), margin, ew, eh)
+            ref_h = ctrl.height() if ctrl is not None else eh
+            eye_y = margin + max(0, (ref_h - eh) // 2)
+            eye.setGeometry(max(margin, eye_x), eye_y, ew, eh)
+        if getattr(self, "_overlay_title", False):
+            # 标题浮层：**与画布左上角严格对齐**（2026-11-12 UI 需求二次修订：
+            # 浮层文字左上角顶到画布左上角，不再留 10px/5px 空隙），
+            # 状态点与文字垂直居中成组
+            g = self.screen.geometry()
+            self._dot.adjustSize()
+            nh = self._name.sizeHint().height()
+            name_y = g.y()
+            self._name.setGeometry(g.x() + self._dot.width() + 2, name_y,
+                                   self._name.sizeHint().width(), nh)
+            mid = name_y + nh / 2.0
+            self._dot.move(g.x(), int(mid - self._dot.height() / 2.0))
+            self._dot.raise_()
+            self._name.raise_()
 
     def _on_channel_changed(self, text):
         self.screen.set_channel(self.CHAN_MAP.get(text, "src"))
@@ -1187,11 +1269,19 @@ class EditableKpiGrid(QFrame):
             self._cells.append((val, lab, color))
 
     def set_values(self, items):
-        """整体刷新 KPI 数值与颜色（用于统计清零 / 恢复示例）。"""
-        for (val, lab, color), (label, value, color2) in zip(self._cells, items):
-            val.setText(value)
-            val.setStyleSheet(f"color: {color}; font-size: 11px; font-weight: bold;")
-            lab.setText(label)
+        """整体刷新 KPI 数值与颜色（用于统计清零 / 恢复示例）。
+
+        2026-11-12：值与颜色未变化时跳过 setText / setStyleSheet——后者每次都会
+        触发 repolish，实时刷新高频调用下会造成无谓重绘（调试界面周期卡顿防护）。
+        """
+        for (val, lab, color), (label, value, _color2) in zip(self._cells, items):
+            if val.text() != value:
+                val.setText(value)
+            st = f"color: {color}; font-size: 11px; font-weight: bold;"
+            if val.styleSheet() != st:
+                val.setStyleSheet(st)
+            if lab.text() != label:
+                lab.setText(label)
 
 
 class ToggleSwitch(QFrame):

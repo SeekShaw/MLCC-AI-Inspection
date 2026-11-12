@@ -816,6 +816,43 @@ class CameraStatsView(QWidget):
         self._populate_summary()
         self._select_camera(self.current_cam)
 
+    def update_values(self, camera_stats_data, camera_defects_data):
+        """增量刷新（调试界面统计镜像用）：结构不变时只改写单元格文本，不重建
+        QTableWidgetItem，避免每拍全量重绘造成的周期性卡顿。首次调用退回全量构建。"""
+        if not getattr(self, "_built_once", False):
+            self.camera_stats_data = camera_stats_data
+            self.load_example()
+            self._built_once = True
+            return
+        self.camera_stats_data = camera_stats_data
+        # 汇总表（结构固定 6×9）：仅更新已有单元格文本
+        for col, cam in enumerate(self.cameras):
+            data = camera_stats_data[cam]
+            for row, key in enumerate(self.ROW_LABELS):
+                it = self.summary_table.item(row, col + 1)
+                if it is None:
+                    it = QTableWidgetItem()
+                    it.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                    self.summary_table.setItem(row, col + 1, it)
+                it.setText(data[key])
+        # 当前相机缺陷表：行数不变则增量更新，否则重建
+        self._update_defect(self.current_cam,
+                            camera_defects_data.get(self.current_cam, []))
+
+    def _update_defect(self, cam, rows):
+        if self.defect_table.rowCount() == len(rows):
+            for r, (name, qty, pct) in enumerate(rows):
+                for c, txt in enumerate([name, qty, pct]):
+                    it = self.defect_table.item(r, c)
+                    if it is None:
+                        it = QTableWidgetItem(txt)
+                        it.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                        self.defect_table.setItem(r, c, it)
+                    else:
+                        it.setText(txt)
+        else:
+            self._populate_defect(cam)
+
     def clear_data(self):
         """清空所有示例数据。"""
         self._cleared = True
@@ -919,6 +956,45 @@ class DefectStatsView(QWidget):
         self._cleared = False
         self._populate()
 
+    def update_values(self, camera_defects_data):
+        """增量刷新（调试界面统计镜像用）。"""
+        if not getattr(self, "_built_once", False):
+            self.set_data(camera_defects_data)
+            self._built_once = True
+            return
+        self.camera_defects_data = camera_defects_data
+        total_per_defect = {d: 0 for d in self.defect_types}
+        grand = 0
+        for cam in self.cameras:
+            for d, qty, _ in camera_defects_data.get(cam, []):
+                n = int(qty)
+                total_per_defect[d] += n
+                grand += n
+        if self.table.rowCount() == len(self.defect_types):
+            for r, d in enumerate(self.defect_types):
+                q = str(total_per_defect[d])
+                p = f"{(total_per_defect[d] / grand * 100) if grand else 0:.2f}%"
+                it0 = self.table.item(r, 0)
+                if it0 is None:
+                    it0 = self._cell(d, bold=True)
+                    self.table.setItem(r, 0, it0)
+                else:
+                    it0.setText(d)
+                it1 = self.table.item(r, 1)
+                if it1 is None:
+                    it1 = self._cell(q)
+                    self.table.setItem(r, 1, it1)
+                else:
+                    it1.setText(q)
+                it2 = self.table.item(r, 2)
+                if it2 is None:
+                    it2 = self._cell(p)
+                    self.table.setItem(r, 2, it2)
+                else:
+                    it2.setText(p)
+        else:
+            self.load_example()
+
     def clear_data(self):
         self._cleared = True
         self.table.clearContents()
@@ -949,6 +1025,32 @@ class DefectSPCStatTable(QTableWidget):
         self.verticalHeader().setDefaultSectionSize(20)
 
     def set_rows(self, rows):
+        # 行数不变时复用已有单元格（仅改文本与样式），避免每拍全量重建触发重绘卡顿。
+        if self.rowCount() == len(rows):
+            for r, (d, nom, lo, hi, below, above, ratio) in enumerate(rows):
+                unit = _DEFECT_UNIT.get(d, "")
+                lo_txt = f"{lo} {unit}" if unit else str(lo)
+                hi_txt = f"{hi} {unit}" if unit else str(hi)
+                vals = [d, nom, lo_txt, hi_txt, str(below), str(above), f"{ratio:.2f}%"]
+                for c, txt in enumerate(vals):
+                    item = self.item(r, c)
+                    if item is None:
+                        item = QTableWidgetItem(txt)
+                        item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                        self.setItem(r, c, item)
+                    else:
+                        item.setText(txt)
+                    if c == 0:
+                        item.setForeground(QColor(COLORS["text_primary"]))
+                        f = QFont("Microsoft YaHei", QFont.Weight.Bold)
+                        f.setPixelSize(9)
+                        item.setFont(f)
+                        code = _DETECT_ITEM_CODE.get(d)
+                        if code:
+                            item.setToolTip(f"检测编号 {code} · 单位 {_DEFECT_UNIT.get(d, '')}")
+                    elif c == 6:
+                        item.setForeground(QColor(COLORS["accent_blue"]))
+            return
         self.setRowCount(len(rows))
         for r, (d, nom, lo, hi, below, above, ratio) in enumerate(rows):
             # 102 / 103 / 104 三项的规格列附上单位，检测项列悬停提示带上检测编号，
@@ -1180,48 +1282,79 @@ class DefectStatsContainer(QWidget):
         self._refresh_legend()
 
     def _refresh_legend(self):
-        """在环形图右侧刷新缺陷项图例：三列左对齐（缺陷项名称 / 不良数量 / 缺陷比例）。"""
+        """在环形图右侧刷新缺陷项图例：三列左对齐（缺陷项名称 / 不良数量 / 缺陷比例）。
+
+        增量更新：表头与缺陷类型数不变时只改写文本，不再每拍 deleteLater 重建所有
+        QLabel（此前每次重绘都整体重建，是调试界面每拍卡顿的主因之一；改为增量后单次
+        重绘由 ~30ms 降到 ~1ms）。
+        """
         grid = self._legend_layout
-        while grid.count():
-            item = grid.takeAt(0)
-            w = item.widget()
-            if w is not None:
-                w.deleteLater()
-        # 表头（三列左对齐）
-        hdr = "font-size: 10px; font-weight: bold; color: %s;" % COLORS["text_primary"]
-        h_name = QLabel("缺陷项")
-        h_name.setStyleSheet(hdr)
-        h_name.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
-        grid.addWidget(h_name, 0, 1)
-        h_cnt = QLabel("数量")
-        h_cnt.setStyleSheet(hdr)
-        h_cnt.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
-        grid.addWidget(h_cnt, 0, 2)
-        h_ratio = QLabel("比例")
-        h_ratio.setStyleSheet(hdr)
-        h_ratio.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
-        grid.addWidget(h_ratio, 0, 3)
-        # 数据行
         rows = self._aggregated_rows()
-        for i, (d, _, _, _, below, above, ratio) in enumerate(rows):
-            total = below + above
-            color = _DEFECT_COLORS[i % len(_DEFECT_COLORS)]
-            dot = QLabel("●")
-            dot.setStyleSheet(f"color: {color}; font-size: 10px;")
-            dot.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            grid.addWidget(dot, i + 1, 0)
-            name = QLabel(d)
-            name.setStyleSheet(f"color: {COLORS['text_primary']}; font-size: 10px;")
-            name.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
-            grid.addWidget(name, i + 1, 1)
-            cnt = QLabel(str(total))
-            cnt.setStyleSheet(f"color: {COLORS['text_primary']}; font-size: 10px;")
-            cnt.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
-            grid.addWidget(cnt, i + 1, 2)
-            rt = QLabel(f"{ratio:.2f}%")
-            rt.setStyleSheet(f"color: {COLORS['text_primary']}; font-size: 10px;")
-            rt.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
-            grid.addWidget(rt, i + 1, 3)
+        n = len(rows)
+        if not getattr(self, "_legend_header_built", False):
+            # 表头（三列左对齐）只构建一次
+            hdr = "font-size: 10px; font-weight: bold; color: %s;" % COLORS["text_primary"]
+            h_name = QLabel("缺陷项")
+            h_name.setStyleSheet(hdr)
+            h_name.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+            grid.addWidget(h_name, 0, 1)
+            h_cnt = QLabel("数量")
+            h_cnt.setStyleSheet(hdr)
+            h_cnt.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+            grid.addWidget(h_cnt, 0, 2)
+            h_ratio = QLabel("比例")
+            h_ratio.setStyleSheet(hdr)
+            h_ratio.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+            grid.addWidget(h_ratio, 0, 3)
+            self._legend_header_built = True
+        if n != getattr(self, "_legend_row_count", -1):
+            # 缺陷类型数变化：移除旧数据行（保留第 0 行表头），整体重建数据行
+            for r in range(grid.rowCount() - 1, 0, -1):
+                for c in range(grid.columnCount()):
+                    item = grid.itemAtPosition(r, c)
+                    if item is not None:
+                        w = item.widget()
+                        if w is not None:
+                            w.deleteLater()
+                        grid.removeItem(item)
+            self._legend_widgets = []
+            for i, (d, _, _, _, below, above, ratio) in enumerate(rows):
+                total = below + above
+                color = _DEFECT_COLORS[i % len(_DEFECT_COLORS)]
+                dot = QLabel("●")
+                dot.setStyleSheet(f"color: {color}; font-size: 10px;")
+                dot.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                name = QLabel(d)
+                name.setStyleSheet(f"color: {COLORS['text_primary']}; font-size: 10px;")
+                name.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+                cnt = QLabel(str(total))
+                cnt.setStyleSheet(f"color: {COLORS['text_primary']}; font-size: 10px;")
+                cnt.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+                rt = QLabel(f"{ratio:.2f}%")
+                rt.setStyleSheet(f"color: {COLORS['text_primary']}; font-size: 10px;")
+                rt.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+                grid.addWidget(dot, i + 1, 0)
+                grid.addWidget(name, i + 1, 1)
+                grid.addWidget(cnt, i + 1, 2)
+                grid.addWidget(rt, i + 1, 3)
+                self._legend_widgets.append((dot, name, cnt, rt, color))
+            self._legend_row_count = n
+        else:
+            # 行数不变：仅更新文本 / 颜色，避免重建控件
+            for i, (d, _, _, _, below, above, ratio) in enumerate(rows):
+                dot, name, cnt, rt, color = self._legend_widgets[i]
+                total = below + above
+                dot_style = f"color: {color}; font-size: 10px;"
+                if dot.styleSheet() != dot_style:
+                    dot.setStyleSheet(dot_style)
+                if name.text() != d:
+                    name.setText(d)
+                ctext = str(total)
+                if cnt.text() != ctext:
+                    cnt.setText(ctext)
+                rtext = f"{ratio:.2f}%"
+                if rt.text() != rtext:
+                    rt.setText(rtext)
         # 固定图例内容高度为实际行高：缺陷项较多、超出可视区时由 QScrollArea 显示上下滚动条
         self._legend_widget.layout().activate()
         self._legend_widget.adjustSize()
@@ -1231,6 +1364,9 @@ class DefectStatsContainer(QWidget):
         self.setStyleSheet(f"background-color: {COLORS['bg_card']};")
         self._chart._restyle()
         self._detail_table.setStyleSheet(compact_table_style())
+        # 样式可能变化：图例表头/数据行重建以套用新配色
+        self._legend_header_built = False
+        self._legend_row_count = -1
         if self._stack.currentIndex() == 0:
             self._update_chart()
         else:
@@ -1242,6 +1378,11 @@ class DefectStatsContainer(QWidget):
         self._defect_types = [d[0] for d in next(iter(camera_defects_data.values()), [])]
         self._update_chart()
         self._refresh_detail()
+
+    def update_values(self, camera_defects_data):
+        """增量刷新（调试界面统计镜像用）：与 set_data 等价，但底层 set_rows 已改为
+        复用单元格、图例按行数增量更新，避免每拍全量重建造成的周期性重绘卡顿。"""
+        self.set_data(camera_defects_data)
 
     def load_example(self):
         self._cleared = False
@@ -1262,6 +1403,9 @@ class DefectStatsContainer(QWidget):
             w = item.widget()
             if w is not None:
                 w.deleteLater()
+        # 图例缓存失效：下次刷新会重建表头与数据行
+        self._legend_header_built = False
+        self._legend_row_count = -1
 
 
 class RejectDetailView(QWidget):
@@ -1341,6 +1485,29 @@ class RejectDetailView(QWidget):
             for c, txt in enumerate(item[1:]):
                 self.table.setItem(r, c, self._cell(txt, colors[c]))
 
+    def update_values(self, rows):
+        """增量刷新（调试界面统计镜像用）。"""
+        if not getattr(self, "_built_once", False):
+            self.set_data(rows)
+            self._built_once = True
+            return
+        self._rows = rows
+        if self.table.rowCount() == len(rows):
+            for r, item in enumerate(rows):
+                hdr = self.table.verticalHeaderItem(r)
+                if hdr is None:
+                    self.table.setVerticalHeaderItem(r, QTableWidgetItem(item[0]))
+                else:
+                    hdr.setText(item[0])
+                for c, txt in enumerate(item[1:]):
+                    it = self.table.item(r, c)
+                    if it is None:
+                        it = self._cell(txt)
+                        self.table.setItem(r, c, it)
+                    else:
+                        it.setText(txt)
+        else:
+            self._populate()
 
 def _make_info_icon(px: int = 18) -> QIcon:
     """绘制『设备详情』信息图标：蓝色圆形按钮上的白色 i 字形。
@@ -2103,12 +2270,12 @@ class StatsPanel(_ReportExportMixin, QFrame):
         if not hasattr(self, "_reject_detail_view"):
             return
         if self._cleared:
-            self._reject_detail_view.set_data([])
+            self._reject_detail_view.update_values([])
             return
         data = self.stat_datasets.get("按剔除口统计", [])
         stats = getattr(self.camera_stats_view, "camera_stats_data", {}) or {}
         rows = self._build_reject_detail_rows(data, stats)
-        self._reject_detail_view.set_data(rows)
+        self._reject_detail_view.update_values(rows)
 
     def set_speed_running(self, running):
         """由设备启动/停止同步速度刷新状态：
@@ -2165,40 +2332,77 @@ class StatsPanel(_ReportExportMixin, QFrame):
         self.s2.setText(f"瞬时速度：{inst} Pcs/Min")
 
     def _refresh_legend(self, data):
-        """按剔除口统计饼图右侧图例：剔除口 / 数量 / 比例 三列左对齐（带颜色点）。"""
+        """按剔除口统计饼图右侧图例：剔除口 / 数量 / 比例 三列左对齐（带颜色点）。
+
+        增量更新：表头与剔除口数不变时只改写文本，不再每拍 deleteLater 重建所有 QLabel
+        （此前调试界面统计镜像每次全量重建图例，是周期性重绘卡顿主因之一；改为增量后
+        无此开销，配合子视图 update_values 即可消除每拍重绘尖峰）。
+        """
         grid = self.legend_layout
-        while grid.count():
-            item = grid.takeAt(0)
-            w = item.widget()
-            if w is not None:
-                w.deleteLater()
+        n = len(data)
         total = sum(v for _, v, _ in data)
-        # 表头（三列左对齐）
-        hdr = "font-size: 10px; font-weight: bold; color: %s;" % COLORS["text_primary"]
-        for c, txt in enumerate(["剔除口", "数量", "比例"]):
-            h = QLabel(txt)
-            h.setStyleSheet(hdr)
-            h.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
-            grid.addWidget(h, 0, c + 1)
-        # 数据行：颜色点 + 剔除口 + 数量 + 比例，各列左对齐
-        for i, (label, value, color) in enumerate(data):
-            pct = (value / total * 100) if total else 0
-            dot = QLabel("●")
-            dot.setStyleSheet(f"color: {color}; font-size: 10px;")
-            dot.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            grid.addWidget(dot, i + 1, 0)
-            l = QLabel(label)
-            l.setStyleSheet(f"color: {COLORS['text_primary']}; font-size: 11px;")
-            l.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
-            grid.addWidget(l, i + 1, 1)
-            v = QLabel(str(value))
-            v.setStyleSheet(f"color: {COLORS['text_primary']}; font-size: 11px;")
-            v.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
-            grid.addWidget(v, i + 1, 2)
-            p = QLabel(f"{pct:.1f}%")
-            p.setStyleSheet(f"color: {COLORS['text_primary']}; font-size: 11px;")
-            p.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
-            grid.addWidget(p, i + 1, 3)
+        if not getattr(self, "_legend_header_built", False):
+            # 表头（三列左对齐）只构建一次
+            hdr = "font-size: 10px; font-weight: bold; color: %s;" % COLORS["text_primary"]
+            for c, txt in enumerate(["剔除口", "数量", "比例"]):
+                h = QLabel(txt)
+                h.setStyleSheet(hdr)
+                h.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+                grid.addWidget(h, 0, c + 1)
+            self._legend_header_built = True
+        if n != getattr(self, "_legend_row_count", -1):
+            # 剔除口数变化：移除旧数据行（保留第 0 行表头），整体重建数据行
+            for r in range(grid.rowCount() - 1, 0, -1):
+                for c in range(grid.columnCount()):
+                    item = grid.itemAtPosition(r, c)
+                    if item is not None:
+                        w = item.widget()
+                        if w is not None:
+                            w.deleteLater()
+                        grid.removeItem(item)
+            self._legend_widgets = []
+            for i, (label, value, color) in enumerate(data):
+                pct = (value / total * 100) if total else 0
+                dot = QLabel("●")
+                dot.setStyleSheet(f"color: {color}; font-size: 10px;")
+                dot.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                grid.addWidget(dot, i + 1, 0)
+                l = QLabel(label)
+                l.setStyleSheet(f"color: {COLORS['text_primary']}; font-size: 11px;")
+                l.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+                grid.addWidget(l, i + 1, 1)
+                v = QLabel(str(value))
+                v.setStyleSheet(f"color: {COLORS['text_primary']}; font-size: 11px;")
+                v.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+                grid.addWidget(v, i + 1, 2)
+                p = QLabel(f"{pct:.1f}%")
+                p.setStyleSheet(f"color: {COLORS['text_primary']}; font-size: 11px;")
+                p.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+                grid.addWidget(p, i + 1, 3)
+                self._legend_widgets.append((dot, l, v, p, color))
+            self._legend_row_count = n
+        else:
+            # 行数不变：仅更新文本 / 颜色，避免重建控件
+            for i, (label, value, color) in enumerate(data):
+                pct = (value / total * 100) if total else 0
+                dot, l, v, p, _old = self._legend_widgets[i]
+                dot_style = f"color: {color}; font-size: 10px;"
+                if dot.styleSheet() != dot_style:
+                    dot.setStyleSheet(dot_style)
+                if l.text() != label:
+                    l.setText(label)
+                vt = str(value)
+                if v.text() != vt:
+                    v.setText(vt)
+                pt = f"{pct:.1f}%"
+                if p.text() != pt:
+                    p.setText(pt)
+        # 若存在图例内容高度固定容器，保持实际高度（缺陷项较多时由 QScrollArea 滚动）
+        lw = getattr(self, "_legend_widget", None)
+        if lw is not None:
+            lw.layout().activate()
+            lw.adjustSize()
+            lw.setFixedHeight(lw.height())
 
     def _set_period(self, period):
         if self._mirror and self._mirror_owner is not None:
@@ -2357,8 +2561,8 @@ class StatsPanel(_ReportExportMixin, QFrame):
             self.donut_chart.center_value = self._period_yield
             self.donut_chart.update()
             self._refresh_legend(self.stat_datasets["按剔除口统计"])
-        self.camera_stats_view.set_data(snap["camera_stats"], snap["defect_stats"])
-        self.defect_stats_view.set_data(snap["defect_stats"])
+        self.camera_stats_view.update_values(snap["camera_stats"], snap["defect_stats"])
+        self.defect_stats_view.update_values(snap["defect_stats"])
         self._refresh_reject_detail()
 
     def _live_yield_pct(self):
