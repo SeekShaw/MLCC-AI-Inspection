@@ -2481,6 +2481,21 @@ _dlg._on_selection_changed()
 check(_dlg._btn_delete.isEnabled(), "母版: 选中副本后「删除产品」按钮恢复启用")
 _dlg.deleteLater()
 
+# ============ 2026-11-12 需求：左侧导航相机按钮图标右上角 [1]..[8] 尾标 ============
+from production_view import CAMERA_NAMES as _CN_BADGE
+from PyQt6.QtWidgets import QLabel as _QLabel_cls
+_cam_btns = _mw.nav_buttons[getattr(_mw, "cam_start", 1):
+                            getattr(_mw, "cam_start", 1) + len(_CN_BADGE)]
+check(len(_cam_btns) == len(_CN_BADGE)
+      and all(_CN_BADGE[i] == _cam_btns[i].toolTip() for i in range(len(_CN_BADGE))),
+      "导航尾标: 8 个相机导航按钮与工位名一一对应")
+_badge_ok = all(
+    any(isinstance(c, _QLabel_cls) and c.text() == f"[{i + 1}]"
+        and c.parent() is _cam_btns[i]
+        for c in _cam_btns[i].findChildren(_QLabel_cls))
+    for i in range(len(_CN_BADGE)))
+check(_badge_ok, "导航尾标: 每个相机按钮右上角带 [1]..[8] 小号尾标")
+
 # ============ 新需求：相机调试卡片「拍照设置」按钮（名称右侧，内容与导航「拍照设置」一致） ============
 check(hasattr(dv, "_cams") and len(dv._cams) > 0, "拍照设置: 调试界面持有相机卡片列表")
 if hasattr(dv, "_cams") and len(dv._cams) > 0:

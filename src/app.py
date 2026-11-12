@@ -457,9 +457,11 @@ class MainWindow(QMainWindow):
         self._add_nav_btn(cam_vbox, "🏠", "生产运行", 0)
 
         # 相机分组：一路相机一个图标按钮，点击打开对应调试界面
+        # 2026-11-12 需求：图标右上角加 [1]..[8] 尾标区分各工位相机
         cam_start = 1
         for i, name in enumerate(CAMERA_NAMES):
-            self._add_nav_btn(cam_vbox, "📷", name, cam_start + i, tip=name, perm="camera_debug")
+            self._add_nav_btn(cam_vbox, "📷", name, cam_start + i, tip=name,
+                              perm="camera_debug", badge=f"[{i + 1}]")
 
         nav_layout.addWidget(cam_group)
         # 中部弹性留白：把底部功能按钮组推到导航栏最下方
@@ -1480,15 +1482,30 @@ class MainWindow(QMainWindow):
             except Exception:
                 pass
 
-    def _add_nav_btn(self, layout, icon, label, target, key=None, tip=None, perm=None):
+    def _add_nav_btn(self, layout, icon, label, target, key=None, tip=None, perm=None,
+                     badge=None):
         """左侧导航按钮：仅图标（emoji），保持原有窄栏样式。
         target 为 int 时按页面序号翻页（可选中）；为 callable 时作为点击动作（打开窗口）。
         key 用于左侧功能按钮的权限标识与可见性登记；
-        perm 用于相机调试等翻页按钮的权限校验（无权限点击弹窗）。"""
+        perm 用于相机调试等翻页按钮的权限校验（无权限点击弹窗）。
+        badge 为右上角小号尾标文本（如 "[1]"，2026-11-12 需求：区分 8 路相机工位）。"""
         btn = QPushButton(icon)
         btn.setMinimumHeight(26)
         btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         btn.setToolTip(tip or label)
+        if badge:
+            tag = QLabel(badge, btn)
+            tag.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+            tag.setStyleSheet(self._nav_badge_style(False))
+            tag.adjustSize()
+            if not hasattr(self, "_nav_badges"):
+                self._nav_badges = []
+            self._nav_badges.append((btn, tag))
+            # 选中态尾标转白色（橙底上更清晰）
+            btn.toggled.connect(
+                lambda on, t=tag: t.setStyleSheet(self._nav_badge_style(on)))
+            # 布局完成后再定位（按钮宽度届时才确定）
+            QTimer.singleShot(0, self._place_nav_badges)
         if callable(target):
             if key is not None:
                 btn.clicked.connect(
@@ -1508,6 +1525,30 @@ class MainWindow(QMainWindow):
         if key is not None:
             self._func_nav[key] = btn
         return btn
+
+    def _nav_badge_style(self, checked):
+        """导航按钮右上角尾标样式：小号文本，选中（橙底）转白色。"""
+        color = "#FFFFFF" if checked else COLORS["text_secondary"]
+        return (f"color: {color}; background: transparent; "
+                f"font-size: 9px; font-weight: 600; border: none;")
+
+    def _place_nav_badges(self):
+        """把尾标贴到图标（emoji）自身的右上角，使其作为图标角标/上标。
+
+        按钮文字（emoji）在按钮内水平+垂直居中渲染，尾标若钉在按钮右上角会与
+        居中的图标错位；这里用字体度量算出图标包围盒，把尾标定位于图标右上角、
+        略微内嵌，视觉上贴合图标而非远离按钮边缘。
+        """
+        for btn, tag in getattr(self, "_nav_badges", []):
+            tag.adjustSize()
+            fm = QFontMetrics(btn.font())
+            text_w = fm.horizontalAdvance(btn.text()) or 18
+            icon_left = (btn.width() - text_w) / 2.0
+            icon_top = (btn.height() - fm.height()) / 2.0
+            # 图标右缘略左一点起笔，避免完全贴边；上缘略低于图标顶，作上标观感
+            x = max(0, int(icon_left + text_w - tag.width() * 0.45))
+            y = max(0, int(icon_top - tag.height() * 0.15))
+            tag.move(x, y)
 
     def _nav_btn_style(self):
         """左侧导航按钮统一样式：仅图标，居中；选中（翻页）高亮橙色。"""
@@ -1904,6 +1945,7 @@ class MainWindow(QMainWindow):
     def resizeEvent(self, event):
         super().resizeEvent(event)
         self._align_header_buttons()
+        self._place_nav_badges()
 
 
 def run(splash=None):
