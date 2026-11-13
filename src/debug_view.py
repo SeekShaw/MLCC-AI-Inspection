@@ -210,7 +210,8 @@ class CurveWidget(QWidget):
 # 分布图弹窗
 # ---------------------------------------------------------------------------
 class DistributionDialog(QDialog):
-    def __init__(self, parent, name, row, samples, lo=None, hi=None, prod_start=None):
+    def __init__(self, parent, name, row, samples, lo=None, hi=None, prod_start=None,
+                 defect_params=None):
         super().__init__(parent)
         self._owner = parent          # DebugView 实例（用于清零重置）
         self._row = row
@@ -218,9 +219,14 @@ class DistributionDialog(QDialog):
         self._hi = hi
         self._orig_lo = lo            # 检测列表中的原始设定值（「规格恢复」用）
         self._orig_hi = hi
+        self._spec0 = (lo, hi)        # 结果模式（0/1）的原始规格（参数切换恢复用）
         self._prod_start = prod_start
+        # 2026-11-13 需求②：Dec 0/1 检测项细化显示——判定参数（缺陷沿长度方向
+        # 的最大长度等）的结果值分布；None/空 = 普通检测项（无参数选择器）
+        self._defect_params = defect_params or []
+        self._active_key = None       # 当前细化参数键（None = 结果 0/1 分布）
         self.setWindowTitle(f"数值分布 - {name}")
-        self.setFixedSize(470, 540)
+        self.setFixedSize(470, 572 if self._defect_params else 540)
         self.setStyleSheet("QDialog{background-color:#1E1E1E;}")
         lay = QVBoxLayout(self)
         lay.setContentsMargins(14, 12, 14, 12)
@@ -233,6 +239,28 @@ class DistributionDialog(QDialog):
         self._time_range_lbl = QLabel("")
         self._time_range_lbl.setStyleSheet("color:#9FD3FF; font-size:11px;")
         lay.addWidget(self._time_range_lbl)
+
+        # 判定参数选择器（仅 Dec 0/1 检测项）：结果 (0/1) / 各缺陷参数实测值分布
+        self._param_combo = None
+        if self._defect_params:
+            prow = QHBoxLayout()
+            prow.setSpacing(6)
+            plbl = QLabel("判定参数：")
+            plbl.setStyleSheet("color:#E6E6E6; font-size:11px;")
+            prow.addWidget(plbl)
+            self._param_combo = QComboBox()
+            self._param_combo.addItem("结果 (0/1)", None)
+            for meta in self._defect_params:
+                self._param_combo.addItem(
+                    f"{meta['label']}（{meta['suffix']}）", meta["key"])
+            self._param_combo.setStyleSheet(
+                f"QComboBox {{ background-color: {COLORS['bg_card']}; "
+                f"color: {COLORS['text_primary']}; "
+                f"border: 1px solid {COLORS['border']}; border-radius: 4px; "
+                f"padding: 3px 8px; font-size: 11px; }}")
+            self._param_combo.currentIndexChanged.connect(self._on_defect_param_changed)
+            prow.addWidget(self._param_combo, 1)
+            lay.addLayout(prow)
 
         self._curve = CurveWidget([], lo=lo, hi=hi)
         lay.addWidget(self._curve, 1)
@@ -250,9 +278,9 @@ class DistributionDialog(QDialog):
         spec_v.setContentsMargins(10, 8, 10, 8)
         spec_v.setSpacing(6)
 
-        spec_title = QLabel("规格上下限（可仿真调整，联动 CPK 与限线）")
-        spec_title.setStyleSheet("color:#B9B9B9; font-size:11px;")
-        spec_v.addWidget(spec_title)
+        self._spec_title = QLabel("规格上下限（可仿真调整，联动 CPK 与限线）")
+        self._spec_title.setStyleSheet("color:#B9B9B9; font-size:11px;")
+        spec_v.addWidget(self._spec_title)
 
         hl = QHBoxLayout()
         hl.setSpacing(8)
@@ -345,6 +373,35 @@ class DistributionDialog(QDialog):
         self._init_time_range()
         self._refresh_live()
 
+    # ---- 判定参数细化显示（Dec 0/1 检测项）----
+    def _active_samples(self):
+        """按当前模式取样本：结果 (0/1) 分布 或 判定参数实测值分布。"""
+        if self._active_key is None:
+            return self._owner.get_distribution_samples(self._row)
+        return self._owner.get_defect_param_samples(self._row, self._active_key)
+
+    def _on_defect_param_changed(self):
+        """切换细化显示的判定参数：结果 (0/1) 或某缺陷参数实测值分布。
+
+        参数模式把限线切换为该参数的判定范围（最小值/最大值），「规格恢复」
+        恢复该范围；结果模式恢复原规格（0/0，0=OK 在限内、1=缺陷 越限）。
+        """
+        self._active_key = self._param_combo.currentData()
+        if self._active_key is None:
+            self._orig_lo, self._orig_hi = self._spec0
+            self._spec_title.setText("规格上下限（可仿真调整，联动 CPK 与限线）")
+        else:
+            self._orig_lo, self._orig_hi = \
+                self._owner._defect_a_params(self._row)[self._active_key]
+            self._spec_title.setText("缺陷参数判定范围（最小值/最大值，可仿真调整）")
+        self._lo, self._hi = self._orig_lo, self._orig_hi
+        for sb, val in ((self._sb_lo, self._lo), (self._sb_hi, self._hi)):
+            sb.blockSignals(True)
+            sb.setValue(float(val) if val is not None else 0.0)
+            sb.blockSignals(False)
+        self._curve.set_limits(self._lo, self._hi)
+        self._refresh_live()
+
     # ---- 实时刷新 ----
     def _refresh_live(self):
         """从 DebugView 实时读取该检测项的样本池并重绘。
@@ -352,7 +409,7 @@ class DistributionDialog(QDialog):
         未手动检索时，自动显示『从生产启动（或清零时刻）到现在』的全部数据，
         随生产运行持续刷新；设备停止时样本不再增长，曲线自动停止刷新。
         """
-        samples = self._owner.get_distribution_samples(self._row)
+        samples = self._active_samples()
         now = datetime.now()
         if samples:
             dstart = min(t for t, _ in samples)
@@ -377,8 +434,7 @@ class DistributionDialog(QDialog):
         self._filter_t1 = self._pydt(self._dt_end.dateTime().addSecs(59))
         if self._filter_t0 > self._filter_t1:
             self._filter_t0, self._filter_t1 = self._filter_t1, self._filter_t0
-        samples = self._owner.get_distribution_samples(self._row)
-        self._render(self._filter_t0, self._filter_t1, samples)
+        self._render(self._filter_t0, self._filter_t1, self._active_samples())
 
     def _render(self, t0, t1, samples):
         """按 [t0,t1] 区间渲染曲线 / 统计 / 规格范围内比例。"""
@@ -3764,6 +3820,10 @@ class DebugView(QWidget):
         # 缺陷定义（2026-11-12 需求）：按行记录「缺陷个数 / 缺陷长度 / 单个缺陷
         # 面积 / 缺陷总面积」，仅单位 Dec 且规格上下限均为 0 的检测项可设置
         self._defect_defs = {}
+        # Dec 检测项最近一帧缺陷参数实测值（按 A 类参数判定，供值分布细化显示）
+        self._defect_meas = {}
+        # Dec 检测项判定参数分布样本缓存：{行号: {参数键: [(datetime, value), ...]}}
+        self._defect_param_samples = {}
         # 出厂设置快照（「恢复至出厂」用）：内置原始数据的副本
         self._factory_data = [list(r) for r in raw]
 
@@ -5017,11 +5077,24 @@ class DebugView(QWidget):
     def get_distribution_samples(self, r):
         """返回该检测项带时间戳的样本列表 [(datetime, value), ...]。
         首次打开时生成：时间从『设备启动生产时间』(默认 now-30min) 到 now 均匀分布；
-        再次打开复用同一份缓存，保证时间范围稳定、可被检索/清零。"""
+        再次打开复用同一份缓存，保证时间范围稳定、可被检索/清零。
+        2026-11-13：Dec 0/1 检测项（规格 0/0）的结果序列按 A 类缺陷参数模拟
+        判定生成（0=OK / 1=缺陷），与「缺陷定义」判定逻辑一致。"""
         if r in self._dist_samples:
             return self._dist_samples[r]
-        center = self._detect_center(r)
-        series = _make_sample_series(1000 + r * 7, center)
+        raw = self._table_data[r] if 0 <= r < len(self._table_data) else None
+        unit = str((raw or [""] * 9)[8] or "").strip()
+        spec0 = self._detect_spec(r)
+        if unit == "Dec" and spec0[0] == 0 and spec0[1] == 0:
+            # Dec 0/1 行：结果序列 0/1（按 A 类缺陷参数模拟判定）
+            series = []
+            for i in range(48):
+                rnd = random.Random(1000 + r * 7 + i)
+                _meas, is_defect = self._sim_defect_measure(rnd, r)
+                series.append(1 if is_defect else 0)
+        else:
+            center = self._detect_center(r)
+            series = _make_sample_series(1000 + r * 7, center)
         now = datetime.now()
         start = self._prod_start_time or (now - timedelta(minutes=30))
         total = int((now - start).total_seconds())
@@ -5050,6 +5123,9 @@ class DebugView(QWidget):
         随后随生产运行持续追加新样本，曲线随生产数据重新更新显示。"""
         self._dist_samples[r] = []
         self._dist_cleared_at[r] = datetime.now()
+        # 2026-11-13：Dec 行值分布细化显示的判定参数样本一并清零重建
+        if getattr(self, "_defect_param_samples", None):
+            self._defect_param_samples.pop(r, None)
 
     # ---- 参数分布样本池（与检测项分布图共用同一套「样本池 + 全量时间窗 + 清零」操作逻辑）----
     def get_param_samples(self, name, key):
@@ -5137,8 +5213,17 @@ class DebugView(QWidget):
                 prev.close()
             except Exception:
                 pass
+        # 2026-11-13 需求②：检测结果为 0/1 且检测单位为 Dec 的行，值分布增加
+        # 细化显示——判定参数（缺陷沿长度方向的最大长度等）的结果值分布
+        raw = self._table_data[r] if 0 <= r < len(self._table_data) else None
+        unit = str((raw or [""] * 9)[8] or "").strip()
+        defect_params = None
+        if unit == "Dec" and lo == 0 and hi == 0:
+            defect_params = [{"label": lbl, "key": k, "suffix": suf}
+                             for lbl, k, suf in self._DEFECT_FIELDS]
         dlg = DistributionDialog(
-            self, name, r, samples, lo=lo, hi=hi, prod_start=self._prod_start_time)
+            self, name, r, samples, lo=lo, hi=hi, prod_start=self._prod_start_time,
+            defect_params=defect_params)
         # 非模态：打开后不影响生产运行界面 / 调试界面其它功能按钮的操作
         dlg.setModal(False)
         self._dist_dlg = dlg
@@ -5323,37 +5408,165 @@ class DebugView(QWidget):
         if b is not None:
             b.setEnabled(self._defect_def_enabled(r))
 
-    # A/B/C 缺陷类别（2026-11-13 需求）：每类 7 个参数，仅「缺陷个数」默认值
-    # 按类别不同（A=1，B/C=2），其余 6 项参数默认值一致；窗口默认选中 A 类。
+    # A/B/C 缺陷类别（2026-11-13 需求）：每类 7 个参数；2026-11-13 二次需求
+    # 各参数改为**范围设置**（最小值/最大值），窗口默认选中 A 类。
     DEFECT_CATS = ("A", "B", "C")
+
+    # 7 个参数的字段定义（标签 / 键 / 单位后缀）：缺陷定义窗口与「值分布」
+    # 细化显示（Dec 检测项判定参数分布）共用
+    _DEFECT_FIELDS = (
+        ("缺陷沿长度方向的最大长度", "len_max", " Pixel"),
+        ("占长度方向的比例", "len_ratio", " %"),
+        ("缺陷沿宽厚方向的最大长度", "wh_max", " Pixel"),
+        ("占宽厚方向的比例", "wh_ratio", " %"),
+        ("单个缺陷面积", "area_single", " Pixel²"),
+        ("缺陷总面积", "area_total", " Pixel²"),
+        ("缺陷个数", "count", " 个"),
+    )
 
     @staticmethod
     def _defect_cat_defaults(count):
-        """单类缺陷 7 参数默认值（2026-11-13 需求示例值）。"""
-        return {"len_max": 20.0, "len_ratio": 20.0, "wh_max": 20.0,
-                "wh_ratio": 20.0, "area_single": 9.0, "area_total": 9.0,
-                "count": int(count)}
+        """单类缺陷 7 参数默认范围（2026-11-13 需求：各参数改为范围设置）。
+
+        数值参数默认 0 ~ 原示例值（长向/宽厚最大 20 Pixel、比例 20%、
+        单面积/总面积 9 Pixel²）；缺陷个数默认 1 ~ 原示例个数（A=1、B/C=2）。
+        """
+        return {"len_max": {"min": 0.0, "max": 20.0},
+                "len_ratio": {"min": 0.0, "max": 20.0},
+                "wh_max": {"min": 0.0, "max": 20.0},
+                "wh_ratio": {"min": 0.0, "max": 20.0},
+                "area_single": {"min": 0.0, "max": 9.0},
+                "area_total": {"min": 0.0, "max": 9.0},
+                "count": {"min": 1, "max": int(count)}}
+
+    @classmethod
+    def _param_range(cls, val):
+        """把参数存值规范为 (min, max) 浮点区间（min>max 时自动对调）。
+
+        范围字典取 min/max；旧单值（2026-11-13 范围化之前的存档）视为
+        0 ~ 该值；缺失/非法回退 (0, 0)。
+        """
+        if isinstance(val, dict):
+            lo = _to_float(val.get("min"))
+            hi = _to_float(val.get("max"))
+        else:
+            hi = _to_float(val)
+            lo = 0.0 if hi is not None else None
+        if lo is None or hi is None:
+            return 0.0, 0.0
+        if lo > hi:
+            lo, hi = hi, lo
+        return lo, hi
+
+    def _defect_a_params(self, r):
+        """该行 A 类缺陷参数范围 {键: (min, max)}——**默认判定所用参数**。
+
+        行上无 A 类定义（或结构不符）时回退 A 类默认范围。
+        """
+        rec = getattr(self, "_defect_defs", {}).get(r)
+        if isinstance(rec, dict) and isinstance(rec.get("A"), dict):
+            return {k: self._param_range(rec["A"].get(k))
+                    for _l, k, _s in self._DEFECT_FIELDS}
+        return {k: self._param_range(self._defect_cat_defaults(1)[k])
+                for _l, k, _s in self._DEFECT_FIELDS}
+
+    def _sim_defect_measure(self, rnd, r, params=None):
+        """模拟一帧缺陷参数实测值并按 A 类参数范围判定（演示数据）。
+
+        各参数先在 A 类范围内随机取值（个数取整）；约 35% 概率随机挑一项参数
+        越出范围以演示非缺陷帧。全部参数均落在范围内 → 判为缺陷（结果 1）。
+        返回 (meas, is_defect)。
+        """
+        if params is None:
+            params = self._defect_a_params(r)
+        meas = {}
+        keys = [k for _l, k, _s in self._DEFECT_FIELDS]
+        for k in keys:
+            pmin, pmax = params[k]
+            if k == "count":
+                lo_i = max(1, int(round(pmin)))
+                hi_i = max(lo_i, int(round(pmax)))
+                meas[k] = rnd.randint(lo_i, hi_i) if hi_i > lo_i else lo_i
+            elif pmax > pmin:
+                meas[k] = round(rnd.uniform(pmin, pmax), 2)
+            else:
+                meas[k] = round(pmin, 2)
+        if rnd.random() < 0.35:
+            k = rnd.choice(keys)
+            pmin, pmax = params[k]
+            if pmax <= pmin:
+                pmax = pmin + 1.0
+            over = (pmax - pmin + 1.0) * rnd.uniform(0.2, 1.0)
+            meas[k] = (int(round(pmax + over)) if k == "count"
+                       else round(pmax + over, 2))
+        is_defect = all(params[k][0] <= meas[k] <= params[k][1] for k in keys)
+        return meas, is_defect
+
+    def get_defect_param_samples(self, r, key):
+        """Dec 检测项缺陷参数的分布样本 [(datetime, value), ...]（值分布细化显示）。
+
+        与检测项分布样本同一套缓存/时间窗逻辑：首次生成 48 点基线（时间从
+        生产启动到 now 均匀分布，取值按 A 类参数范围模拟实测），缓存复用；
+        「清零」随 clear_distribution 一并清除并重建。
+        """
+        store = getattr(self, "_defect_param_samples", None)
+        if store is None:
+            store = self._defect_param_samples = {}
+        per = store.setdefault(r, {})
+        cached = per.get(key)
+        if cached:
+            return cached
+        n = 48
+        now = datetime.now()
+        start = self._prod_start_time or (now - timedelta(minutes=30))
+        total = max(1, int((now - start).total_seconds()))
+        samples = []
+        for i in range(n):
+            rnd = random.Random(7000 + r * 31 + i * 13)
+            meas, _d = self._sim_defect_measure(rnd, r)
+            t = start if n == 1 else start + timedelta(seconds=total * i / (n - 1))
+            samples.append((t, float(meas.get(key, 0.0))))
+        per[key] = samples
+        return samples
 
     def _open_defect_def(self, name, r):
-        """「缺陷定义」小窗：A/B/C 三类缺陷，各含 7 个参数。
+        """「缺陷定义」小窗：A/B/C 三类缺陷，各含 7 个**范围参数**（最小/最大）。
 
         参数：缺陷沿长度方向的最大长度 / 占长度方向的比例 / 缺陷沿宽厚方向
-        的最大长度 / 占宽厚方向的比例 / 单个缺陷面积 / 缺陷总面积 / 缺陷个数。
-        切换类别时自动暂存当前编辑值并载入所选类别参数；「确定」写回该行
-        全部类别记录（再次打开回显，默认选中 A 类；「取消」不保存本次改动）。
+        的最大长度 / 占宽厚方向的比例 / 单个缺陷面积 / 缺陷总面积 / 缺陷个数，
+        每项均设 最小值 / 最大值；窗口内附判定说明（默认使用 A 类缺陷参数
+        判断，各参数均符合范围 → 判为缺陷，缺陷结果输出为 1）。
+        切换类别自动暂存当前编辑值并载入所选类别参数；「确定」写回该行全部
+        类别记录（重开落在最后确认类别回显；「取消」不保存本次改动）。
         """
         if not self._defect_def_enabled(r):
             QMessageBox.warning(
                 self, "不可设置",
                 "「缺陷定义」仅对检测单位为 Dec 且规格上下限均为 0 的检测项开放")
             return
-        # 旧单组参数结构迁移为 A/B/C 结构；深拷贝，保证「取消」不污染已存值。
-        # 2026-11-13 需求修订：各分类参数均可独立设置并在「确定」后应用——
-        # 记录最后确认类别（rec["cur"]），再次打开直接落在该类别回显已应用值。
+        # 旧存档迁移为 A/B/C 范围结构；深拷贝新结构，保证「取消」不污染已存值。
         old = getattr(self, "_defect_defs", {}).get(r)
         start_cat = "A"
-        if isinstance(old, dict) and all(k in old for k in self.DEFECT_CATS):
-            rec = {k: dict(old[k]) for k in self.DEFECT_CATS}
+        if isinstance(old, dict) and isinstance(old.get("A"), dict):
+            rec = {}
+            for cat in self.DEFECT_CATS:
+                src = old.get(cat)
+                base = self._defect_cat_defaults(1 if cat == "A" else 2)
+                if not isinstance(src, dict):
+                    src = base
+                migrated = {}
+                for _lbl, k, _suf in self._DEFECT_FIELDS:
+                    sv = src.get(k)
+                    if isinstance(sv, dict):
+                        migrated[k] = {"min": sv.get("min", 0), "max": sv.get("max", 0)}
+                    elif _to_float(sv) is not None:
+                        # 旧单值 → 范围：数值参数 0~原值，个数 1~原值
+                        migrated[k] = ({"min": 1, "max": int(_to_float(sv))}
+                                       if k == "count" else
+                                       {"min": 0.0, "max": float(_to_float(sv))})
+                    else:
+                        migrated[k] = dict(base[k])
+                rec[cat] = migrated
             if old.get("cur") in self.DEFECT_CATS:
                 start_cat = old["cur"]
         else:
@@ -5364,7 +5577,7 @@ class DebugView(QWidget):
         dlg.setWindowTitle(f"缺陷定义 - {name}")
         dlg.setWindowFlags(dlg.windowFlags() | Qt.WindowType.WindowStaysOnTopHint)
         dlg.setStyleSheet(f"QDialog {{ background-color: {COLORS['bg_panel']}; }}")
-        dlg.setFixedWidth(400)
+        dlg.setFixedWidth(470)
         v = QVBoxLayout(dlg)
         v.setContentsMargins(14, 12, 14, 12)
         v.setSpacing(8)
@@ -5383,7 +5596,7 @@ class DebugView(QWidget):
             f"QRadioButton::indicator:checked {{ "
             f"border: 1px solid {COLORS['accent_blue']}; "
             f"background-color: {COLORS['accent_blue']}; }}")
-        # —— 类别单选：A类缺陷 / B类缺陷 / C类缺陷（默认 A 类）——
+        # —— 类别单选：A类缺陷 / B类缺陷 / C类缺陷（默认 A 类；重开回上次确认类别）——
         cat_group = QButtonGroup(dlg)
         cat_group.setExclusive(True)
         cat_radios = {}
@@ -5396,54 +5609,70 @@ class DebugView(QWidget):
             cat_radios[cat] = rb
             cat_row.addWidget(rb)
         cat_row.addStretch()
-        cat_radios[start_cat].setChecked(True)   # 默认 A 类；重开回上次确认类别
+        cat_radios[start_cat].setChecked(True)
         v.addLayout(cat_row)
-        # —— 7 个参数行 ——
-        fields = (("缺陷沿长度方向的最大长度", "len_max", " Pixel"),
-                  ("占长度方向的比例", "len_ratio", " %"),
-                  ("缺陷沿宽厚方向的最大长度", "wh_max", " Pixel"),
-                  ("占宽厚方向的比例", "wh_ratio", " %"),
-                  ("单个缺陷面积", "area_single", " Pixel²"),
-                  ("缺陷总面积", "area_total", " Pixel²"),
-                  ("缺陷个数", "count", " 个"))
-        widgets = []   # [(label, key, widget), ...]
-        for label, key, suffix in fields:
+        # —— 判定说明（2026-11-13 需求：窗口内增加描述）——
+        desc = QLabel(
+            "判定说明：各参数按范围判定（最小值 ≤ 实测值 ≤ 最大值）。默认使用 "
+            "A 类缺陷参数进行判断，各参数均符合范围则判定为缺陷，缺陷结果输出为 1（NG）。")
+        desc.setWordWrap(True)
+        desc.setStyleSheet(f"color:{COLORS['text_secondary']}; font-size:10px;")
+        v.addWidget(desc)
+        # —— 7 个范围参数行（最小值 ~ 最大值）——
+        widgets = []   # [(key, w_min, w_max), ...]
+        for label, key, suffix in self._DEFECT_FIELDS:
             lbl = QLabel(label)
             lbl.setFont(_f)
             lbl.setStyleSheet(f"color:{COLORS['text_primary']}; font-size:11px;")
-            w = QSpinBox() if key == "count" else QDoubleSpinBox()
-            w.setFont(_f)
-            w.setStyleSheet(spin_style)
-            w.setFixedHeight(26)
-            w.setFixedWidth(130)
-            w.setRange(0, 9999999)
-            w.setSuffix(suffix)
-            if isinstance(w, QDoubleSpinBox):
-                w.setDecimals(2)
-            _v = float(rec["A"][key])
-            # QSpinBox（缺陷个数）只接受 int，QDoubleSpinBox 接受 float
-            w.setValue(int(_v) if isinstance(w, QSpinBox) else _v)
+            pair = []
+            for _tag in ("min", "max"):
+                w = QSpinBox() if key == "count" else QDoubleSpinBox()
+                w.setFont(_f)
+                w.setStyleSheet(spin_style)
+                w.setFixedHeight(26)
+                w.setFixedWidth(92)
+                w.setRange(0, 9999999)
+                w.setSuffix(suffix)
+                if isinstance(w, QDoubleSpinBox):
+                    w.setDecimals(2)
+                pair.append(w)
+            w_min, w_max = pair
+            lo0, hi0 = self._param_range(rec[start_cat].get(key))
+            w_min.setValue(int(round(lo0)) if isinstance(w_min, QSpinBox) else lo0)
+            w_max.setValue(int(round(hi0)) if isinstance(w_max, QSpinBox) else hi0)
             hl = QHBoxLayout()
-            hl.setSpacing(8)
+            hl.setSpacing(6)
             hl.addWidget(lbl, 1)
-            hl.addWidget(w, 0)
+            hl.addWidget(w_min, 0)
+            wave = QLabel("~")
+            wave.setFont(_f)
+            wave.setStyleSheet(f"color:{COLORS['text_primary']}; font-size:11px;")
+            hl.addWidget(wave, 0)
+            hl.addWidget(w_max, 0)
             v.addLayout(hl)
-            widgets.append((label, key, w))
+            widgets.append((key, w_min, w_max))
 
-        state = {"cur": "A"}
+        state = {"cur": start_cat}
+
+        def _spin_set(w, val):
+            """按控件类型写入值（QSpinBox 只接受 int）。"""
+            w.setValue(int(round(val)) if isinstance(w, QSpinBox) else float(val))
 
         def _stash():
-            """把当前显示的参数值暂存到当前类别。"""
+            """把当前显示的范围参数暂存到当前类别（最小值 > 最大值时自动对调）。"""
             cat = state["cur"]
-            for _lbl, key, w in widgets:
-                rec[cat][key] = (int(w.value()) if isinstance(w, QSpinBox)
-                                 else float(w.value()))
+            for key, w_min, w_max in widgets:
+                lo2, hi2 = w_min.value(), w_max.value()
+                if lo2 > hi2:
+                    lo2, hi2 = hi2, lo2
+                rec[cat][key] = {"min": float(lo2), "max": float(hi2)}
 
         def _load(cat):
-            """载入指定类别的参数值到显示控件。"""
-            for _lbl, key, w in widgets:
-                _v = float(rec[cat][key])
-                w.setValue(int(_v) if isinstance(w, QSpinBox) else _v)
+            """载入指定类别的范围参数到显示控件。"""
+            for key, w_min, w_max in widgets:
+                lo2, hi2 = self._param_range(rec[cat].get(key))
+                _spin_set(w_min, lo2)
+                _spin_set(w_max, hi2)
             state["cur"] = cat
 
         def _on_cat_toggled():
@@ -5471,15 +5700,12 @@ class DebugView(QWidget):
             _stash()
             rec["cur"] = state["cur"]   # 记住最后确认类别，重开直接回显
             self._defect_defs[r] = rec
-            self._dv_log(f"检测项「{name}」缺陷定义已更新（三类）："
+            self._dv_log(f"检测项「{name}」缺陷定义已更新（三类范围参数）："
                          + "；".join(
-                             f"{c}类: 个数={rec[c]['count']}，"
-                             f"长向最大={rec[c]['len_max']:.0f} Pixel"
-                             f"({rec[c]['len_ratio']:.0f}%)，"
-                             f"宽厚最大={rec[c]['wh_max']:.0f} Pixel"
-                             f"({rec[c]['wh_ratio']:.0f}%)，"
-                             f"单面积={rec[c]['area_single']:.1f} Pixel²，"
-                             f"总面积={rec[c]['area_total']:.1f} Pixel²"
+                             f"{c}类: " + "，".join(
+                                 f"{lbl.split('的')[-1]} {rec[c][k]['min']:g}~"
+                                 f"{rec[c][k]['max']:g}{suf}"
+                                 for lbl, k, suf in self._DEFECT_FIELDS)
                              for c in self.DEFECT_CATS))
             dlg.accept()
         ok_btn.clicked.connect(_apply_defect)
@@ -6860,8 +7086,9 @@ class DebugView(QWidget):
         上下限的实际结果刷新『检测结果』列（OK / NG / 待定）。
 
         - 未勾选：检测值保持默认，结果记为『待定』。
-        - **Dec 检测单位 + 规格 0/0（2026-11-12 需求①）**：示例值为 0/1 随机，
-          二值判定 0=OK、1=NG。
+        - **Dec 检测单位 + 规格 0/0**：2026-11-13 需求——模拟生成缺陷参数实测值，
+          默认使用 A 类缺陷参数判断（各参数均符合范围 → 缺陷），结果 0=OK、
+          1=NG（缺陷）。
         - **非 Dec 检测单位（2026-11-12 需求②）**：示例值按默认设置的上限/下限范围
           给出（区间内大概率 OK，约 12% 概率轻微越界以演示 NG）；区间内=OK、越界=NG。
           Dec 已设有效规格（非 0/0）亦按规格区间取示例值。
@@ -6898,8 +7125,12 @@ class DebugView(QWidget):
                     # 未勾选：检测值维持默认，结果=待定
                     new_val = default_val
                 elif unit == "Dec" and lo == 0 and hi == 0:
-                    # 需求①：缺陷计数（Dec）规格 0/0 → 二值演示，0=OK 1=NG
-                    new_val = "0" if rnd.random() < 0.5 else "1"
+                    # 2026-11-13 需求：默认使用 A 类缺陷参数进行判断——模拟生成
+                    # 各缺陷参数实测值，全部落在 A 类参数范围内 → 判为缺陷，
+                    # 缺陷结果输出为 1（NG），否则 0（OK）
+                    meas, is_defect = self._sim_defect_measure(rnd, r)
+                    new_val = "1" if is_defect else "0"
+                    self._defect_meas[r] = meas
                 elif lo is not None and hi is not None and lo <= hi:
                     # 需求②：非 Dec（及 Dec 已设规格）的检测项，示例值按规格上下限
                     # 范围给出；区间内大概率 OK，少量越界以演示 NG（越界幅度 ≤12% 区间跨度）

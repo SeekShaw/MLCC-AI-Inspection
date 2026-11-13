@@ -2502,7 +2502,7 @@ dv._refresh_row_display(_r1)
 check(dv._table.cellWidget(_r1, _c_ops).findChildren(
         _QPushButton)[0].isEnabled(),
       "缺陷定义: 恢复单位 Dec 后按钮重新可用")
-# ⑤ 缺陷定义小窗：A/B/C 三类缺陷，每类 7 参数（默认 A 类，示例值见需求）
+# ⑤ 缺陷定义小窗：A/B/C 三类缺陷，每类 7 个范围参数（最小值/最大值）+ 判定说明
 _name1 = str(dv._table_data[_r1][2])
 dv._open_defect_def(_name1, _r1)
 _ddlg2 = getattr(dv, "_defect_dlg", None)
@@ -2510,52 +2510,110 @@ check(_ddlg2 is not None and _ddlg2.isVisible()
       and "缺陷定义" in _ddlg2.windowTitle(),
       "缺陷定义: 点击按钮打开缺陷定义小窗")
 from PyQt6.QtWidgets import QSpinBox as _QSpin2, QDoubleSpinBox as _QDSpin2
-from PyQt6.QtWidgets import QRadioButton as _QRBtn2
+from PyQt6.QtWidgets import QRadioButton as _QRBtn2, QLabel as _QLabel2
 _cats2 = {rb.text(): rb for rb in _ddlg2.findChildren(_QRBtn2)}
 check(sorted(_cats2) == ["A类缺陷", "B类缺陷", "C类缺陷"]
       and _cats2["A类缺陷"].isChecked()
       and not _cats2["B类缺陷"].isChecked(),
       f"缺陷定义: 含 A/B/C 三类单选且默认选中 A 类 (实际 {sorted(_cats2)})")
-_spins = _ddlg2.findChildren(_QSpin2)
-_dspins = _ddlg2.findChildren(_QDSpin2)
-# A 类默认：长向最大 20 Pixel(20%)、宽厚最大 20 Pixel(20%)、单面积 9、总面积 9、个数 1
-check(len(_spins) == 1 and len(_dspins) == 6
-      and [round(s.value(), 2) for s in _dspins] == [20.0, 20.0, 20.0, 20.0, 9.0, 9.0]
-      and _spins[0].value() == 1,
-      f"缺陷定义: A类默认 20/20%/20/20%/9/9/1 "
-      f"(实际 {[round(s.value(), 2) for s in _dspins] + [_spins[0].value()]})")
-# B 类默认个数 2，其余一致
+_descs2 = [lb.text() for lb in _ddlg2.findChildren(_QLabel2) if "判定说明" in lb.text()]
+check(any("A 类缺陷参数" in t and "输出为 1" in t for t in _descs2),
+      "缺陷定义: 窗口内含判定说明（默认 A 类参数判断、符合则为缺陷输出 1）")
+_spins = _ddlg2.findChildren(_QSpin2)     # 缺陷个数 最小值/最大值
+_dspins = _ddlg2.findChildren(_QDSpin2)   # 6 个数值参数 最小值/最大值
+check(len(_spins) == 2 and len(_dspins) == 12,
+      f"缺陷定义: 7 参数均为范围设置（各含最小值/最大值两个输入框） "
+      f"(实际 spin={len(_spins)}, dspin={len(_dspins)})")
+# A 类默认范围：0~20 / 0~20% / 0~20 / 0~20% / 0~9 / 0~9 / 个数 1~1
+check([round(s.value(), 2) for s in _dspins] ==
+      [0.0, 20.0, 0.0, 20.0, 0.0, 20.0, 0.0, 20.0, 0.0, 9.0, 0.0, 9.0]
+      and _spins[0].value() == 1 and _spins[1].value() == 1,
+      f"缺陷定义: A 类默认范围 0~20/0~20%/0~20/0~20%/0~9/0~9/个数1~1 "
+      f"(实际 {[round(s.value(), 2) for s in _dspins]} 个数 "
+      f"{[_spins[0].value(), _spins[1].value()]})")
+# B 类默认：个数 1~2，其余数值范围与 A 类一致
 _cats2["B类缺陷"].setChecked(True); app.processEvents()
-check(_spins[0].value() == 2
-      and [round(s.value(), 2) for s in _dspins] == [20.0, 20.0, 20.0, 20.0, 9.0, 9.0],
-      f"缺陷定义: B类默认个数 2、其余参数与 A 类一致 (实际 个数={_spins[0].value()})")
-# 修改 B 类参数并暂存（切换回 A 触发暂存），再改 A 类个数后确定
-_dspins[4].setValue(15.0)            # B 类单个缺陷面积 → 15
+check(_spins[0].value() == 1 and _spins[1].value() == 2
+      and [round(s.value(), 2) for s in _dspins] ==
+      [0.0, 20.0, 0.0, 20.0, 0.0, 20.0, 0.0, 20.0, 0.0, 9.0, 0.0, 9.0],
+      f"缺陷定义: B 类默认个数 1~2、其余范围与 A 类一致 "
+      f"(实际 个数={[ _spins[0].value(), _spins[1].value()]})")
+# 修改 B 类（总面积上限 30、个数 2~3）并切回 A 类触发暂存；A 类个数最小>最大验证对调
+_dspins[11].setValue(30.0)            # B 类缺陷总面积 最大 → 30
+_spins[0].setValue(2); _spins[1].setValue(3)   # B 类个数 → 2~3
 _cats2["A类缺陷"].setChecked(True); app.processEvents()
-_spins[0].setValue(3)                # A 类缺陷个数 → 3
+_spins[0].setValue(5); _spins[1].setValue(1)   # A 类个数 5~1 → 暂存自动对调 1~5
 _okb = [b for b in _ddlg2.findChildren(_QPushButton) if b.text() == "确定"][0]
 _okb.click(); app.processEvents()
 _rec1 = dv._defect_defs.get(_r1, {})
-check(_rec1.get("A", {}).get("count") == 3
-      and _rec1.get("A", {}).get("area_single") == 9.0
-      and _rec1.get("B", {}).get("count") == 2
-      and _rec1.get("B", {}).get("area_single") == 15.0
-      and _rec1.get("C", {}).get("count") == 2,
-      f"缺陷定义: 确定后按类别写回该行记录（实际 {_rec1})")
+check(_rec1.get("A", {}).get("count") == {"min": 1.0, "max": 5.0}
+      and _rec1.get("A", {}).get("len_max") == {"min": 0.0, "max": 20.0}
+      and _rec1.get("B", {}).get("count") == {"min": 2.0, "max": 3.0}
+      and _rec1.get("B", {}).get("area_total") == {"min": 0.0, "max": 30.0}
+      and _rec1.get("C", {}).get("count") == {"min": 1.0, "max": 2.0},
+      f"缺陷定义: 确定后按类别写回范围参数（实际 {_rec1})")
 check(getattr(dv, "_defect_dlg") is not None
       and not dv._defect_dlg.isVisible(),
       "缺陷定义: 确定后窗口关闭，再次打开回显上次值")
 dv._open_defect_def(_name1, _r1)
-check(dv._defect_dlg.findChildren(_QSpin2)[0].value() == 3,
-      "缺陷定义: 再次打开落在最后确认类别并回显已应用值")
-# B 类参数已按类别应用：切换到 B 类，单个缺陷面积应为上次的 15.0
+_spins2b = dv._defect_dlg.findChildren(_QSpin2)
+check(_spins2b[0].value() == 1 and _spins2b[1].value() == 5,
+      f"缺陷定义: 再次打开落在最后确认类别并回显范围 "
+      f"(实际 个数={[ _spins2b[0].value(), _spins2b[1].value()]})")
+# B 类参数已按类别应用：切到 B 类，缺陷总面积最大值应为 30
 _rb_b2 = [rb for rb in dv._defect_dlg.findChildren(_QRBtn2) if rb.text() == "B类缺陷"][0]
 _rb_b2.setChecked(True); app.processEvents()
-check(dv._defect_dlg.findChildren(_QDSpin2)[4].value() == 15.0,
-      f"缺陷定义: B 类参数已应用并回显 (实际 单个缺陷面积="
-      f"{dv._defect_dlg.findChildren(_QDSpin2)[4].value()})")
+_dspins2b = dv._defect_dlg.findChildren(_QDSpin2)
+check(_dspins2b[10].value() == 0.0 and _dspins2b[11].value() == 30.0,
+      f"缺陷定义: B 类范围参数已应用并回显 (实际 缺陷总面积="
+      f"{[_dspins2b[10].value(), _dspins2b[11].value()]})")
 dv._defect_dlg.close()
 dv._defect_defs.pop(_r1, None)
+
+# ⑥ Dec 行按 A 类缺陷参数判定 + 值分布细化显示（2026-11-13 需求）
+import random as _rnd_mod
+_meas1, _def1 = dv._sim_defect_measure(_rnd_mod.Random(7), _r1)
+_ap1 = dv._defect_a_params(_r1)
+check(sorted(_meas1) == ["area_single", "area_total", "count", "len_max",
+                         "len_ratio", "wh_max", "wh_ratio"]
+      and _def1 == all(_ap1[k][0] <= _meas1[k] <= _ap1[k][1] for k in _ap1),
+      f"缺陷判定: 模拟实测含 7 参数且与 A 类范围判定一致 (defect={_def1})")
+_counts_bak = {k: list(v) for k, v in (getattr(dv, "_ok_ng_counts", {}) or {}).items()}
+dv.refresh_detection_values()
+_v1 = str(dv._table_data[_r1][4])
+check(_v1 in ("0", "1"),
+      f"缺陷判定: Dec 行按 A 类参数判定后结果输出 0/1 (实际 {_v1})")
+# 恢复 OK/NG 计数快照（避免污染后续「初始计数为 0」检查）
+dv._ok_ng_counts = {k: list(v) for k, v in _counts_bak.items()}
+dv._set_ok_ng_display(0)
+_samples1 = dv.get_distribution_samples(_r1)
+check(len(_samples1) == 48 and all(v in (0, 1) for _, v in _samples1),
+      f"值分布: Dec 行结果分布序列为 0/1（共 {len(_samples1)} 点）")
+dv._open_distribution(_name1, _r1)
+_ddlg3 = getattr(dv, "_dist_dlg", None)
+_combo3 = _ddlg3._param_combo if _ddlg3 is not None else None
+check(_combo3 is not None and _combo3.count() == 8 and _combo3.currentData() is None,
+      f"值分布: Dec 行细化显示含判定参数选择器（结果+7 参数共 8 项） "
+      f"(实际 {None if _combo3 is None else _combo3.count()})")
+_combo3.setCurrentIndex(1); app.processEvents()   # 切到 缺陷沿长度方向的最大长度
+check(_combo3.currentData() == "len_max"
+      and round(_ddlg3._sb_lo.value(), 1) == _ap1["len_max"][0]
+      and round(_ddlg3._sb_hi.value(), 1) == _ap1["len_max"][1],
+      f"值分布: 参数模式限线切换为该参数判定范围 "
+      f"(实际 {_ddlg3._sb_lo.value()}~{_ddlg3._sb_hi.value()})")
+_ps1 = dv.get_defect_param_samples(_r1, "len_max")
+check(len(_ps1) == 48
+      and all(v >= _ap1["len_max"][0] - 0.01 for _, v in _ps1)
+      and any(v > _ap1["len_max"][1] for _, v in _ps1),
+      f"值分布: 判定参数样本含范围内实测与越界演示 (共 {len(_ps1)} 点)")
+_combo3.setCurrentIndex(0); app.processEvents()   # 切回 结果 (0/1)
+check(_combo3.currentData() is None and _ddlg3._sb_lo.value() == 0
+      and _ddlg3._sb_hi.value() == 0,
+      f"值分布: 切回结果模式恢复原规格 0/0 (实际 "
+      f"{_ddlg3._sb_lo.value()}~{_ddlg3._sb_hi.value()})")
+_ddlg3.close()
+dv._dist_samples.pop(_r1, None)
+dv._defect_param_samples.pop(_r1, None)
 
 # ④ 急停报警行：下拉左侧「报警方案」标签
 _dlg_estop = _ad2.AlarmSettingsDialog(is_super_admin=True)
