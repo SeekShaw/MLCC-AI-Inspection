@@ -12,7 +12,7 @@ from PyQt6.QtWidgets import (
     QDialog, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QGroupBox,
     QProgressBar, QListWidget, QListWidgetItem, QLineEdit,
     QTableWidget, QTableWidgetItem, QTabWidget, QSplitter, QAbstractItemView,
-    QHeaderView, QComboBox, QGridLayout, QFrame, QScrollArea, QSpinBox,
+    QHeaderView, QComboBox, QGridLayout, QFrame, QScrollArea, QSpinBox, QCheckBox,
     QListView, QFileDialog, QMessageBox,
 )
 from PyQt6.QtGui import (QPainter, QColor, QStandardItem, QStandardItemModel,
@@ -847,19 +847,37 @@ class ImageSaveDialog(QDialog):
             row.addWidget(lbl)
             return row
 
-        # 相机工位（可多选）：2026-11-13 需求——图片保存支持选择要保存图像的
-        # 相机工位，默认**全部选择**，位于「保存策略」上一行。
+        # 相机工位（复选框平铺多选）：2026-11-13 需求修订——不用下拉多选，改为
+        # 复选框直接平铺（2 行 × 4 列网格），默认**全部勾选**，位于「保存策略」上一行。
         _row = _field_row("相机工位")
         try:
             from production_view import CAMERA_NAMES as _cam_names
-            _cam_items = list(_cam_names)
+            self._cam_names = list(_cam_names)
         except Exception:
-            _cam_items = [f"工位{i + 1}" for i in range(8)]
-        self._cam_combo = CheckableCombo(_cam_items)
-        self._cam_combo.set_checked(_cam_items)   # 默认全部选择
-        self._cam_combo.setMinimumHeight(28)
-        self._cam_combo.setStyleSheet(self._combo_style())
-        _row.addWidget(self._cam_combo, 1)
+            self._cam_names = [f"工位{i + 1}" for i in range(8)]
+        _cb_style = (
+            f"QCheckBox {{ color: {COLORS['text_primary']}; font-size: 13px; "
+            f"spacing: 6px; }}"
+            f"QCheckBox::indicator {{ width: 14px; height: 14px; "
+            f"border: 1px solid {COLORS['border']}; border-radius: 3px; "
+            f"background-color: {COLORS['bg_card']}; }}"
+            f"QCheckBox::indicator:checked {{ "
+            f"background-color: {COLORS['accent_blue']}; "
+            f"border: 1px solid {COLORS['accent_blue']}; }}")
+        self._cam_checks = {}
+        _cam_grid = QGridLayout()
+        _cam_grid.setContentsMargins(0, 0, 0, 0)
+        _cam_grid.setHorizontalSpacing(18)
+        _cam_grid.setVerticalSpacing(4)
+        for _i, _nm in enumerate(self._cam_names):
+            cb = QCheckBox(_nm)
+            cb.setStyleSheet(_cb_style)
+            cb.setChecked(True)   # 默认全部选择
+            self._cam_checks[_nm] = cb
+            _cam_grid.addWidget(cb, _i // 4, _i % 4)
+        _cam_holder = QWidget()
+        _cam_holder.setLayout(_cam_grid)
+        _row.addWidget(_cam_holder, 1)
         body.addLayout(_row)
 
         # 保存策略（下拉框与标题同一行）
@@ -1043,6 +1061,17 @@ class ImageSaveDialog(QDialog):
         return line
 
     # ------------------------------------------------------------------
+    def _cam_checked(self):
+        """返回已勾选的相机工位名（按 CAMERA_NAMES 顺序）。"""
+        return [n for n in getattr(self, "_cam_names", [])
+                if self._cam_checks[n].isChecked()]
+
+    def _set_cam_checked(self, names):
+        """按名单勾选相机工位（不在名单中的取消勾选）。"""
+        want = set(names or [])
+        for n, cb in getattr(self, "_cam_checks", {}).items():
+            cb.setChecked(n in want)
+
     def _cfg_path(self):
         """配置落盘路径：与 exe 或脚本同目录（优先跟随可执行文件所在目录）。"""
         import sys
@@ -1088,10 +1117,10 @@ class ImageSaveDialog(QDialog):
         defects = cfg.get("defects")
         if isinstance(defects, list):
             self._defect_combo.set_checked(defects)
-        # 相机工位：已存配置按存值回选；无存值保持默认全部选择
+        # 相机工位：已存配置按存值勾选；无存值保持默认全部选择
         cameras = cfg.get("cameras")
         if isinstance(cameras, list):
-            self._cam_combo.set_checked(cameras)
+            self._set_cam_checked(cameras)
         self._on_strategy_changed(self._strategy.currentText())
         self._on_enable_toggled(self._enable_sw.isChecked())
 
@@ -1132,7 +1161,7 @@ class ImageSaveDialog(QDialog):
             "disk_gb": self._disk.value(),
             "path": self._path_edit.text().strip(),
             "full_action": self._full_action.currentText(),
-            "cameras": self._cam_combo.checked_items(),
+            "cameras": self._cam_checked(),
             "defects": self._defect_combo.checked_items()
             if strategy == "指定检测项不良" else [],
         }

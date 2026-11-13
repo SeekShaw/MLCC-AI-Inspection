@@ -5347,10 +5347,15 @@ class DebugView(QWidget):
                 self, "不可设置",
                 "「缺陷定义」仅对检测单位为 Dec 且规格上下限均为 0 的检测项开放")
             return
-        # 旧单组参数结构迁移为 A/B/C 结构；深拷贝，保证「取消」不污染已存值
+        # 旧单组参数结构迁移为 A/B/C 结构；深拷贝，保证「取消」不污染已存值。
+        # 2026-11-13 需求修订：各分类参数均可独立设置并在「确定」后应用——
+        # 记录最后确认类别（rec["cur"]），再次打开直接落在该类别回显已应用值。
         old = getattr(self, "_defect_defs", {}).get(r)
+        start_cat = "A"
         if isinstance(old, dict) and all(k in old for k in self.DEFECT_CATS):
             rec = {k: dict(old[k]) for k in self.DEFECT_CATS}
+            if old.get("cur") in self.DEFECT_CATS:
+                start_cat = old["cur"]
         else:
             rec = {"A": self._defect_cat_defaults(1),
                    "B": self._defect_cat_defaults(2),
@@ -5391,7 +5396,7 @@ class DebugView(QWidget):
             cat_radios[cat] = rb
             cat_row.addWidget(rb)
         cat_row.addStretch()
-        cat_radios["A"].setChecked(True)
+        cat_radios[start_cat].setChecked(True)   # 默认 A 类；重开回上次确认类别
         v.addLayout(cat_row)
         # —— 7 个参数行 ——
         fields = (("缺陷沿长度方向的最大长度", "len_max", " Pixel"),
@@ -5464,6 +5469,7 @@ class DebugView(QWidget):
 
         def _apply_defect():
             _stash()
+            rec["cur"] = state["cur"]   # 记住最后确认类别，重开直接回显
             self._defect_defs[r] = rec
             self._dv_log(f"检测项「{name}」缺陷定义已更新（三类）："
                          + "；".join(

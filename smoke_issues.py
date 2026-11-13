@@ -2547,7 +2547,13 @@ check(getattr(dv, "_defect_dlg") is not None
       "缺陷定义: 确定后窗口关闭，再次打开回显上次值")
 dv._open_defect_def(_name1, _r1)
 check(dv._defect_dlg.findChildren(_QSpin2)[0].value() == 3,
-      "缺陷定义: 再次打开默认 A 类并回显上次设置的值")
+      "缺陷定义: 再次打开落在最后确认类别并回显已应用值")
+# B 类参数已按类别应用：切换到 B 类，单个缺陷面积应为上次的 15.0
+_rb_b2 = [rb for rb in dv._defect_dlg.findChildren(_QRBtn2) if rb.text() == "B类缺陷"][0]
+_rb_b2.setChecked(True); app.processEvents()
+check(dv._defect_dlg.findChildren(_QDSpin2)[4].value() == 15.0,
+      f"缺陷定义: B 类参数已应用并回显 (实际 单个缺陷面积="
+      f"{dv._defect_dlg.findChildren(_QDSpin2)[4].value()})")
 dv._defect_dlg.close()
 dv._defect_defs.pop(_r1, None)
 
@@ -2985,15 +2991,17 @@ check(_isd._scale.suffix() == "%", "图片保存: 缩放比例单位为 %")
 check(_isd._quality.value() == 100,
       f"图片保存: 图像质量默认100 (实际 {_isd._quality.value()})")
 
-# —— 相机工位（可多选，默认全部选择，位于「保存策略」上一行）——
+# —— 相机工位（复选框平铺多选，默认全部勾选，位于「保存策略」上一行）——
 from production_view import CAMERA_NAMES as _cams_smoke
-check(hasattr(_isd, "_cam_combo")
-      and _isd._cam_combo.checked_items() == list(_cams_smoke),
-      f"图片保存: 相机工位多选默认全部选择 (实际 {_isd._cam_combo.checked_items()})")
-_isd._cam_combo.set_checked(list(_cams_smoke)[:2])
-check(_isd._cam_combo.checked_items() == list(_cams_smoke)[:2],
-      f"图片保存: 相机工位可部分勾选 (实际 {_isd._cam_combo.checked_items()})")
-_isd._cam_combo.set_checked(list(_cams_smoke))
+from PyQt6.QtWidgets import QCheckBox as _QCB2
+_cbs2 = _isd.findChildren(_QCB2)
+check(not hasattr(_isd, "_cam_combo") and len(_cbs2) == len(list(_cams_smoke))
+      and _isd._cam_checked() == list(_cams_smoke),
+      f"图片保存: 相机工位复选框平铺（非下拉）且默认全部勾选 (实际 {_isd._cam_checked()})")
+_cbs2[0].setChecked(False)
+check(_isd._cam_checked() == list(_cams_smoke)[1:],
+      f"图片保存: 相机工位可逐个取消勾选 (实际 {_isd._cam_checked()})")
+_cbs2[0].setChecked(True)
 
 # —— 启用图像保存开关（顶部）——
 check(hasattr(_isd, "_enable_sw") and _isd._enable_sw.isChecked() is True,

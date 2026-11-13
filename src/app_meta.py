@@ -18,4 +18,4 @@
 - exe 文件名：EcompVision Inspector（不含版本号）。
 """
 APP_NAME_EN = "EcompVision Inspector"
-APP_VERSION = "3.8.5.17"
+APP_VERSION = "3.8.5.18"
