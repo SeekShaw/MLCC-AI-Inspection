@@ -5295,8 +5295,9 @@ class DebugView(QWidget):
 
     # ------------------------------------------------------------------
     # 缺陷定义（2026-11-12 需求）：针对检测单位为 Dec 且规格上下限均为 0 的
-    # 检测项，在「教导」左侧提供「缺陷定义」入口，弹小窗设置缺陷个数 / 缺陷
-    # 长度 / 单个缺陷面积 / 缺陷总面积（示例值 1 / 5 Pixel / 5 Pixel² / 20 Pixel²）。
+    # 检测项，在「教导」左侧提供「缺陷定义」入口，弹小窗设置 A/B/C 三类缺陷
+    # （每类 7 参数：长向最大长度/占长向比例/宽厚向最大长度/占宽厚向比例/
+    # 单个缺陷面积/缺陷总面积/缺陷个数，默认 A 类，示例值见 _defect_cat_defaults）。
     # ------------------------------------------------------------------
     def _defect_def_enabled(self, r):
         """「缺陷定义」按钮可用性：检测单位为 Dec 且规格上下限均为 0。
@@ -5322,24 +5323,43 @@ class DebugView(QWidget):
         if b is not None:
             b.setEnabled(self._defect_def_enabled(r))
 
-    def _open_defect_def(self, name, r):
-        """「缺陷定义」小窗：缺陷个数 / 缺陷长度 / 单个缺陷面积 / 缺陷总面积。
+    # A/B/C 缺陷类别（2026-11-13 需求）：每类 7 个参数，仅「缺陷个数」默认值
+    # 按类别不同（A=1，B/C=2），其余 6 项参数默认值一致；窗口默认选中 A 类。
+    DEFECT_CATS = ("A", "B", "C")
 
-        默认（示例）值：个数 1、长度 5 Pixel、单个缺陷面积 5 Pixel²、
-        缺陷总面积 20 Pixel²；「确定」写回该行记录（再次打开回显上次值）。
+    @staticmethod
+    def _defect_cat_defaults(count):
+        """单类缺陷 7 参数默认值（2026-11-13 需求示例值）。"""
+        return {"len_max": 20.0, "len_ratio": 20.0, "wh_max": 20.0,
+                "wh_ratio": 20.0, "area_single": 9.0, "area_total": 9.0,
+                "count": int(count)}
+
+    def _open_defect_def(self, name, r):
+        """「缺陷定义」小窗：A/B/C 三类缺陷，各含 7 个参数。
+
+        参数：缺陷沿长度方向的最大长度 / 占长度方向的比例 / 缺陷沿宽厚方向
+        的最大长度 / 占宽厚方向的比例 / 单个缺陷面积 / 缺陷总面积 / 缺陷个数。
+        切换类别时自动暂存当前编辑值并载入所选类别参数；「确定」写回该行
+        全部类别记录（再次打开回显，默认选中 A 类；「取消」不保存本次改动）。
         """
         if not self._defect_def_enabled(r):
             QMessageBox.warning(
                 self, "不可设置",
                 "「缺陷定义」仅对检测单位为 Dec 且规格上下限均为 0 的检测项开放")
             return
-        rec = getattr(self, "_defect_defs", {}).get(
-            r, {"count": 1, "length": 5.0, "area_single": 5.0, "area_total": 20.0})
+        # 旧单组参数结构迁移为 A/B/C 结构；深拷贝，保证「取消」不污染已存值
+        old = getattr(self, "_defect_defs", {}).get(r)
+        if isinstance(old, dict) and all(k in old for k in self.DEFECT_CATS):
+            rec = {k: dict(old[k]) for k in self.DEFECT_CATS}
+        else:
+            rec = {"A": self._defect_cat_defaults(1),
+                   "B": self._defect_cat_defaults(2),
+                   "C": self._defect_cat_defaults(2)}
         dlg = QDialog(self)
         dlg.setWindowTitle(f"缺陷定义 - {name}")
         dlg.setWindowFlags(dlg.windowFlags() | Qt.WindowType.WindowStaysOnTopHint)
         dlg.setStyleSheet(f"QDialog {{ background-color: {COLORS['bg_panel']}; }}")
-        dlg.setFixedWidth(320)
+        dlg.setFixedWidth(400)
         v = QVBoxLayout(dlg)
         v.setContentsMargins(14, 12, 14, 12)
         v.setSpacing(8)
@@ -5349,26 +5369,53 @@ class DebugView(QWidget):
             f"QSpinBox, QDoubleSpinBox {{ background-color: {COLORS['bg_card']}; "
             f"color: {COLORS['text_primary']}; border: 1px solid {COLORS['border']}; "
             f"border-radius: 4px; padding: 2px 6px; font-size: 11px; }}")
-        rows = [("缺陷个数", QSpinBox(), " 个"),
-                ("缺陷长度", QDoubleSpinBox(), " Pixel"),
-                ("单个缺陷面积", QDoubleSpinBox(), " Pixel²"),
-                ("缺陷总面积", QDoubleSpinBox(), " Pixel²")]
-        widgets = []
-        for label, w, suffix in rows:
+        radio_style = (
+            f"QRadioButton {{ color: {COLORS['text_primary']}; font-size: 12px; "
+            f"spacing: 6px; }}"
+            f"QRadioButton::indicator {{ width: 13px; height: 13px; "
+            f"border-radius: 6px; border: 1px solid #FFFFFF; "
+            f"background-color: transparent; }}"
+            f"QRadioButton::indicator:checked {{ "
+            f"border: 1px solid {COLORS['accent_blue']}; "
+            f"background-color: {COLORS['accent_blue']}; }}")
+        # —— 类别单选：A类缺陷 / B类缺陷 / C类缺陷（默认 A 类）——
+        cat_group = QButtonGroup(dlg)
+        cat_group.setExclusive(True)
+        cat_radios = {}
+        cat_row = QHBoxLayout()
+        cat_row.setSpacing(14)
+        for cat in self.DEFECT_CATS:
+            rb = QRadioButton(f"{cat}类缺陷")
+            rb.setStyleSheet(radio_style)
+            cat_group.addButton(rb)
+            cat_radios[cat] = rb
+            cat_row.addWidget(rb)
+        cat_row.addStretch()
+        cat_radios["A"].setChecked(True)
+        v.addLayout(cat_row)
+        # —— 7 个参数行 ——
+        fields = (("缺陷沿长度方向的最大长度", "len_max", " Pixel"),
+                  ("占长度方向的比例", "len_ratio", " %"),
+                  ("缺陷沿宽厚方向的最大长度", "wh_max", " Pixel"),
+                  ("占宽厚方向的比例", "wh_ratio", " %"),
+                  ("单个缺陷面积", "area_single", " Pixel²"),
+                  ("缺陷总面积", "area_total", " Pixel²"),
+                  ("缺陷个数", "count", " 个"))
+        widgets = []   # [(label, key, widget), ...]
+        for label, key, suffix in fields:
             lbl = QLabel(label)
             lbl.setFont(_f)
             lbl.setStyleSheet(f"color:{COLORS['text_primary']}; font-size:11px;")
+            w = QSpinBox() if key == "count" else QDoubleSpinBox()
             w.setFont(_f)
             w.setStyleSheet(spin_style)
             w.setFixedHeight(26)
-            w.setFixedWidth(150)
+            w.setFixedWidth(130)
             w.setRange(0, 9999999)
             w.setSuffix(suffix)
             if isinstance(w, QDoubleSpinBox):
                 w.setDecimals(2)
-            _v = float(rec[{"缺陷个数": "count", "缺陷长度": "length",
-                            "单个缺陷面积": "area_single",
-                            "缺陷总面积": "area_total"}[label]])
+            _v = float(rec["A"][key])
             # QSpinBox（缺陷个数）只接受 int，QDoubleSpinBox 接受 float
             w.setValue(int(_v) if isinstance(w, QSpinBox) else _v)
             hl = QHBoxLayout()
@@ -5376,7 +5423,30 @@ class DebugView(QWidget):
             hl.addWidget(lbl, 1)
             hl.addWidget(w, 0)
             v.addLayout(hl)
-            widgets.append(w)
+            widgets.append((label, key, w))
+
+        state = {"cur": "A"}
+
+        def _stash():
+            """把当前显示的参数值暂存到当前类别。"""
+            cat = state["cur"]
+            for _lbl, key, w in widgets:
+                rec[cat][key] = (int(w.value()) if isinstance(w, QSpinBox)
+                                 else float(w.value()))
+
+        def _load(cat):
+            """载入指定类别的参数值到显示控件。"""
+            for _lbl, key, w in widgets:
+                _v = float(rec[cat][key])
+                w.setValue(int(_v) if isinstance(w, QSpinBox) else _v)
+            state["cur"] = cat
+
+        def _on_cat_toggled():
+            _stash()
+            _load(next(k for k, rb in cat_radios.items() if rb.isChecked()))
+        for cat in self.DEFECT_CATS:
+            cat_radios[cat].toggled.connect(lambda _on=False: _on_cat_toggled())
+
         btns = QHBoxLayout()
         btns.addStretch(1)
         ok_btn = QPushButton("确定")
@@ -5393,17 +5463,18 @@ class DebugView(QWidget):
         v.addLayout(btns)
 
         def _apply_defect():
-            self._defect_defs[r] = {
-                "count": int(widgets[0].value()),
-                "length": float(widgets[1].value()),
-                "area_single": float(widgets[2].value()),
-                "area_total": float(widgets[3].value()),
-            }
-            self._dv_log(f"检测项「{name}」缺陷定义已更新："
-                         f"个数={self._defect_defs[r]['count']}，"
-                         f"长度={self._defect_defs[r]['length']:.2f} Pixel，"
-                         f"单个缺陷面积={self._defect_defs[r]['area_single']:.2f} Pixel²，"
-                         f"缺陷总面积={self._defect_defs[r]['area_total']:.2f} Pixel²")
+            _stash()
+            self._defect_defs[r] = rec
+            self._dv_log(f"检测项「{name}」缺陷定义已更新（三类）："
+                         + "；".join(
+                             f"{c}类: 个数={rec[c]['count']}，"
+                             f"长向最大={rec[c]['len_max']:.0f} Pixel"
+                             f"({rec[c]['len_ratio']:.0f}%)，"
+                             f"宽厚最大={rec[c]['wh_max']:.0f} Pixel"
+                             f"({rec[c]['wh_ratio']:.0f}%)，"
+                             f"单面积={rec[c]['area_single']:.1f} Pixel²，"
+                             f"总面积={rec[c]['area_total']:.1f} Pixel²"
+                             for c in self.DEFECT_CATS))
             dlg.accept()
         ok_btn.clicked.connect(_apply_defect)
         cancel_btn.clicked.connect(dlg.reject)

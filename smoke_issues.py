@@ -2502,7 +2502,7 @@ dv._refresh_row_display(_r1)
 check(dv._table.cellWidget(_r1, _c_ops).findChildren(
         _QPushButton)[0].isEnabled(),
       "缺陷定义: 恢复单位 Dec 后按钮重新可用")
-# ⑤ 缺陷定义小窗：缺陷个数/缺陷长度/单个缺陷面积/缺陷总面积，示例值 1/5/5/20
+# ⑤ 缺陷定义小窗：A/B/C 三类缺陷，每类 7 参数（默认 A 类，示例值见需求）
 _name1 = str(dv._table_data[_r1][2])
 dv._open_defect_def(_name1, _r1)
 _ddlg2 = getattr(dv, "_defect_dlg", None)
@@ -2510,29 +2510,44 @@ check(_ddlg2 is not None and _ddlg2.isVisible()
       and "缺陷定义" in _ddlg2.windowTitle(),
       "缺陷定义: 点击按钮打开缺陷定义小窗")
 from PyQt6.QtWidgets import QSpinBox as _QSpin2, QDoubleSpinBox as _QDSpin2
+from PyQt6.QtWidgets import QRadioButton as _QRBtn2
+_cats2 = {rb.text(): rb for rb in _ddlg2.findChildren(_QRBtn2)}
+check(sorted(_cats2) == ["A类缺陷", "B类缺陷", "C类缺陷"]
+      and _cats2["A类缺陷"].isChecked()
+      and not _cats2["B类缺陷"].isChecked(),
+      f"缺陷定义: 含 A/B/C 三类单选且默认选中 A 类 (实际 {sorted(_cats2)})")
 _spins = _ddlg2.findChildren(_QSpin2)
 _dspins = _ddlg2.findChildren(_QDSpin2)
-check(len(_spins) == 1 and len(_dspins) == 3
-      and _spins[0].value() == 1
-      and [round(s.value(), 2) for s in _dspins] == [5.0, 5.0, 20.0],
-      f"缺陷定义: 缺陷个数=1、长度=5Pixel、单个面积=5Pixel²、总面积=20Pixel² "
-      f"(实际 {[ _spins[0].value()] + [round(s.value(), 2) for s in _dspins]})")
-_spins[0].setValue(3)
-_dspins[0].setValue(7.5)
-_dspins[2].setValue(30.0)
+# A 类默认：长向最大 20 Pixel(20%)、宽厚最大 20 Pixel(20%)、单面积 9、总面积 9、个数 1
+check(len(_spins) == 1 and len(_dspins) == 6
+      and [round(s.value(), 2) for s in _dspins] == [20.0, 20.0, 20.0, 20.0, 9.0, 9.0]
+      and _spins[0].value() == 1,
+      f"缺陷定义: A类默认 20/20%/20/20%/9/9/1 "
+      f"(实际 {[round(s.value(), 2) for s in _dspins] + [_spins[0].value()]})")
+# B 类默认个数 2，其余一致
+_cats2["B类缺陷"].setChecked(True); app.processEvents()
+check(_spins[0].value() == 2
+      and [round(s.value(), 2) for s in _dspins] == [20.0, 20.0, 20.0, 20.0, 9.0, 9.0],
+      f"缺陷定义: B类默认个数 2、其余参数与 A 类一致 (实际 个数={_spins[0].value()})")
+# 修改 B 类参数并暂存（切换回 A 触发暂存），再改 A 类个数后确定
+_dspins[4].setValue(15.0)            # B 类单个缺陷面积 → 15
+_cats2["A类缺陷"].setChecked(True); app.processEvents()
+_spins[0].setValue(3)                # A 类缺陷个数 → 3
 _okb = [b for b in _ddlg2.findChildren(_QPushButton) if b.text() == "确定"][0]
 _okb.click(); app.processEvents()
-check(dv._defect_defs.get(_r1, {}).get("count") == 3
-      and dv._defect_defs.get(_r1, {}).get("length") == 7.5
-      and dv._defect_defs.get(_r1, {}).get("area_single") == 5.0
-      and dv._defect_defs.get(_r1, {}).get("area_total") == 30.0,
-      f"缺陷定义: 确定后写回该行记录（实际 {dv._defect_defs.get(_r1)})")
+_rec1 = dv._defect_defs.get(_r1, {})
+check(_rec1.get("A", {}).get("count") == 3
+      and _rec1.get("A", {}).get("area_single") == 9.0
+      and _rec1.get("B", {}).get("count") == 2
+      and _rec1.get("B", {}).get("area_single") == 15.0
+      and _rec1.get("C", {}).get("count") == 2,
+      f"缺陷定义: 确定后按类别写回该行记录（实际 {_rec1})")
 check(getattr(dv, "_defect_dlg") is not None
       and not dv._defect_dlg.isVisible(),
       "缺陷定义: 确定后窗口关闭，再次打开回显上次值")
 dv._open_defect_def(_name1, _r1)
 check(dv._defect_dlg.findChildren(_QSpin2)[0].value() == 3,
-      "缺陷定义: 再次打开回显上次设置的值")
+      "缺陷定义: 再次打开默认 A 类并回显上次设置的值")
 dv._defect_dlg.close()
 dv._defect_defs.pop(_r1, None)
 
@@ -2969,6 +2984,16 @@ check(_isd._scale.value() == 100,
 check(_isd._scale.suffix() == "%", "图片保存: 缩放比例单位为 %")
 check(_isd._quality.value() == 100,
       f"图片保存: 图像质量默认100 (实际 {_isd._quality.value()})")
+
+# —— 相机工位（可多选，默认全部选择，位于「保存策略」上一行）——
+from production_view import CAMERA_NAMES as _cams_smoke
+check(hasattr(_isd, "_cam_combo")
+      and _isd._cam_combo.checked_items() == list(_cams_smoke),
+      f"图片保存: 相机工位多选默认全部选择 (实际 {_isd._cam_combo.checked_items()})")
+_isd._cam_combo.set_checked(list(_cams_smoke)[:2])
+check(_isd._cam_combo.checked_items() == list(_cams_smoke)[:2],
+      f"图片保存: 相机工位可部分勾选 (实际 {_isd._cam_combo.checked_items()})")
+_isd._cam_combo.set_checked(list(_cams_smoke))
 
 # —— 启用图像保存开关（顶部）——
 check(hasattr(_isd, "_enable_sw") and _isd._enable_sw.isChecked() is True,

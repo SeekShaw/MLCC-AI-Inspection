@@ -824,9 +824,9 @@ class ImageSaveDialog(QDialog):
         # ⚠️ 保存策略/保存格式已统一用字段样式（13px 常规字重），故标签列宽
         # 只需按**全部字段标签**用同一字体实算，不能再混用 12px 加粗的度量。
         _fm_lbl = QFontMetrics(QFont("Microsoft YaHei", 13))
-        _ALL_LABELS = ("检测项", "保存策略", "保存格式", "缩放比例", "图像质量",
-                       "保存天数", "硬盘剩余空间监控", "图片存满时执行动作",
-                       "保存路径")
+        _ALL_LABELS = ("相机工位", "检测项", "保存策略", "保存格式", "缩放比例",
+                       "图像质量", "保存天数", "硬盘剩余空间监控",
+                       "图片存满时执行动作", "保存路径")
         _lbl_w = max(_fm_lbl.horizontalAdvance(t) for t in _ALL_LABELS) + 12
 
         def _field_row(text):
@@ -846,6 +846,21 @@ class ImageSaveDialog(QDialog):
             lbl.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
             row.addWidget(lbl)
             return row
+
+        # 相机工位（可多选）：2026-11-13 需求——图片保存支持选择要保存图像的
+        # 相机工位，默认**全部选择**，位于「保存策略」上一行。
+        _row = _field_row("相机工位")
+        try:
+            from production_view import CAMERA_NAMES as _cam_names
+            _cam_items = list(_cam_names)
+        except Exception:
+            _cam_items = [f"工位{i + 1}" for i in range(8)]
+        self._cam_combo = CheckableCombo(_cam_items)
+        self._cam_combo.set_checked(_cam_items)   # 默认全部选择
+        self._cam_combo.setMinimumHeight(28)
+        self._cam_combo.setStyleSheet(self._combo_style())
+        _row.addWidget(self._cam_combo, 1)
+        body.addLayout(_row)
 
         # 保存策略（下拉框与标题同一行）
         _row = _field_row("保存策略")
@@ -1073,6 +1088,10 @@ class ImageSaveDialog(QDialog):
         defects = cfg.get("defects")
         if isinstance(defects, list):
             self._defect_combo.set_checked(defects)
+        # 相机工位：已存配置按存值回选；无存值保持默认全部选择
+        cameras = cfg.get("cameras")
+        if isinstance(cameras, list):
+            self._cam_combo.set_checked(cameras)
         self._on_strategy_changed(self._strategy.currentText())
         self._on_enable_toggled(self._enable_sw.isChecked())
 
@@ -1113,6 +1132,7 @@ class ImageSaveDialog(QDialog):
             "disk_gb": self._disk.value(),
             "path": self._path_edit.text().strip(),
             "full_action": self._full_action.currentText(),
+            "cameras": self._cam_combo.checked_items(),
             "defects": self._defect_combo.checked_items()
             if strategy == "指定检测项不良" else [],
         }
@@ -1125,6 +1145,7 @@ class ImageSaveDialog(QDialog):
                       f"缩放={cfg['scale']}% 质量={cfg['quality']} "
                       f"保存{cfg['days']}天 磁盘余量监控{cfg['disk_gb']}GB "
                       f"存满{cfg['full_action']}"
+                      + (f" 相机工位={'、'.join(cfg['cameras'])}" if cfg.get("cameras") else "")
                       + (f" 检测项={'、'.join(cfg['defects'])}" if cfg["defects"] else ""))
         self.close()
 
