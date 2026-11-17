@@ -2896,6 +2896,85 @@ check(_pmd_dlg2.products[-1].get("product_length") == "1.1"
       f"拷贝产品: 尺寸字段随配方复制 (实际 {_pmd_dlg2.products[-1]})")
 _pmd_dlg2.deleteLater()
 
+# ============ 2026-11-17：尺寸公差/规格上限下限 + 型号联动标称值 + 标签橙色 ============
+_npd2 = _NPD(None)
+check(_npd2.MODEL_NOMINAL_SIZES.get("0201") == ("0.50", "0.25", "0.20")
+      and _npd2.MODEL_NOMINAL_SIZES.get("0402") == ("1.00", "0.50", "0.50")
+      and _npd2.MODEL_NOMINAL_SIZES.get("0603") == ("1.60", "0.80", "0.80"),
+      "新建产品: 型号→标称尺寸映射含 0201/0402/0603 用户指定值")
+check(_npd2.DEFAULT_LOWER_TOL == "-0.05" and _npd2.DEFAULT_UPPER_TOL == "0.05",
+      "新建产品: 下公差默认 -0.05、上公差默认 0.05")
+check(all(_npd2._tol_edits[f"product_{k}_{f}"].text() == d
+          for k in ("length", "width", "thickness")
+          for f, d in (("lower_tol", "-0.05"), ("upper_tol", "0.05"))),
+      "新建产品: 三个尺寸的上下公差输入框均回填默认值")
+check(all(_npd2._spec_displays[f"product_{k}_{f}"].isReadOnly()
+          for k in ("length", "width", "thickness")
+          for f in ("spec_lower", "spec_upper")),
+      "新建产品: 规格下限/上限只读（自动计算不可手动输入）")
+check(_npd2.product_length_spec_lower == "0.35"
+      and _npd2.product_length_spec_upper == "0.45"
+      and _npd2._spec_displays["product_length_spec_lower"].text() == "0.35",
+      "新建产品: 规格下限=标称+下公差、上限=标称+上公差")
+from styles import COLORS as _COLORS
+_orange = _COLORS["accent_orange"]
+_label_styles = {lb.text(): lb.styleSheet() for lb in _npd2.findChildren(QLabel)}
+check(_orange in _label_styles.get("1.产品类型：", "")
+      and _orange in _label_styles.get("2.产品型号：", "")
+      and _orange in _label_styles.get("3.输入产品尺寸", ""),
+      f"新建产品: 产品类型/型号标签改为橙色，与第3项颜色一致 (期望 {_orange})")
+_npd2._product_combos["product_model"].setCurrentText("0402")
+check(_npd2.product_length == "1.00" and _npd2.product_width == "0.50"
+      and _npd2.product_thickness == "0.50"
+      and _npd2.product_length_spec_lower == "0.95"
+      and _npd2.product_length_spec_upper == "1.05",
+      "新建产品: 切换型号自动更新长宽厚标称值并联动规格上下限")
+_npd2._tol_edits["product_length_upper_tol"].setText("0.10")
+check(_npd2.product_length_spec_upper == "1.10"
+      and _npd2._spec_displays["product_length_spec_upper"].text() == "1.10",
+      "新建产品: 修改上公差后规格上限自动重算")
+_npd2._size_edits["product_length"].setText("2.0")
+check(_npd2.product_length_spec_lower == "1.95"
+      and _npd2.product_length_spec_upper == "2.10",
+      "新建产品: 修改标称尺寸后规格上下限同步重算")
+_npd2.deleteLater()
+_npd3 = _NPD(None, edit_product={
+    "product_model": "0603", "product_length": "1.7",
+    "product_width": "0.9", "product_thickness": "0.9",
+    "product_length_lower_tol": "-0.10", "product_length_upper_tol": "0.08",
+    "product_length_spec_lower": "1.60", "product_length_spec_upper": "1.78"})
+check(_npd3._tol_edits["product_length_lower_tol"].text() == "-0.10"
+      and _npd3._tol_edits["product_length_upper_tol"].text() == "0.08",
+      "编辑产品: 上下公差回显到输入框")
+check(_npd3._spec_displays["product_length_spec_lower"].text() == "1.60"
+      and _npd3._spec_displays["product_length_spec_upper"].text() == "1.78"
+      and _npd3.product_length == "1.7",
+      "编辑产品: 规格回显且不被型号联动覆盖")
+_npd3.deleteLater()
+_dim_extra = [f"product_{k}_{s}" for k in ("length", "width", "thickness")
+              for s in ("lower_tol", "upper_tol", "spec_lower", "spec_upper")]
+check(all(f'dlg.{f}' in _src_app_npd and f'dlg.{f}' in _src_pmd_npd
+          for f in _dim_extra),
+      "尺寸公差/规格: 新建与编辑写回链路均已接入")
+check(all(f'src.get("{f}"' in _src_pmd_npd for f in _dim_extra),
+      "尺寸公差/规格: 复制保留链路已接入")
+_pmd_dlg3 = ProductManagerDialog([{
+    "id": "tol-test", "product_type": "电容", "product_model": "0402",
+    "product_spec": "Ver01", "description": "", "camera_configs": [],
+    "product_length": "1.0", "product_length_lower_tol": "-0.08",
+    "product_length_upper_tol": "0.07", "product_length_spec_lower": "0.92",
+    "product_length_spec_upper": "1.07",
+}], None)
+_pmd_dlg3.table.selectRow(0)
+_pmd_dlg3._on_selection_changed()
+_pmd_dlg3._on_copy()
+check(_pmd_dlg3.products[-1].get("product_length_lower_tol") == "-0.08"
+      and _pmd_dlg3.products[-1].get("product_length_upper_tol") == "0.07"
+      and _pmd_dlg3.products[-1].get("product_length_spec_lower") == "0.92"
+      and _pmd_dlg3.products[-1].get("product_length_spec_upper") == "1.07",
+      f"拷贝产品: 公差与规格字段随配方复制 (实际 {_pmd_dlg3.products[-1]})")
+_pmd_dlg3.deleteLater()
+
 # ============ 2026-11-12 修复：产品管理编辑/新增内容需持久化（退出再打开保留） ============
 import product_manager_dialog as _pmd
 import os as _os
