@@ -1251,8 +1251,10 @@ class MainWindow(QMainWindow):
             on_clear_valve_counts=lambda key=None: self.production.reset_valve_counts(key),
             is_super_admin=is_super,
             get_valve_counts=self.production.get_valve_counts,
-            # 「次数清零」回调：清零玻璃盘累计旋转圈数（已旋转次数）
+            # 「清零重计」回调：清零玻璃盘累计圈数与清洁天数计时基准
             on_reset_glass_rotation=self.production.reset_glass_rotation,
+            # 计数方式变更回调：保存后立即刷新设备状态「玻璃盘使用率」行（圈/天）
+            on_glass_clean_mode_changed=lambda mode: self.production.refresh_glass_clean_status(),
         )
         self._bind_tab_permissions(dlg, ALARM_TAB_PERMISSIONS)
         if dlg.exec() == QDialog.DialogCode.Accepted:

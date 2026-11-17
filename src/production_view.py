@@ -3430,7 +3430,7 @@ class ProductionView(_ReportExportMixin, QWidget):
         self._pending_routed = set()        # 已按「抽盒超时剔除逻辑」改判为待定的料盒（日志去重）
         # 玻璃盘清洁计数累计：按「计数方式」（圈数 / 天数）统计——
         # 圈数模式按 DD 马达转速 × 真实流逝时间累计，每次启动生产从 0 累计；
-        # 天数模式按距上次「次数清零」的天数统计（跨运行段累计）。
+        # 天数模式按距上次「清零重计」的天数统计（跨运行段累计）。
         # 达到「玻璃盘清洁计数报警」阈值即按所选方案记红色报警（不触发停机），
         # 达阈值只记一次（_glass_rota_alarmed 守卫）。
         self._glass_rotations = 0.0
@@ -4033,7 +4033,7 @@ class ProductionView(_ReportExportMixin, QWidget):
         # 实时测量行（总气源/旋转盘转速/静电电压）+ 设备门 / 误踢漏踢 / 急停 / 视觉控制器：
         # 均不写百分比，运行期间示例值波动、越界则状态灯变红并报警。
         # 2026-11-09：「负压」显示行已删除，但后台实时测量与设备设置的负压参数仍保留；
-        #「玻璃盘使用转数」「飞料状态」需显示百分比，故不在此集合中。
+        #「玻璃盘使用率」「飞料状态」需显示百分比，故不在此集合中。
         no_pct_rows = {"总气源", "旋转盘转速", "静电电压", "设备门",
                        "OK料仓误踢频率", "OK料仓漏踢频率", "急停按钮", "视觉控制器",
                        "玻璃盘上下跳动", "相机状态"}
@@ -4126,7 +4126,7 @@ class ProductionView(_ReportExportMixin, QWidget):
 
         # ---- ② 2 列网格状态行（行优先：左列、右列交替填入） ----
         # 2026-11-09 布局（共 15 项，最后一行右列留空）：
-        #  左列：OK/NG1/NG2 电磁阀、玻璃盘使用转数、飞料状态、玻璃盘上下跳动、
+        #  左列：OK/NG1/NG2 电磁阀、玻璃盘使用率、飞料状态、玻璃盘上下跳动、
         #        OK料仓漏踢/误踢频率；
         #  右列：总气源、旋转盘转速、静电电压、急停按钮、视觉控制器、相机状态、设备门。
         # 「飞料状态」= 飞料比例（飞料颗数 / 生产总数）+ 飞料颗数，单位「颗」。
@@ -4137,7 +4137,7 @@ class ProductionView(_ReportExportMixin, QWidget):
             ("旋转盘转速", "15.0 RPM"),
             ("NG2 电磁阀", "45 次"),
             ("静电电压", "2.8 KV"),
-            ("玻璃盘使用转数", "0 圈"),
+            ("玻璃盘使用率", "0 圈"),
             ("急停按钮", "未开启"),
             ("飞料状态", "0 颗"),
             ("视觉控制器", "在线"),
@@ -4207,10 +4207,10 @@ class ProductionView(_ReportExportMixin, QWidget):
                 self._valve_used_init[key] = used
                 thr = valve_life_threshold(key)
                 pct = min(100.0, used / thr * 100) if thr else 0.0
-            elif name == "玻璃盘使用转数":
-                # 百分比 = 已转圈数 /「玻璃盘清洁计数报警」设定的圈数阈值
-                used = getattr(self, "_glass_rotations", 0.0)
-                thr = glass_rotation_count()
+            elif name == "玻璃盘使用率":
+                # 使用率 = 当前计数方式下的已用量 / 对应阈值（圈数模式=圈数，
+                # 天数模式=距上次清零的天数）；单位随计数方式在刷新时联动。
+                used, thr, _unit = self._glass_clean_status_value()
                 pct = min(100.0, used / thr * 100) if thr else 0.0
             elif name == "飞料状态":
                 # 飞料比例 = 飞料颗数 / 生产总数
@@ -4299,6 +4299,9 @@ class ProductionView(_ReportExportMixin, QWidget):
             # （`_col_unit_w`）而非本行自适应 —— 这是同列名称框严格等宽的前提：
             # 若无单位的行不建框 / 各行宽度不同，各行剩余空间不等，名称框就参差。
             unit_lbl = QLabel(unit)
+            if name == "玻璃盘使用率":
+                # 单位随「计数方式」显示：圈数模式=圈，天数模式=天
+                unit_lbl.setText(self._glass_clean_status_value()[2])
             _uw = _col_unit_w[i % 2]
             unit_lbl.setFixedWidth(_uw)
             if not unit:
@@ -5400,20 +5403,38 @@ class ProductionView(_ReportExportMixin, QWidget):
         self._refresh_glass_rotation_row()
         self._check_glass_rotation_alarm()
 
-    def _refresh_glass_rotation_row(self):
-        """把玻璃盘累计旋转圈数刷新到设备状态「玻璃盘使用转数」行。
+    def _glass_clean_status_value(self):
+        """返回设备状态「玻璃盘使用率」的 (已用量, 阈值, 单位)。
 
-        百分比 = 已转圈数 /「玻璃盘清洁计数报警」设定的圈数阈值；
-        数值框 = 已转圈数（随生产运行实时累计），单位固定为「圈」。
+        - 计数方式=圈数：累计旋转圈数 / 圈数阈值（默认 100000 圈），单位「圈」；
+        - 计数方式=天数：距上次「清零重计」的天数 / 天数阈值（默认 7 天），单位「天」。
         """
-        rec = getattr(self, "_status_recs", {}).get("玻璃盘使用转数")
+        if glass_clean_count_mode() == "天数":
+            last = getattr(self, "_glass_clean_last_ts", None)
+            if last is None:
+                self._glass_clean_last_ts = time.time()
+                last = self._glass_clean_last_ts
+            return max(0.0, (time.time() - last) / 86400.0), glass_clean_days(), "天"
+        return getattr(self, "_glass_rotations", 0.0), glass_rotation_count(), "圈"
+
+    def refresh_glass_clean_status(self):
+        """报警设置保存/切换「计数方式」后立即刷新状态卡片（由主窗口回调）。"""
+        self._refresh_glass_rotation_row()
+
+    def _refresh_glass_rotation_row(self):
+        """刷新设备状态「玻璃盘使用率」行：数值/单位/百分比随计数方式联动。
+
+        圈数模式显示累计圈数（单位圈），天数模式显示距上次清零的天数（单位天）；
+        使用率 = 已用量 / 对应阈值，按「玻璃盘清洁计数报警」设定实时计算。
+        """
+        rec = getattr(self, "_status_recs", {}).get("玻璃盘使用率")
         if rec is None:
             return
-        used = getattr(self, "_glass_rotations", 0.0)
-        thr = glass_rotation_count()
+        used, thr, unit = self._glass_clean_status_value()
         pct = min(100.0, used / thr * 100) if thr else 0.0
         self._set_status_pct(rec, pct)
-        rec["val_box"].setText(f"{used:.0f}")
+        rec["val_box"].setText(f"{used:.0f}" if unit == "圈" else f"{used:.1f}")
+        rec["unit"].setText(unit)
 
     def _refresh_fly_status_row(self):
         """刷新设备状态「飞料状态」行。
@@ -5434,7 +5455,7 @@ class ProductionView(_ReportExportMixin, QWidget):
         """玻璃盘清洁计数报警：按计数方式（圈数 / 天数）判断，达阈值记一次红色报警（不停机）。
 
         - 圈数模式：累计旋转圈数 ≥ 圈数阈值；
-        - 天数模式：距上次「次数清零」的天数 ≥ 天数阈值（跨运行段累计）。
+        - 天数模式：距上次「清零重计」的天数 ≥ 天数阈值（跨运行段累计）。
         """
         if not getattr(self, "_playing", False):
             return
@@ -6760,9 +6781,9 @@ class ProductionView(_ReportExportMixin, QWidget):
         return dict(getattr(self, "_valve_used", {}))
 
     def reset_glass_rotation(self):
-        """玻璃盘清洁计数「次数清零」：累计圈数与清洁计时基准一并清零重计。
+        """玻璃盘清洁计数「清零重计」：累计圈数与清洁计时基准一并清零重计。
 
-        2026-11-17 需求：报警设置「玻璃盘清洁计数报警」区块「次数清零」按钮调用。
+        2026-11-17 需求：报警设置「玻璃盘清洁计数报警」区块「清零重计」按钮调用。
         圈数模式下次生产运行从 0 重新累计；天数模式从当前时刻重新计时。
         """
         self._glass_rotations = 0.0

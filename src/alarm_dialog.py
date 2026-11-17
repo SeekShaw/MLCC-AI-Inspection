@@ -59,7 +59,8 @@ _FEAT_NAME_W = 224   # 「其他报警功能」开关名称统一宽度，确保
 
 class AlarmSettingsDialog(QDialog):
     def __init__(self, parent=None, on_clear_valve_counts=None, is_super_admin=False,
-                 get_valve_counts=None, on_reset_glass_rotation=None):
+                 get_valve_counts=None, on_reset_glass_rotation=None,
+                 on_glass_clean_mode_changed=None):
         super().__init__(parent)
         self.setWindowTitle("报警设置")
         # 改为标签页（QTabWidget）切换显示：四块阈值设置 + 报警参数各占一个子页，
@@ -73,7 +74,8 @@ class AlarmSettingsDialog(QDialog):
         self._is_super_admin = bool(is_super_admin)  # 仅超级管理员可见「清空」按钮
         self._on_clear_valve = on_clear_valve_counts  # 清空按钮回调：重置生产界面电磁阀使用次数
         self._get_valve_counts = get_valve_counts     # 读取生产界面电磁阀当前使用次数（次）
-        self._on_reset_glass_rotation = on_reset_glass_rotation  # 清空按钮回调：重置玻璃盘累计旋转圈数
+        self._on_reset_glass_rotation = on_reset_glass_rotation  # 清零重计回调：重置玻璃盘清洁计数
+        self._on_glass_clean_mode_changed = on_glass_clean_mode_changed  # 计数方式保存后回调：刷新状态卡片
         # 定时器：每 500ms 拉取一次电磁阀使用次数并刷新显示（运行中随正常动作实时更新）
         self._usage_timer = QTimer(self)
         self._usage_timer.setInterval(500)
@@ -1022,10 +1024,10 @@ class AlarmSettingsDialog(QDialog):
         _grot_row.addSpacing(12)
         _grot_row.addWidget(self._glass_clean_count_lbl)
         _grot_row.addWidget(self._glass_rotation_count_spin)
-        # 「次数清零」按钮：把累计圈数与清洁计时基准一并清零并重新开始计数，
+        # 「清零重计」按钮：把累计圈数与清洁计时基准一并清零并重新开始计数，
         # 不改动报警阈值本身。仅超级管理员可见、可用。
         if self._is_super_admin and self._on_reset_glass_rotation is not None:
-            grot_clear_btn = QPushButton("次数清零")
+            grot_clear_btn = QPushButton("清零重计")
             grot_clear_btn.setFixedWidth(90)
             grot_clear_btn.setToolTip(
                 "把玻璃盘清洁计数清零（累计圈数/清洁天数）并重新开始计数，不影响报警阈值")
@@ -1330,6 +1332,9 @@ class AlarmSettingsDialog(QDialog):
         else:
             ALARM["features"]["glass_rotation_count"] = int(self._glass_rotation_count_spin.value())
         save_alarm_config()
+        if self._on_glass_clean_mode_changed is not None:
+            # 计数方式/阈值保存后立即联动设备状态「玻璃盘使用率」的单位与数值
+            self._on_glass_clean_mode_changed(ALARM["features"]["glass_clean_count_mode"])
 
     def _on_apply(self):
         """应用：把当前设置写入 ALARM（生产界面实时生效）并持久化，窗口保持打开。"""

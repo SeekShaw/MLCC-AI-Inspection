@@ -1444,11 +1444,11 @@ if _fly_rec is not None:
           "飞料状态: 单位为「颗」")
     check(_fly_rec["pct_box"].text().endswith("%"),
           f"飞料状态: 百分比框显示飞料比例 (实际 {_fly_rec['pct_box'].text()})")
-    _glass_rec = pv._status_recs.get("玻璃盘使用转数")
+    _glass_rec = pv._status_recs.get("玻璃盘使用率")
     check(_glass_rec is not None
           and _fly_rec["grid_row"] == _glass_rec["grid_row"] + 1
           and _fly_rec["grid_col"] == _glass_rec["grid_col"],
-          "飞料状态: 位于「玻璃盘使用转数」正下方（同列、行号 +1）")
+          "飞料状态: 位于「玻璃盘使用率」正下方（同列、行号 +1）")
 
 # ============ 设备运行状态「玻璃盘上下跳动」（示例值 0.01~0.06 mm，位于 飞料状态 正下方） ============
 _gj_rec = pv._status_recs.get("玻璃盘上下跳动")
@@ -2247,16 +2247,16 @@ check(pv._valve_used["OK"] == 0.0 and pv._valve_used["NG1"] == 120.0
 pv.reset_valve_counts()   # 全量重置后 OK 仍保持清零（初始值已被记为 0）
 check(pv._valve_used["OK"] == 0.0, "已使用次数清零: 全量重置后已清零的阀保持 0 重新计数")
 pv._valve_used = _used_bak; pv._valve_used_init = _init_bak
-# ⑤ 玻璃使用转数报警区块：「次数清零」按钮清零玻璃盘已旋转次数（仅超级管理员可见）
+# ⑤ 玻璃盘清洁计数报警区块：「清零重计」按钮清零玻璃盘清洁计数（仅超级管理员可见）
 _grot_got = []
 _dlg_g = _ad2.AlarmSettingsDialog(
     is_super_admin=True, on_reset_glass_rotation=lambda: _grot_got.append(True))
-_clear_grot = [b for b in _dlg_g.findChildren(_QPushButton) if b.text() == "次数清零"]
+_clear_grot = [b for b in _dlg_g.findChildren(_QPushButton) if b.text() == "清零重计"]
 check(len(_clear_grot) == 1,
-      f"次数清零: 玻璃使用转数区块含 1 个「次数清零」按钮 (实际 {len(_clear_grot)})")
+      f"清零重计: 玻璃盘清洁计数报警区块含 1 个「清零重计」按钮 (实际 {len(_clear_grot)})")
 _clear_grot[0].click()
 check(_grot_got == [True],
-      "次数清零: 点击按钮触发复位玻璃盘旋转次数的回调")
+      "清零重计: 点击按钮触发复位玻璃盘清洁计数的回调")
 # 生产界面：累计旋转圈数清零后归 0 并重新计数
 _grot_bak = getattr(pv, "_glass_rotations", 0.0)
 pv._glass_rotations = 12345.0
@@ -2265,13 +2265,13 @@ check(pv._glass_rotations == 0.0,
       f"次数清零: 复位后玻璃盘已旋转次数归 0 (实际 {pv._glass_rotations})")
 pv._glass_rotations = _grot_bak
 _dlg_g._on_finished(0); _dlg_g.deleteLater()
-# 权限守卫：非超级管理员不可见「次数清零」按钮（仅超管可见，与电磁阀「已使用次数清零」同规则）
+# 权限守卫：非超级管理员不可见「清零重计」按钮（仅超管可见，与电磁阀「已使用次数清零」同规则）
 _dlg_g_user = _ad2.AlarmSettingsDialog(
     is_super_admin=False, on_reset_glass_rotation=lambda: None)
 _clear_grot_user = [b for b in _dlg_g_user.findChildren(_QPushButton)
-                    if b.text() == "次数清零"]
+                    if b.text() == "清零重计"]
 check(len(_clear_grot_user) == 0,
-      "次数清零: 非超级管理员不可见「次数清零」按钮")
+      "清零重计: 非超级管理员不可见「清零重计」按钮")
 _dlg_g_user._on_finished(0); _dlg_g_user.deleteLater()
 
 # ⑤b 2026-11-17：「玻璃使用转数报警」改名「玻璃盘清洁计数报警」+ 计数方式（圈数/天数）
@@ -2337,11 +2337,34 @@ finally:
     pv._glass_clean_last_ts = _ts_bak3
     _ac.ALARM["features"].clear()
     _ac.ALARM["features"].update(_feat_bak3)
-# 「次数清零」同时重置天数计时基准
+# 「清零重计」同时重置天数计时基准
 pv.reset_glass_rotation()
 check(abs(pv._glass_clean_last_ts - _t_gclean.time()) < 5,
-      f"次数清零: 同步重置清洁天数计时基准为当前时刻 (实际 {pv._glass_clean_last_ts})")
+      f"清零重计: 同步重置清洁天数计时基准为当前时刻 (实际 {pv._glass_clean_last_ts})")
 pv._glass_rotations = _grot_bak
+# 设备状态「玻璃盘使用率」：数值/单位随计数方式联动（圈数模式=圈，天数模式=天）
+_status_glass = pv._status_recs.get("玻璃盘使用率")
+check(_status_glass is not None and _status_glass["unit"].text() == "圈",
+      f"玻璃盘使用率: 状态卡片已改名且圈数模式单位为「圈」 "
+      f"(实际 {None if _status_glass is None else _status_glass['unit'].text()})")
+_feat_bak4 = dict(_ac.ALARM["features"])
+_ts_bak4 = getattr(pv, "_glass_clean_last_ts", None)
+try:
+    _ac.ALARM["features"]["glass_clean_count_mode"] = "天数"
+    _ac.ALARM["features"]["glass_clean_days"] = 7
+    pv._glass_clean_last_ts = _t_gclean.time() - 3.5 * 86400
+    pv.refresh_glass_clean_status()
+    check(_status_glass["unit"].text() == "天"
+          and 3.4 <= float(_status_glass["val_box"].text()) <= 3.6
+          and _status_glass["pct_box"].text().endswith("%"),
+          f"玻璃盘使用率: 天数模式显示已过天数/单位「天」并刷新使用率 "
+          f"(实际 {_status_glass['val_box'].text()} {_status_glass['unit'].text()} "
+          f"{_status_glass['pct_box'].text()})")
+finally:
+    _ac.ALARM["features"].clear()
+    _ac.ALARM["features"].update(_feat_bak4)
+    pv._glass_clean_last_ts = _ts_bak4
+    pv.refresh_glass_clean_status()
 # ④ 触发设定：已重构为「相机参数表格 + 底部自动获取触发位置」按钮
 _tsd = _TSD(_mw)
 _auto_pos_btns = [b for b in _tsd.findChildren(_QPushButton)
