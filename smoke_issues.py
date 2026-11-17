@@ -3121,6 +3121,20 @@ _cap0201 = [_cap.item(2, c).text() for c in range(3, 12)]
 check(_cap0201 == ["0.60", "±0.05", "0.30", "±0.05", "0.30", "±0.05",
                     "0.10", "0.20", "0.20"],
       f"尺寸参考: 电容0201 L/公差/W/公差/T/公差/电极按规格表 (实际 {_cap0201})")
+# 2026-11-17 需求 G：电容 0402/1005 的 T厚度公差由 ±0.10 更正为 ±0.05
+_cap0402 = [_cap.item(3, c).text() for c in range(3, 12)]
+check(_cap0402 == ["1.00", "±0.05", "0.50", "±0.05", "0.50", "±0.05",
+                    "0.15", "0.35", "0.30"],
+      f"尺寸参考: 电容0402/1005 T厚度公差为 ±0.05 (实际 {_cap0402})")
+check(_NPD.CAPACITOR_SIZE_TABLE[3][8] == "±0.05"
+      and _NPD.PRODUCT_SIZE_TABLE[3][8] == "±0.05",
+      f"尺寸参考: 电容0402 T公差源数据已更正为 ±0.05 "
+      f"(实际 {_NPD.CAPACITOR_SIZE_TABLE[3][8]})")
+_dims0402 = _NPD.lookup_dimensions("电容", "0402")
+check(_dims0402["thickness"]["nominal"] == "0.50"
+      and _dims0402["thickness"]["lower_tol"] == "-0.05"
+      and _dims0402["thickness"]["upper_tol"] == "0.05",
+      f"向导尺寸: 电容0402 厚度公差随参考表更正为 ±0.05 (实际 {_dims0402['thickness']})")
 # 电阻页：独立规格表（英制齐全、A/B 电极）
 _res = _ref3._tables["贴片电阻"]
 check([_res.item(0, c).text() for c in range(11)]
