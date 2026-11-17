@@ -3246,6 +3246,20 @@ check(all(not v for v in _min_w_bad.values()),
 _cap_w = [_ref3._tables["MLCC电容"].columnWidth(c) for c in range(12)]
 check(_cap_w[1] > _cap_w[3] and _cap_w[9] > _cap_w[0],
       f"尺寸参考: 列宽按内容差异化自适应（长文本列 > 窄列） (实际 {_cap_w})")
+# 2026-11-17 需求 I：卡片（窗口）宽度自适应卡片内表格宽度——右侧不再留大片空白
+_names4 = ("MLCC电容", "贴片电阻", "贴片电感", "晶振")
+_tbl_fit = {}
+for _iI, _tnI in enumerate(_names4):
+    _tI = _ref3._tables[_tnI]
+    _pgI = _ref3.tabs.widget(_iI)
+    _sumI = sum(_tI.columnWidth(c) for c in range(_tI.columnCount()))
+    _tbl_fit[_tnI] = (_tI.width(), _sumI, _tI.viewport().width(), _pgI.width())
+check(all(abs(tw - sw) <= 20 for tw, sw, _vpI, _pgI in _tbl_fit.values()),
+      f"尺寸参考: 表格宽度按列宽总和固定（不被布局拉伸，右侧无空白） (实际 {_tbl_fit})")
+_max_tbl_w = max(t.width() for t in _ref3._tables.values())
+check(_ref3.width() <= _max_tbl_w + 60 and _ref3.width() < 1000,
+      f"尺寸参考: 窗口宽度自适应表格宽度（不再固定 1180，窗口 {_ref3.width()}px, "
+      f"最宽表格 {_max_tbl_w}px）")
 # 底部电极结构图示：矢量绘制（ElectrodeDiagram），电容/电阻/电感各一张
 from size_diagrams import ElectrodeDiagram as _ED
 _diags = [w for w in _ref3.findChildren(_ED) if w.objectName() == "diagram_image"]

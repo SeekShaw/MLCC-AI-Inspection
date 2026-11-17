@@ -168,7 +168,7 @@ class ProductSizeReferenceDialog(QDialog):
         self.setModal(False)
         self.setWindowFlags(self.windowFlags() & ~Qt.WindowType.WindowStaysOnTopHint)
         self.setStyleSheet(f"QDialog {{ background-color: {COLORS['bg_dark']}; }}")
-        self.setFixedWidth(1180)   # 2026-11-17：宽度固定；高度按四页内容自适应
+        # 2026-11-17 需求：宽度不再固定 1180，改为按卡片内表格宽度自适应（见 _fit_size）
 
         root = QVBoxLayout(self)
         root.setContentsMargins(14, 14, 14, 14)
@@ -210,8 +210,8 @@ class ProductSizeReferenceDialog(QDialog):
         close_row.addWidget(close_btn)
         root.addLayout(close_row)
 
-        # 2026-11-17：窗口高度按四页内容自适应（取最高页），消除页内大片留白
-        self._fit_height(tip)
+        # 2026-11-17：窗口尺寸按内容自适应（宽度取四页表格最宽者，高度取最高页）
+        self._fit_size(tip)
 
     def _build_page(self, headers, data_table, note_text, img_kind):
         """构建单个分页：上部表格 + 下部电极结构图示说明。
@@ -277,6 +277,10 @@ class ProductSizeReferenceDialog(QDialog):
                     w = max(w, fm.horizontalAdvance(it.text()) + 14)
             natural.append(max(w, 56))
         table.set_natural_widths(natural)
+        # 表格宽度按列宽总和固定（不再被布局拉伸），右侧预留竖直滚动条位置——
+        # 列宽不被滚动条挤压，也不会出现横向滚动条。
+        table.setFixedWidth(int(sum(natural)) + 2 * table.frameWidth() + 16)
+        table.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         # 行高固定 + 表头高度按折行后的行数计算：保证表格高度可精确计算（不再随窗口拉伸）
         for r in range(table.rowCount()):
             table.setRowHeight(r, self._ROW_H)
@@ -309,8 +313,21 @@ class ProductSizeReferenceDialog(QDialog):
         v.addStretch(1)
         return page, table, diag_box, table_h, bool(img_kind)
 
-    def _fit_height(self, tip):
-        """窗口高度自适应：取四个分页内容高度的最大值，页面按内容紧凑排布。"""
+    def _fit_size(self, tip):
+        """窗口尺寸自适应：宽度按四页表格最宽者，高度按四页内容最高者。
+
+        2026-11-17 需求：卡片（窗口）宽度自适应卡片内表格宽度——
+        四页表格取最宽的一张作为窗口宽度基准，窗口右侧不再留大片空白。
+        """
+        # —— 宽度：表格宽度（四页取最宽） + 分页边距 + 分页框边框 + 对话框边距
+        max_table_w = max((t.minimumWidth() for t in self._tables.values()), default=0)
+        lm = self.layout().contentsMargins()
+        tm = self.tabs.contentsMargins()
+        width = (max_table_w + 16 + 2
+                 + tm.left() + tm.right() + lm.left() + lm.right() + 4)
+        self.setFixedWidth(int(width))
+
+        # —— 高度：取四个分页内容高度的最大值，页面按内容紧凑排布
         def page_height(table_h, box):
             h = table_h + 16              # 分页上下边距
             if box is not None:
