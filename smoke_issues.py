@@ -2898,10 +2898,10 @@ _pmd_dlg2.deleteLater()
 
 # ============ 2026-11-17：尺寸公差/规格上限下限 + 型号联动标称值 + 标签橙色 ============
 _npd2 = _NPD(None)
-check(_npd2.MODEL_NOMINAL_SIZES.get("0201") == ("0.50", "0.25", "0.20")
+check(_npd2.MODEL_NOMINAL_SIZES.get("0201") == ("0.60", "0.30", "0.30")
       and _npd2.MODEL_NOMINAL_SIZES.get("0402") == ("1.00", "0.50", "0.50")
       and _npd2.MODEL_NOMINAL_SIZES.get("0603") == ("1.60", "0.80", "0.80"),
-      "新建产品: 型号→标称尺寸映射含 0201/0402/0603 用户指定值")
+      "新建产品: 型号→标称尺寸按电容表校准 (0201=0603 公制)")
 check(_npd2.DEFAULT_LOWER_TOL == "-0.05" and _npd2.DEFAULT_UPPER_TOL == "0.05",
       "新建产品: 下公差默认 -0.05、上公差默认 0.05")
 check(all(_npd2._tol_edits[f"product_{k}_{f}"].text() == d
@@ -2974,6 +2974,70 @@ check(_pmd_dlg3.products[-1].get("product_length_lower_tol") == "-0.08"
       and _pmd_dlg3.products[-1].get("product_length_spec_upper") == "1.07",
       f"拷贝产品: 公差与规格字段随配方复制 (实际 {_pmd_dlg3.products[-1]})")
 _pmd_dlg3.deleteLater()
+
+# ============ 2026-11-17：产品尺寸分类表 + 参考窗口 + 窗口高度自适应 ============
+check(len(_NPD.PRODUCT_SIZE_TABLE) == 30
+      and set(_NPD.REFERENCE_TYPES) == {"电容", "电阻", "电感", "晶振"},
+      f"尺寸参考表: 四类共 30 条规格 (实际 {len(_NPD.PRODUCT_SIZE_TABLE)})")
+check(len(_NPD.REFERENCE_HEADERS) == 6
+      and "英制" in _NPD.REFERENCE_HEADERS[1]
+      and "公制" in _NPD.REFERENCE_HEADERS[2],
+      "尺寸参考表: 6 列含英制/公制/长宽厚")
+# 逐行核对四张表的关键尺寸
+_ref_expected = {
+    ("电容", "0201"): ("0.60", "0.30", "0.30"),
+    ("电容", "0402"): ("1.00", "0.50", "0.50"),
+    ("电阻", "0603"): ("1.60", "0.80", "0.45"),
+    ("电阻", "1206"): ("3.20", "1.60", "0.62"),
+    ("电感", "0805"): ("2.00", "1.20", "0.50"),
+    ("电感", "2512"): ("6.40", "3.20", "0.55"),
+    ("晶振", "1612"): ("1.60", "1.20", "0.35"),
+    ("晶振", "3225"): ("3.20", "2.50", "0.55"),
+}
+check(all(_NPD.lookup_nominal(t, s) == exp
+          for (t, s), exp in _ref_expected.items()),
+      "尺寸参考表: 四类关键规格 L/W/T 与用户图表一致")
+check(_NPD.lookup_nominal("电容", "0201") != _NPD.lookup_nominal("电阻", "0201")
+      and _NPD.lookup_nominal("电容", "0603") != _NPD.lookup_nominal("电感", "0603"),
+      "尺寸参考表: 同规格不同产品类型尺寸不同（二维查表生效）")
+# 产品类型切换联动标称值
+_npd4 = _NPD(None)
+_npd4._product_combos["product_model"].setCurrentText("0201")
+check(_npd4.product_length == "0.60" and _npd4.product_width == "0.30"
+      and _npd4.product_thickness == "0.30",
+      f"尺寸联动: 电容 0201 → 0.60/0.30/0.30 (实际 "
+      f"{[_npd4.product_length, _npd4.product_width, _npd4.product_thickness]})")
+_npd4._product_combos["product_type"].setCurrentText("电阻")
+check(_npd4.product_length == "0.60" and _npd4.product_width == "0.30"
+      and _npd4.product_thickness == "0.23",
+      f"尺寸联动: 切到电阻 0201 → 厚度 0.23 (实际 {_npd4.product_thickness})")
+_npd4._product_combos["product_type"].setCurrentText("电感")
+check(_npd4.product_thickness == "0.23" and _npd4.product_width == "0.30",
+      "尺寸联动: 切到电感 0201 → 0.60/0.30/0.23")
+_npd4.deleteLater()
+# 参考窗口按钮与弹窗属性
+_npd5 = _NPD(None)
+check(hasattr(_npd5, "_btn_size_ref")
+      and _npd5._btn_size_ref.text() == "产品尺寸参考",
+      "产品尺寸参考: 「3.输入产品尺寸」标题右侧按钮存在且名称正确")
+from new_product_dialog import ProductSizeReferenceDialog as _PSRD
+from PyQt6.QtCore import Qt as _Qt
+_ref = _PSRD(None)
+check(_ref.table.rowCount() == len(_NPD.PRODUCT_SIZE_TABLE)
+      and _ref.table.columnCount() == 6
+      and not _ref.isModal()
+      and not (_ref.windowFlags() & _Qt.WindowType.WindowStaysOnTopHint),
+      "产品尺寸参考: 弹窗为分类表格(30行6列)、非模态、不置顶")
+_ref.deleteLater()
+# 窗口高度自适应（远小于旧的 820，且底部按钮完整可见）
+check(_npd5.height() <= 620 and _npd5.height() >= 500,
+      f"新建产品: 窗口高度按内容自适应 (实际 {_npd5.height()}, 原 820)")
+_npd5.show()
+_win_bottom = _npd5.mapToGlobal(_npd5.rect().bottomRight()).y()
+_btn_bottom = _npd5.action_btn.mapToGlobal(_npd5.action_btn.rect().bottomRight()).y()
+check(_btn_bottom <= _win_bottom,
+      f"新建产品: 底部按钮完整落在窗口内 (btn={_btn_bottom}, win={_win_bottom})")
+_npd5.deleteLater()
 
 # ============ 2026-11-12 修复：产品管理编辑/新增内容需持久化（退出再打开保留） ============
 import product_manager_dialog as _pmd
