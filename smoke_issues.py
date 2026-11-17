@@ -34,6 +34,11 @@ from production_view import ProductionView
 
 app = QApplication([])
 pv = ProductionView(user_manager=None)
+# 2026-11-17：主视图按**真实窗口宽度**（1920×900，与主程序一致）渲染。
+# 原因：离屏环境下控件默认尺寸仅 642px，设备状态面板会被布局压缩到内容宽以下，
+# 导致「面板 min_w = 内容实需宽 / 内容不被裁切」等几何断言被误判为失败
+# （真实 1920 窗口下这些不变量成立，见下方 1300/1600/1920/2560 分辨率回归）。
+pv.resize(1920, 900)
 pv.show()
 app.processEvents()
 
@@ -4003,10 +4008,10 @@ check(pv._status_pages == 2 and pv._status_page == 0,
       f"设备状态: 共2页、默认第1页 (实际 pages={pv._status_pages}, page={pv._status_page})")
 check(pv._status_page_lbl.text() == "1/2",
       f"设备状态: 页码标签显示「1/N」格式 (实际 {pv._status_page_lbl.text()})")
-# 第 1 页 = 两列共 15 项状态行（删除负压 / RST 电磁阀后）+ 4 张料盒卡片全部可见
+# 第 1 页 = 两列共 16 项状态行（删除负压 / RST 电磁阀后，新增 NG料仓漏踢频率）+ 4 张料盒卡片全部可见
 check(all(not r["frame"].isHidden() for r in pv._status_grid_recs)
-      and len(pv._status_grid_recs) == 15,
-      f"设备状态: 第1页显示全部15项状态行 (实际 {len(pv._status_grid_recs)} 项)")
+      and len(pv._status_grid_recs) == 16,
+      f"设备状态: 第1页显示全部16项状态行 (实际 {len(pv._status_grid_recs)} 项)")
 check(not pv._status_page1.isHidden() and pv._status_page2.isHidden(),
       "设备状态: 第1页显示内容容器、第2页容器隐藏")
 check(pv._status_content.parentWidget() is pv._status_page1,
@@ -4451,11 +4456,41 @@ for _tag, _recs in (("左列", _col0), ("右列", _col1)):
 #         所以百分比占位必须**恒为 46px**（无百分比时文案留空 + 透明，看不出占位），
 #         配合「单位框同列统一宽度」，同列尾部组等宽 → 名称框严格齐平。
 _no_pct = [r for r in pv._status_grid_recs if r.get("no_pct")]
+# ⚠️ 2026-11-17 规则修订：百分比占位宽度**按列统一**——
+#   ① 混合列（左列：有电磁阀/使用率/飞料等百分比行）→ 恒 46px，
+#      无百分比行也占位，保证同列各行尾部组等宽、名称框右缘严格齐平；
+#   ② 整列无百分比（右列 8 项）→ 0 宽（46px 占位纯属浪费），
+#      释放的宽度全部给 Expanding 名称框 → 数值框/单位位置不变，
+#      卡片也不必因新增「NG料仓漏踢频率」行而变宽。
+_col_pct_expect = {}
+for _c in (0, 1):
+    _rs_c = [r for r in pv._status_grid_recs if r["grid_col"] == _c]
+    _col_pct_expect[_c] = 46 if any(not r.get("no_pct") for r in _rs_c) else 0
 check(len(_no_pct) > 0
-      and all(r["pct_box"].width() == 46 for r in _no_pct),
-      f"设备状态: 无百分比项的百分比占位仍占 46px 以保证名称框齐平"
+      and all(r["pct_box"].width() == _col_pct_expect[r["grid_col"]]
+              for r in _no_pct),
+      f"设备状态: 无百分比行的占位宽度按列统一（混合列46px / 整列无百分比0px）"
       f"（共 {len(_no_pct)} 行，实测宽度 "
-      f"{sorted(set(r['pct_box'].width() for r in _no_pct))}）")
+      f"{sorted(set(r['pct_box'].width() for r in _no_pct))}，期望 {_col_pct_expect}）")
+# 2026-11-17 需求：右列最后一行（设备门下方）新增「NG料仓漏踢频率」
+_ng_rec = pv._status_recs.get("NG料仓漏踢频率")
+check(_ng_rec is not None
+      and _ng_rec["grid_col"] == 1 and _ng_rec["grid_row"] == 7
+      and _ng_rec["unit"].text() == "Pcs/H"
+      and _ng_rec["pct_box"].width() == 0
+      and _ng_rec["val_box"].text().isdigit()
+      and not _ng_rec["frame"].isHidden(),
+      f"设备状态: 右列最后一行新增「NG料仓漏踢频率」（单位 Pcs/H、无百分比、"
+      f"位于设备门下方）(实际 {_ng_rec['val_box'].text() if _ng_rec else None})")
+_ng_before = _ng_rec["val_box"].text()
+pv._playing = True
+for _ in range(8):
+    pv._update_mis_freq_display()
+pv._playing = False
+check(_ng_rec["val_box"].text().isdigit()
+      and _ng_rec["val_box"].text() != _ng_before,
+      f"设备状态: NG料仓漏踢频率运行期间实时波动（{_ng_before} → "
+      f"{_ng_rec['val_box'].text()}）")
 # ---- 核心断言：同列各行名称框宽度**完全一致**（边框齐平），且已明显拉长 ----
 for _tag, _recs in (("左列", _col0), ("右列", _col1)):
     _ws = sorted(set(r["nm"].width() for r in _recs))

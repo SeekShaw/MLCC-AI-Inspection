@@ -69,9 +69,11 @@ _FLY_BASE_RATE = 0.005
 # 设备状态行「名称框 ↔ 百分比框」之间的固定空隙（2026-11-09）。
 # 行内 spacing 由 6 收到 3（省 12px），再用这 12px 做 spacer，
 # 故两列合计宽度与卡片宽度都保持不变；实际空隙 = 3 + GAP = 15px。
+# 2026-11-17：spacing 3 → 2（新增「NG料仓漏踢频率」行后腾出宽度余量），
+# 实际空隙 = 2 + GAP = 14px，仍在用户要求的 12~20px 区间内。
 _NAME_PCT_GAP = 12
 # 状态行行内 spacing（原 6 → 3，用来给「名称框↔百分比框」腾空隙）
-_STATUS_ROW_SPACING = 3
+_STATUS_ROW_SPACING = 2
 # 料盒取出状态文案：False=未取出，True=取出
 BIN_STATE_TEXT = {False: "未取出", True: "取出"}
 
@@ -3729,9 +3731,11 @@ class ProductionView(_ReportExportMixin, QWidget):
                 return
             uw = max([r["unit"].width() for r in rs
                       if r["unit"] is not None] or [0])
-            # 12=行内边距 12=dot 46/46=百分比/数值
+            # 2026-11-17：百分比占位宽度按列取值（混合列 46px / 整列无百分比 0px）
+            pw = max([r["pct_box"].width() for r in rs] or [0])
+            # 12=行内边距 12=dot 46=数值框
             # 行内间距 = 4*spacing + spacer，与 _build_device_status 的列宽口径一致
-            col_need[c] = (12 + 12 + need[c] + 46 + 46 + uw
+            col_need[c] = (12 + 12 + need[c] + pw + 46 + uw
                            + 4 * _STATUS_ROW_SPACING + _NAME_PCT_GAP)
         # 名称框下限恒为本列最长文案宽（保证文案完整、不截断）；
         # 实际宽度由 Expanding 吸收富余决定 —— 同列尾部组等宽故各行必然相同。
@@ -4035,7 +4039,8 @@ class ProductionView(_ReportExportMixin, QWidget):
         # 2026-11-09：「负压」显示行已删除，但后台实时测量与设备设置的负压参数仍保留；
         #「玻璃盘使用率」「飞料状态」需显示百分比，故不在此集合中。
         no_pct_rows = {"总气源", "旋转盘转速", "静电电压", "设备门",
-                       "OK料仓误踢频率", "OK料仓漏踢频率", "急停按钮", "视觉控制器",
+                       "OK料仓误踢频率", "OK料仓漏踢频率", "NG料仓漏踢频率",
+                       "急停按钮", "视觉控制器",
                        "玻璃盘上下跳动", "相机状态"}
         # 实时测量 + 设备门：门打开报警时状态灯随 live_color 变红
         live_rows = no_pct_rows | {"设备门"}
@@ -4125,10 +4130,11 @@ class ProductionView(_ReportExportMixin, QWidget):
             self._apply_status_style()
 
         # ---- ② 2 列网格状态行（行优先：左列、右列交替填入） ----
-        # 2026-11-09 布局（共 15 项，最后一行右列留空）：
+        # 2026-11-09 布局（共 16 项，最后一行右列为「NG料仓漏踢频率」）：
         #  左列：OK/NG1/NG2 电磁阀、玻璃盘使用率、飞料状态、玻璃盘上下跳动、
         #        OK料仓漏踢/误踢频率；
-        #  右列：总气源、旋转盘转速、静电电压、急停按钮、视觉控制器、相机状态、设备门。
+        #  右列：总气源、旋转盘转速、静电电压、急停按钮、视觉控制器、相机状态、
+        #        设备门、NG料仓漏踢频率。
         # 「飞料状态」= 飞料比例（飞料颗数 / 生产总数）+ 飞料颗数，单位「颗」。
         grid_items = [
             ("OK 电磁阀", "3200 次"),
@@ -4146,6 +4152,8 @@ class ProductionView(_ReportExportMixin, QWidget):
             ("OK料仓漏踢频率", "8 Pcs/H"),
             ("设备门", "已关闭"),
             ("OK料仓误踢频率", "12 Pcs/H"),
+            # 2026-11-17 需求：右列最后一行（原空白位）新增 NG 料仓漏踢频率
+            ("NG料仓漏踢频率", "6 Pcs/H"),
         ]
         # 名称列宽度：按各列内最长名称自适应 +6px 安全边距。
         # 左列最长名称为阀门名（NG1/NG2 电磁阀），右列为料仓频率名；
@@ -4179,9 +4187,10 @@ class ProductionView(_ReportExportMixin, QWidget):
                 if _i % 2 == _c and " " in _v]
             _col_unit_old_w[_c] = max(_old)
         # 名称框下限 = 最长文案宽 + 6 + 「单位框让出的宽度」
-        _name_w_col0 = (max(_fm.horizontalAdvance(n) for n in _col0_names) + 6
+        # 2026-11-17：安全边距 6 → 4（新增「NG料仓漏踢频率」行后腾出宽度余量）
+        _name_w_col0 = (max(_fm.horizontalAdvance(n) for n in _col0_names) + 4
                         + (_col_unit_old_w[0] - _col_unit_w[0]))
-        _name_w_col1 = (max(_fm.horizontalAdvance(n) for n in _col1_names) + 6
+        _name_w_col1 = (max(_fm.horizontalAdvance(n) for n in _col1_names) + 4
                         + (_col_unit_old_w[1] - _col_unit_w[1]))
         # 2026-11-09：名称框与百分比框之间留出**可见空隙**。
         # ⚠️ 卡片宽度必须保持原样：把行内 4 处 spacing 由 6 收到 3（省 12px），
@@ -4189,6 +4198,16 @@ class ProductionView(_ReportExportMixin, QWidget):
         # 必须用 spacer 而不是把余量并进名称框：名称框自带边框，
         # 并进去只会让边框一起变长，看上去仍贴着百分比框。
         # QHBoxLayout 只在 spacer 左侧计一次 spacing，故实际空隙 = 3+GAP = 15px。
+        # 百分比占位宽度（按列判定）：
+        #   混合列（左列：有电磁阀/使用率/飞料等百分比行）→ 恒 46px，
+        #     无百分比行也占位，保证同列尾部组等宽、名称框右缘严格齐平；
+        #   整列无百分比（右列 8 项）→ 0 宽（占位纯属浪费），
+        #     释放宽度全部给 Expanding 名称框，数值框/单位位置不变。
+        _col_pct_w = {}
+        for _c in (0, 1):
+            _has_pct = any(grid_items[_i][0] not in no_pct_rows
+                           for _i in range(len(grid_items)) if _i % 2 == _c)
+            _col_pct_w[_c] = 46 if _has_pct else 0
         grid_recs = []
         for i, (name, val) in enumerate(grid_items):
             if " " in val:
@@ -4268,15 +4287,22 @@ class ProductionView(_ReportExportMixin, QWidget):
             # 百分比框 / 数值框宽度**固定不可压缩**（Fixed 策略）：
             # 它们是数据主体，被压成0 宽整列数值就消失了。
             # 面板变窄时由名称框（Expanding）吸收全部压缩量。
-            pct_box.setFixedWidth(46)
-            pct_box.setMinimumWidth(46)
+            # ⚠️ 2026-11-17：占位宽度**按列判定**（`_col_pct_w`）：
+            #   ① 该列存在带百分比的行 → 占位框恒 46px，无百分比行也占位，
+            #      保证同列各行尾部组等宽、名称框右缘严格齐平；
+            #   ② 该列**全部**为无百分比行（右列 8 项：总气源/旋转盘转速/静电电压/
+            #      急停按钮/视觉控制器/相机状态/设备门/NG料仓漏踢频率）→ 46px 占位
+            #      纯属浪费，改为 0 宽；释放的宽度全部给 Expanding 名称框，
+            #      数值框与单位位置不变，卡片也不必因新增行而变宽。
+            _pct_w = _col_pct_w[i % 2]
+            pct_box.setFixedWidth(_pct_w)
+            pct_box.setMinimumWidth(_pct_w)
             pct_box.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Preferred)
             pct_box.setAlignment(Qt.AlignmentFlag.AlignCenter)
             if no_pct:
-                # 无百分比项：文案留空、底色透明（看不出占位），但**仍占满 46px**。
-                # ⚠️ 不能设成 0 宽 —— 那会让本行比同列其他行多出 46px 剩余空间，
-                # 被 Expanding 名称框吃掉 → 同列名称框宽度参差（实测 92 vs 166）。
-                # 保持 46px 后，同列各行尾部组等宽，名称框右缘才能严格齐平。
+                # 无百分比项：文案留空、底色透明（看不出占位）；
+                # 占位宽度仍按**本列统一值**（混合列 46px / 整列无百分比 0px），
+                # 同行同列的尾部组保持等宽 → 名称框右缘严格齐平。
                 pct_box.setText("")
                 pct_box.setStyleSheet(
                     "background: transparent; border: none;")
@@ -4363,7 +4389,7 @@ class ProductionView(_ReportExportMixin, QWidget):
         _status_min_w = 0
         for _c, _nw in ((0, _name_w_col0), (1, _name_w_col1)):
             _uw_max = _col_unit_w[_c]
-            _col_min = 12 + 12 + _nw + 46 + 46 + int(_uw_max) + _row_gaps
+            _col_min = 12 + 12 + _nw + _col_pct_w[_c] + 46 + int(_uw_max) + _row_gaps
             grid.setColumnMinimumWidth(_c, _col_min)
             _status_min_w += _col_min
         # 两列合计 + 列间距 10 + 面板 body 左右内缩 2*MARGIN
@@ -4385,6 +4411,8 @@ class ProductionView(_ReportExportMixin, QWidget):
         self._status_stretch_w = 0
         # 记录两列的内容实需宽（不含富余），供调试/冒烟断言核对
         self._col_need_w = {0: _name_w_col0, 1: _name_w_col1}
+        self._col_unit_w = dict(_col_unit_w)
+        self._col_pct_w = dict(_col_pct_w)
         self._name_box_extra = {}
 
         # 布局稳定后触发一次重排（此时 grid 已有实际宽度，名称框已完成拉长）
@@ -5282,7 +5310,8 @@ class ProductionView(_ReportExportMixin, QWidget):
     # ------------------------------------------------------------------
     def _update_mis_freq_display(self):
         """刷新设备运行状态区的 OK 料仓误踢/漏踢频率示例值（Pcs/H），运行期间小幅随机游走；
-        均值回归到略低于设定阈值的中心，使其会在阈值附近波动、偶尔越界以演示报警。"""
+        均值回归到略低于设定阈值的中心，使其会在阈值附近波动、偶尔越界以演示报警。
+        2026-11-17：同时刷新 NG 料仓漏踢频率（仅展示，不参与误漏报警判定）。"""
         if not getattr(self, "_playing", False):
             return
         # 中心略低于阈值，使频率在阈值附近游动、偶尔越过阈值触发报警（演示用）
@@ -5299,6 +5328,13 @@ class ProductionView(_ReportExportMixin, QWidget):
             if rec is not None:
                 # 单位「Pcs/H」已在建行时作为独立标签，这里只刷新数值，避免重复显示
                 rec["val_box"].setText(f"{rate:.0f}")
+        # 2026-11-17：NG 料仓漏踢频率（仅展示）——运行期间在 6 Pcs/H 附近小幅波动
+        self._ng_miss_rate = max(1.0, min(20.0,
+            self._ng_miss_rate + (6.0 - self._ng_miss_rate) * 0.08
+            + random.uniform(-1.2, 1.2)))
+        _ng_rec = self._status_recs.get("NG料仓漏踢频率")
+        if _ng_rec is not None:
+            _ng_rec["val_box"].setText(f"{self._ng_miss_rate:.0f}")
 
     def _record_mis_reject(self, kind):
         """记录一次误踢 / 漏踢事件（滚动 1 小时窗口），仅对应监控开启时生效。"""
@@ -6916,6 +6952,8 @@ class ProductionView(_ReportExportMixin, QWidget):
         # 设备运行状态区展示的误踢/漏踢频率示例值（Pcs/H），运行期间小幅波动
         self._mis_wrong_rate = 12.0
         self._mis_miss_rate = 8.0
+        # 2026-11-17：NG 料仓漏踢频率（仅展示，不参与 OK 料仓误漏报警判定）
+        self._ng_miss_rate = 6.0
         # 设备运行状态四类实时测量行：示例值在正常范围内波动，偶尔越界以演示报警
         self._dev_readings = {
             "总气源": {"val": 0.62, "lo": 0.30, "hi": 0.80, "unit": "MPa", "fmt": "{:.2f}",
