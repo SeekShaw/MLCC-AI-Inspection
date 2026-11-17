@@ -2993,17 +2993,20 @@ check(_pmd_dlg3.products[-1].get("product_length_lower_tol") == "-0.08"
 _pmd_dlg3.deleteLater()
 
 # ============ 2026-11-17：产品尺寸分类表 + 参考窗口 + 窗口高度自适应 ============
-check(len(_NPD.PRODUCT_SIZE_TABLE) == 30
-      and set(_NPD.REFERENCE_TYPES) == {"电容", "电阻", "电感", "晶振"},
-      f"尺寸参考表: 四类共 30 条规格 (实际 {len(_NPD.PRODUCT_SIZE_TABLE)})")
+check(len(_NPD.PRODUCT_SIZE_TABLE) == 31
+      and set(_NPD.REFERENCE_TYPES) == {"电容", "电阻", "电感", "晶振"}
+      and all(len(row) == 12 for row in _NPD.PRODUCT_SIZE_TABLE),
+      f"尺寸参考表: 四类共 31 条规格、每行 12 元素 (实际 {len(_NPD.PRODUCT_SIZE_TABLE)})")
 check(len(_NPD.REFERENCE_HEADERS) == 12
       and "英制" in _NPD.REFERENCE_HEADERS[1]
       and "公制" in _NPD.REFERENCE_HEADERS[2]
-      and _NPD.REFERENCE_HEADERS[6:] == ("长度公差", "宽度公差", "厚度公差",
-                                          "最小电极宽度", "最大电极宽度", "电极间距"),
-      "尺寸参考表: 12 列含英制/公制/长宽厚 + 公差/电极参数 6 列")
-check(_NPD.REFERENCE_EXTRA_VALUES == ("±0.05", "±0.05", "±0.05", "—", "—", "—"),
-      "尺寸参考表: 公差列默认 ±0.05、电极参数列占位 —")
+      and "L长度公差" in _NPD.REFERENCE_HEADERS[4]
+      and "W宽度公差" in _NPD.REFERENCE_HEADERS[6]
+      and "T厚度公差" in _NPD.REFERENCE_HEADERS[8]
+      and "BWmin" in _NPD.REFERENCE_HEADERS[9]
+      and "BWmax" in _NPD.REFERENCE_HEADERS[10]
+      and "L2" in _NPD.REFERENCE_HEADERS[11],
+      "尺寸参考表: 12 列含英制/公制/L/W/T公差 + BWmin/BWmax/L2 标注")
 # 逐行核对四张表的关键尺寸
 _ref_expected = {
     ("电容", "0201"): ("0.60", "0.30", "0.30"),
@@ -3048,7 +3051,7 @@ check(_ref.table.rowCount() == len(_NPD.PRODUCT_SIZE_TABLE)
       and _ref.table.columnCount() == 12
       and not _ref.isModal()
       and not (_ref.windowFlags() & _Qt.WindowType.WindowStaysOnTopHint),
-      "产品尺寸参考: 弹窗为分类表格(30行12列)、非模态、不置顶")
+      "产品尺寸参考: 弹窗为分类表格(31行12列)、非模态、不置顶")
 _ref.deleteLater()
 # 窗口高度自适应（远小于旧的 820，且底部按钮完整可见）
 check(_npd5.height() <= 620 and _npd5.height() >= 500,
@@ -3066,13 +3069,25 @@ _ref3 = _PSRD(None)
 _metric_vals = [_ref3.table.item(r, 2).text() for r in range(_ref3.table.rowCount())]
 check(all(not v.startswith("L") for v in _metric_vals),
       f"尺寸参考: 公制列已去除首字母 L (实际含L={[v for v in _metric_vals if v.startswith('L')][:3]})")
-# 新增 6 列：公差 ±0.05、电极参数占位 —
-_ref3_extra = [[_ref3.table.item(r, c).text() for c in range(6, 12)]
-               for r in range(_ref3.table.rowCount())]
-check(all(row == ["±0.05", "±0.05", "±0.05", "—", "—", "—"]
-          for row in _ref3_extra),
-      f"尺寸参考: 每行含长度/宽度/厚度公差 ±0.05 与电极参数占位 — "
-      f"(实际首行 {_ref3_extra[0]})")
+# 新增 6 列：电容公差/电极来自用户 MLCC 规格表，其他类型占位 —
+_ref3_cap0 = [_ref3.table.item(0, c).text() for c in range(6, 12)]
+check(_ref3_cap0 == ["±0.013", "±0.013", "±0.013", "0.05", "0.10", "0.05"],
+      f"尺寸参考: 电容008004 公差/电极按规格表 (实际 {_ref3_cap0})")
+_ref3_cap0201 = [_ref3.table.item(2, c).text() for c in range(6, 12)]
+check(_ref3_cap0201 == ["±0.05", "±0.05", "±0.05", "0.10", "0.20", "0.20"]
+      and _ref3.table.item(0, 5).text() == "0.125",  # 008004 T=0.125（原 0.13 按表校正）
+      f"尺寸参考: 电容0201 公差/电极按规格表 (实际 {_ref3_cap0201})")
+_ref3_res = [_ref3.table.item(8, c).text() for c in range(6, 12)]
+check(all(v == "—" for v in _ref3_res),
+      f"尺寸参考: 电阻公差/电极暂无数据占位 — (实际 {_ref3_res})")
+# 底部电极结构图示说明区
+from PyQt6.QtWidgets import QLabel as _QLabel2
+_diagram_ok = (any("BWmin" in lb.text() and "L2" in lb.text()
+                   for lb in _ref3.findChildren(_QLabel2))
+               and any(lb.pixmap() is not None and not lb.pixmap().isNull()
+                       for lb in _ref3.findChildren(_QLabel2))
+               and os.path.exists(_PSRD._diagram_path()))
+check(_diagram_ok, "尺寸参考: 含电极结构示意图与 BWmin/BWmax/L2 文字说明")
 check(hasattr(_ref3, "_filter_combo")
       and _ref3._filter_combo.itemText(0) == "全部"
       and all(t in [_ref3._filter_combo.itemText(i)

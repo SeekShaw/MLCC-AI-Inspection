@@ -5,13 +5,16 @@
 """
 from __future__ import annotations
 
+import os
+import sys
+
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QPushButton,
     QComboBox, QFrame, QStackedWidget, QSizePolicy, QLineEdit,
     QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView,
 )
 from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QFont
+from PyQt6.QtGui import QFont, QPixmap
 
 from styles import COLORS
 from components import Card
@@ -35,7 +38,7 @@ class ProductSizeReferenceDialog(QDialog):
         self.setModal(False)
         self.setWindowFlags(self.windowFlags() & ~Qt.WindowType.WindowStaysOnTopHint)
         self.setStyleSheet(f"QDialog {{ background-color: {COLORS['bg_dark']}; }}")
-        self.setFixedSize(1160, 520)   # 2026-11-17：表格增至 12 列，宽度 660 → 1160
+        self.setFixedSize(1160, 790)   # 2026-11-17：新增底部电极结构图示，高度 520 → 790
 
         root = QVBoxLayout(self)
         root.setContentsMargins(14, 14, 14, 14)
@@ -90,6 +93,42 @@ class ProductSizeReferenceDialog(QDialog):
         self._populate_table("全部")
         root.addWidget(self.table, 1)
 
+        # —— 底部：电极结构图示说明（2026-11-17 需求）——
+        diag_box = QFrame()
+        diag_box.setStyleSheet(
+            f"QFrame {{ background-color: {COLORS['bg_card']}; "
+            f"border: 1px solid {COLORS['border']}; border-radius: 4px; }}")
+        diag_layout = QHBoxLayout(diag_box)
+        diag_layout.setContentsMargins(10, 8, 10, 8)
+        diag_layout.setSpacing(14)
+
+        img_label = QLabel()
+        img_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        img_path = self._diagram_path()
+        pixmap = QPixmap(img_path) if img_path else QPixmap()
+        if not pixmap.isNull():
+            img_label.setPixmap(
+                pixmap.scaledToHeight(230, Qt.TransformationMode.SmoothTransformation))
+        else:
+            img_label.setText("（电极结构示意图未找到）")
+            img_label.setStyleSheet(f"color: {COLORS['text_secondary']};")
+        diag_layout.addWidget(img_label, 3)
+
+        note = QLabel(
+            "电极结构尺寸说明（单位：mm）\n\n"
+            "• L 长度：电容本体沿电极方向的总长度\n"
+            "• W 宽度：电容本体的宽度\n"
+            "• T 厚度：电容本体的厚度\n"
+            "• BW 电极宽度：两端电极（金属化端头）在 L 方向的覆盖宽度，"
+            "表中给出 BWmin ~ BWmax 范围\n"
+            "• L2 电极间距：两端电极之间的最小净距，L2 = L − (左 BW + 右 BW)")
+        note.setFont(_yahei(11))
+        note.setWordWrap(True)
+        note.setAlignment(Qt.AlignmentFlag.AlignTop)
+        note.setStyleSheet(f"color: {COLORS['text_primary']}; line-height: 150%;")
+        diag_layout.addWidget(note, 2)
+        root.addWidget(diag_box)
+
         close_row = QHBoxLayout()
         close_row.addStretch()
         close_btn = QPushButton("关闭")
@@ -100,15 +139,24 @@ class ProductSizeReferenceDialog(QDialog):
         close_row.addWidget(close_btn)
         root.addLayout(close_row)
 
+    @staticmethod
+    def _diagram_path():
+        """电极结构示意图路径：打包后取 exe 同级 assets，开发时取项目根 assets。"""
+        name = "mlcc_electrode_diagram.png"
+        if getattr(sys, "frozen", False):
+            base = os.path.dirname(os.path.abspath(sys.executable))
+        else:
+            base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        path = os.path.join(base, "assets", name)
+        return path if os.path.exists(path) else ""
+
     def _populate_table(self, product_type):
-        """按产品类型筛选填充表格；公制列去 L，末尾追加公差/电极参数 6 列。"""
+        """按产品类型筛选填充表格；公制列去 L，公差/电极列按数据表逐行显示。"""
         rows = [row for row in NewProductDialog.PRODUCT_SIZE_TABLE
                 if product_type in ("", "全部") or row[0] == product_type]
         self.table.setRowCount(len(rows))
-        extra = NewProductDialog.REFERENCE_EXTRA_VALUES
         for r, row in enumerate(rows):
-            values = list(row) + list(extra)
-            for c, text in enumerate(values):
+            for c, text in enumerate(row):
                 shown = text
                 if c == 2 and text.startswith("L"):   # 公制列删除首字母 L 显示
                     shown = text[1:]
@@ -145,48 +193,52 @@ class NewProductDialog(QDialog):
         "0805": ("2.00", "1.25", "1.25"),
         "1206": ("3.20", "1.60", "1.60"),
     }
-    # 2026-11-17 需求：四类产品的尺寸规格清单（英制/公制/长/宽/厚 mm）
-    # 依据用户提供的 4 张规格表逐行录入；英制列为空者按原表留空。
+    # 2026-11-17 需求：四类产品的尺寸规格清单，每项 12 元素：
+    # (产品类型, 英制, 公制, L, W, T, L公差, W公差, T公差, BWmin, BWmax, L2)
+    # 电容 8 行公差/电极数据按用户提供的 MLCC 规格表逐行录入；
+    # 电阻/电感/晶振 用户暂未提供公差/电极数据，相应列留「—」占位。
     PRODUCT_SIZE_TABLE = [
-        ("电容", "008004", "0201", "0.250", "0.125", "0.13"),
-        ("电容", "01005", "0402", "0.40", "0.20", "0.20"),
-        ("电容", "0201", "0603", "0.60", "0.30", "0.30"),
-        ("电容", "0402", "1005", "1.00", "0.50", "0.50"),
-        ("电容", "0603", "1608", "1.60", "0.80", "0.80"),
-        ("电容", "0805", "2012", "2.00", "1.25", "1.25"),
-        ("电容", "1206", "3216", "3.20", "1.60", "1.60"),
-        ("电阻", "", "0201", "0.25", "0.13", "0.10"),
-        ("电阻", "", "0402", "0.40", "0.20", "0.13"),
-        ("电阻", "0201", "0603", "0.60", "0.30", "0.23"),
-        ("电阻", "0402", "1005", "1.00", "0.50", "0.35"),
-        ("电阻", "0603", "1608", "1.60", "0.80", "0.45"),
-        ("电阻", "0805", "2012", "2.00", "1.25", "0.55"),
-        ("电阻", "1206", "3216", "3.20", "1.60", "0.62"),
-        ("电感", "01005", "L0402", "0.40", "0.20", "0.20"),
-        ("电感", "0201", "L0603", "0.60", "0.30", "0.23"),
-        ("电感", "0402", "L1005", "1.00", "0.50", "0.30"),
-        ("电感", "0603", "L1608", "1.60", "0.80", "0.40"),
-        ("电感", "0805", "L2012", "2.00", "1.20", "0.50"),
-        ("电感", "1206", "L3216", "3.20", "1.60", "0.55"),
-        ("电感", "1210", "L3225", "3.20", "2.50", "0.55"),
-        ("电感", "1812", "L4832", "4.80", "3.20", "0.55"),
-        ("电感", "2010", "L5025", "5.00", "2.50", "0.55"),
-        ("电感", "2512", "L6432", "6.40", "3.20", "0.55"),
-        ("晶振", "01005", "L0402", "0.40", "0.20", "0.20"),
-        ("晶振", "", "1210", "1.20", "1.00", "0.30"),
-        ("晶振", "", "1612", "1.60", "1.20", "0.35"),
-        ("晶振", "", "2016", "2.00", "1.60", "0.45"),
-        ("晶振", "", "2520", "2.50", "2.00", "0.45"),
-        ("晶振", "", "3225", "3.20", "2.50", "0.55"),
+        # 电容（MLCC）——公差与电极数据来自用户规格表
+        ("电容", "008004", "0201", "0.250", "0.125", "0.125", "±0.013", "±0.013", "±0.013", "0.05", "0.10", "0.05"),
+        ("电容", "01005", "0402", "0.40", "0.20", "0.20", "±0.02", "±0.02", "±0.02", "0.07", "0.14", "0.13"),
+        ("电容", "0201", "0603", "0.60", "0.30", "0.30", "±0.05", "±0.05", "±0.05", "0.10", "0.20", "0.20"),
+        ("电容", "0402", "1005", "1.00", "0.50", "0.50", "±0.05", "±0.05", "±0.10", "0.15", "0.35", "0.30"),
+        ("电容", "0603", "1608", "1.60", "0.80", "0.80", "±0.15", "±0.15", "±0.15", "0.20", "0.60", "0.40"),
+        ("电容", "0805", "2012", "2.00", "1.25", "1.25", "±0.20", "±0.20", "±0.20", "0.25", "0.75", "0.70"),
+        ("电容", "1206", "3216", "3.20", "1.60", "1.60", "±0.20", "±0.20", "±0.20", "0.25", "0.75", "1.40"),
+        ("电容", "1210", "3225", "3.20", "2.50", "2.20", "±0.20", "±0.20", "±0.20", "0.25", "0.75", "1.40"),
+        # 电阻（公差/电极暂无数据，占位 —）
+        ("电阻", "", "0201", "0.25", "0.13", "0.10", "—", "—", "—", "—", "—", "—"),
+        ("电阻", "", "0402", "0.40", "0.20", "0.13", "—", "—", "—", "—", "—", "—"),
+        ("电阻", "0201", "0603", "0.60", "0.30", "0.23", "—", "—", "—", "—", "—", "—"),
+        ("电阻", "0402", "1005", "1.00", "0.50", "0.35", "—", "—", "—", "—", "—", "—"),
+        ("电阻", "0603", "1608", "1.60", "0.80", "0.45", "—", "—", "—", "—", "—", "—"),
+        ("电阻", "0805", "2012", "2.00", "1.25", "0.55", "—", "—", "—", "—", "—", "—"),
+        ("电阻", "1206", "3216", "3.20", "1.60", "0.62", "—", "—", "—", "—", "—", "—"),
+        # 电感（公差/电极暂无数据，占位 —）
+        ("电感", "01005", "L0402", "0.40", "0.20", "0.20", "—", "—", "—", "—", "—", "—"),
+        ("电感", "0201", "L0603", "0.60", "0.30", "0.23", "—", "—", "—", "—", "—", "—"),
+        ("电感", "0402", "L1005", "1.00", "0.50", "0.30", "—", "—", "—", "—", "—", "—"),
+        ("电感", "0603", "L1608", "1.60", "0.80", "0.40", "—", "—", "—", "—", "—", "—"),
+        ("电感", "0805", "L2012", "2.00", "1.20", "0.50", "—", "—", "—", "—", "—", "—"),
+        ("电感", "1206", "L3216", "3.20", "1.60", "0.55", "—", "—", "—", "—", "—", "—"),
+        ("电感", "1210", "L3225", "3.20", "2.50", "0.55", "—", "—", "—", "—", "—", "—"),
+        ("电感", "1812", "L4832", "4.80", "3.20", "0.55", "—", "—", "—", "—", "—", "—"),
+        ("电感", "2010", "L5025", "5.00", "2.50", "0.55", "—", "—", "—", "—", "—", "—"),
+        ("电感", "2512", "L6432", "6.40", "3.20", "0.55", "—", "—", "—", "—", "—", "—"),
+        # 晶振（公差/电极暂无数据，占位 —）
+        ("晶振", "01005", "L0402", "0.40", "0.20", "0.20", "—", "—", "—", "—", "—", "—"),
+        ("晶振", "", "1210", "1.20", "1.00", "0.30", "—", "—", "—", "—", "—", "—"),
+        ("晶振", "", "1612", "1.60", "1.20", "0.35", "—", "—", "—", "—", "—", "—"),
+        ("晶振", "", "2016", "2.00", "1.60", "0.45", "—", "—", "—", "—", "—", "—"),
+        ("晶振", "", "2520", "2.50", "2.00", "0.45", "—", "—", "—", "—", "—", "—"),
+        ("晶振", "", "3225", "3.20", "2.50", "0.55", "—", "—", "—", "—", "—", "—"),
     ]
     REFERENCE_TYPES = ("电容", "电阻", "电感", "晶振")
     REFERENCE_HEADERS = ("产品类型", "产品尺寸(英制 inch)", "产品尺寸(公制 mm)",
-                         "L 长度", "W 宽度", "T 厚度",
-                         "长度公差", "宽度公差", "厚度公差",
-                         "最小电极宽度", "最大电极宽度", "电极间距")
-    # 2026-11-17 需求：参考表新增 6 列的默认值。公差沿用新建产品默认 ±0.05；
-    # 电极宽度/间距用户暂未提供数据，留「—」占位（后续可在数据表补充）。
-    REFERENCE_EXTRA_VALUES = ("±0.05", "±0.05", "±0.05", "—", "—", "—")
+                         "L 长度", "L长度公差", "W 宽度", "W宽度公差",
+                         "T 厚度", "T厚度公差",
+                         "最小电极宽度\nBWmin", "最大电极宽度\nBWmax", "最小电极间距\nL2")
     # 尺寸字段顺序：键后缀、中文标签
     DIMENSIONS = [
         ("length", "长度"),
@@ -245,12 +297,12 @@ class NewProductDialog(QDialog):
         英制列为空（如电阻前两行、晶振多数行）时按公制列匹配；均未命中则回退
         电容口径的 MODEL_NOMINAL_SIZES。
         """
-        for ptype, inch, metric, length, width, thick in cls.PRODUCT_SIZE_TABLE:
-            if ptype == product_type and inch and product_model == inch:
-                return (length, width, thick)
-        for ptype, inch, metric, length, width, thick in cls.PRODUCT_SIZE_TABLE:
-            if ptype == product_type and metric and product_model == metric:
-                return (length, width, thick)
+        for row in cls.PRODUCT_SIZE_TABLE:
+            if row[0] == product_type and row[1] and product_model == row[1]:
+                return (row[3], row[4], row[5])
+        for row in cls.PRODUCT_SIZE_TABLE:
+            if row[0] == product_type and row[2] and product_model == row[2]:
+                return (row[3], row[4], row[5])
         return cls.MODEL_NOMINAL_SIZES.get(product_model, ("", "", ""))
 
     def _default_nominal(self, key):
