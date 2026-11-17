@@ -136,42 +136,7 @@ class ElectrodeDiagram(QWidget):
         finally:
             p.end()
 
-    # ---------- 立体盒（MLCC / 电感共用） ----------
-    def _draw_box(self, cx, cy, bw, bh, dx, dy, el_ratio):
-        """绘制立体长方体 + 两端电极带，返回关键几何点。"""
-        el = bw * el_ratio
-        # 顶面
-        self._poly([(cx, cy), (cx + bw, cy), (cx + bw + dx, cy + dy), (cx + dx, cy + dy)],
-                   fill=_FILL_TOP)
-        # 右侧面
-        self._poly([(cx + bw, cy), (cx + bw + dx, cy + dy),
-                    (cx + bw + dx, cy + bh + dy), (cx + bw, cy + bh)], fill=_FILL_SIDE)
-        # 正面
-        self._poly([(cx, cy), (cx + bw, cy), (cx + bw, cy + bh), (cx, cy + bh)], fill=_FILL)
-        # 正面两端电极带
-        self._poly([(cx, cy), (cx + el, cy), (cx + el, cy + bh), (cx, cy + bh)],
-                   fill=_FILL_ELEC)
-        self._poly([(cx + bw - el, cy), (cx + bw, cy),
-                    (cx + bw, cy + bh), (cx + bw - el, cy + bh)], fill=_FILL_ELEC)
-        return el
-
-    def _dim_width(self, cx, cy, bw, dx, dy, text="宽度 W"):
-        """宽度 W：沿进深方向（顶面右侧棱）作平行尺寸线，标注在右上角外侧。"""
-        p2 = QPointF(cx + bw, cy)                    # 前上右角
-        b2 = QPointF(cx + bw + dx, cy + dy)          # 后上右角
-        off = QPointF(30, -20)
-        a = QPointF(p2.x() + off.x(), p2.y() + off.y())
-        b = QPointF(b2.x() + off.x(), b2.y() + off.y())
-        # 尺寸界线
-        pen = QPen(_LINE_DIM)
-        pen.setWidthF(1.2)
-        self._p.setPen(pen)
-        self._p.drawLine(p2, a)
-        self._p.drawLine(b2, b)
-        # 尺寸线（与棱平行）
-        self._arrow(a, b)
-        self._label(text, b.x() + 34, b.y() - 4)
-
+    # ---------- 圆角立体盒（MLCC / 电感共用） ----------
     def _draw_rounded_box(self, x0, y0, bw, bh, dx, dy, el, r=8.0):
         """绘制圆角立体盒（正面圆角矩形 + 顶面 + 右端面），两端为端头电极。"""
         # 顶面（本体）
@@ -201,6 +166,21 @@ class ElectrodeDiagram(QWidget):
         self._p.setPen(pen)
         self._p.drawPath(front)
 
+    def _dim_depth_w(self, x0, y_bottom, bw, dx, dy):
+        """宽度 W：沿右下方的进深棱作平行尺寸线（标注纯符号 W）。"""
+        p1 = QPointF(x0 + bw, y_bottom)               # 前下右角
+        p2 = QPointF(x0 + bw + dx, y_bottom + dy)     # 后下右角
+        off = QPointF(10, 24)
+        a = QPointF(p1.x() + off.x(), p1.y() + off.y())
+        b = QPointF(p2.x() + off.x(), p2.y() + off.y())
+        pen = QPen(_LINE_DIM)
+        pen.setWidthF(1.2)
+        self._p.setPen(pen)
+        self._p.drawLine(p1, a)
+        self._p.drawLine(p2, b)
+        self._arrow(a, b)
+        self._label("W", (a.x() + b.x()) / 2.0 + 30, (a.y() + b.y()) / 2.0 + 6)
+
     def _paint_mlcc(self):
         """MLCC：圆角立体盒 + 底部 BW/L2/L 三段标注 + 左侧厚度 T + 右下宽度 W。"""
         W = self.width()
@@ -215,19 +195,8 @@ class ElectrodeDiagram(QWidget):
 
         # —— 厚度 T（左侧竖直尺寸线）
         self._dim_v(x0 - 26, y0, y0 + bh, "T", right=False)
-        # —— 宽度 W（右下：沿进深棱作平行尺寸线，垂直于棱向右下偏移）
-        p1 = QPointF(x0 + bw, y0 + bh)                 # 前下右角
-        p2 = QPointF(x0 + bw + dx, y0 + bh + dy)       # 后下右角
-        off = QPointF(10, 24)
-        a = QPointF(p1.x() + off.x(), p1.y() + off.y())
-        b = QPointF(p2.x() + off.x(), p2.y() + off.y())
-        pen = QPen(_LINE_DIM)
-        pen.setWidthF(1.2)
-        self._p.setPen(pen)
-        self._p.drawLine(p1, a)
-        self._p.drawLine(p2, b)
-        self._arrow(a, b)
-        self._label("W", (a.x() + b.x()) / 2.0 + 30, (a.y() + b.y()) / 2.0 + 6)
+        # —— 宽度 W（右下：沿进深棱作平行尺寸线）
+        self._dim_depth_w(x0, y0 + bh, bw, dx, dy)
         # —— 底部：BW（两端电极宽度）+ L2（两电极之间净距）
         y1 = y0 + bh + 30
         self._dim_h(x0, x0 + el, y1, "BW")
@@ -237,18 +206,31 @@ class ElectrodeDiagram(QWidget):
         self._dim_h(x0, x0 + bw, y1 + 30, "L")
 
     def _paint_inductor(self):
-        W = self.width()
-        cy, bh = 50, 54
-        bw = min(W * 0.40, 260)
-        cx = max(96.0, W * 0.24)
-        dx, dy = bw * 0.30, -bh * 0.40
-        el = self._draw_box(cx, cy, bw, bh, dx, dy, 0.16)
+        """贴片电感：复用 MLCC 圆角立体盒，标注纯符号 T / W / D / L。
 
-        self._dim_v(cx - 26, cy, cy + bh, "厚度 T", right=False)
-        self._dim_width(cx, cy, bw, dx, dy)
-        self._dim_h(cx, cx + bw, cy + bh + 32, "长度 L")
-        self._dim_h(cx, cx + el, cy + bh + 58, "电极宽度 D")
-        self._dim_h(cx + bw - el, cx + bw, cy + bh + 58, "D")
+        2026-11-17 需求：与 MLCC 示意图同款造型，去掉中文说明文字，
+        W 标识移到右下（沿进深棱），底部标两端电极宽度 D 与整段长度 L。
+        """
+        W = self.width()
+        bw = min(W * 0.32, 230.0)
+        bh = 52.0
+        x0 = max(84.0, W * 0.20)
+        y0 = 58.0
+        dx = bw * 0.26
+        dy = -bh * 0.42
+        el = bw * 0.16
+        self._draw_rounded_box(x0, y0, bw, bh, dx, dy, el)
+
+        # —— 厚度 T（左侧竖直尺寸线）
+        self._dim_v(x0 - 26, y0, y0 + bh, "T", right=False)
+        # —— 宽度 W（右下：沿进深棱作平行尺寸线）
+        self._dim_depth_w(x0, y0 + bh, bw, dx, dy)
+        # —— 底部：两端电极宽度 D
+        y1 = y0 + bh + 30
+        self._dim_h(x0, x0 + el, y1, "D")
+        self._dim_h(x0 + bw - el, x0 + bw, y1, "D")
+        # —— 底部整段：长度 L
+        self._dim_h(x0, x0 + bw, y1 + 30, "L")
 
     # ---------- 贴片电阻：Top / Side / Bottom 三视图 ----------
     def _paint_resistor(self):

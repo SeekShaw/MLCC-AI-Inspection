@@ -29,6 +29,7 @@ from production_view import (
     StatsPanel, _make_user_frames, _load_camera_frames, _camera_frame_dir,
     CAMERA_NAMES,
 )
+from dimension_sync import BRIDGE
 
 
 # ---------------------------------------------------------------------------
@@ -3395,6 +3396,9 @@ class DebugView(QWidget):
         self._frames_cache_size = None
         self._frames_cache_local = False  # 当前画布是否被本地图像覆盖（覆盖时跳过样张复用）
         self.init_ui()
+        # 2026-11-17：订阅尺寸同步桥——向导第 3 步改了标称值/公差后，
+        # 检测列表 106/107/108 立即刷新（反向同步）。
+        BRIDGE.changed.connect(self._on_dimensions_changed)
 
     @staticmethod
     def _eff_font(bold=False):
@@ -5357,7 +5361,72 @@ class DebugView(QWidget):
             items.append(item)
         if not items:
             return 0
-        return self._apply_detect_settings(items, persist=False)
+        n = self._apply_detect_settings(items, persist=False)
+        # 2026-11-17：把生效的尺寸发布到同步桥（保持桥上的上下文与当前产品一致，
+        # 便于「编辑产品」向导回填调试界面中人工改过的值）。
+        records = {}
+        for key, code in self.PRODUCT_DIM_DETECT.items():
+            nominal = product.get(f"product_{key}")
+            lo = product.get(f"product_{key}_spec_lower")
+            hi = product.get(f"product_{key}_spec_upper")
+            if nominal in (None, "") and lo in (None, "") and hi in (None, ""):
+                continue
+            records[key] = {"nominal": nominal or "", "lower": lo or "",
+                            "upper": hi or ""}
+        if records:
+            BRIDGE.publish(records, source="app",
+                           context=(product.get("product_type", ""),
+                                    product.get("product_model", "")))
+        return n
+
+    def _on_dimensions_changed(self, values, source):
+        """向导第 3 步的尺寸变更 → 刷新检测列表 106/107/108 的标称值与规格上下限。
+
+        2026-11-17 需求：向导与检测列表双向同步。本视图自己发出的变更
+        （source="debug"）不再回写，避免循环；不落盘（persist=False），
+        与 apply_product_dimensions 保持一致（不固化到工位方案）。
+        """
+        if source == "debug":
+            return
+        items = []
+        for key, code in self.PRODUCT_DIM_DETECT.items():
+            rec = (values or {}).get(key)
+            if not rec:
+                continue
+            item = {"code": code}
+            nominal = str(rec.get("nominal", ""))
+            lo = str(rec.get("lower", ""))
+            hi = str(rec.get("upper", ""))
+            if nominal:
+                item["nominal"] = nominal
+            if lo:
+                item["lo"] = lo
+            if hi:
+                item["hi"] = hi
+            if len(item) > 1:
+                items.append(item)
+        if not items:
+            return
+        self._apply_detect_settings(items, persist=False)
+
+    def _publish_dimension_edit(self, row):
+        """检测列表里改了 106/107/108 的标称值/规格上下限 → 发布到同步桥。
+
+        供「新建/编辑产品」向导第 3 步回填（标称值 + 反算的上下公差）。
+        """
+        if not (0 <= row < len(self._table_data)):
+            return
+        code = str(self._table_data[row][1])
+        key = None
+        for k, c in self.PRODUCT_DIM_DETECT.items():
+            if str(c) == code:
+                key = k
+                break
+        if key is None:
+            return
+        r = self._table_data[row]
+        BRIDGE.publish({key: {"nominal": str(r[3]), "lower": str(r[6]),
+                              "upper": str(r[7])}}, source="debug")
 
     def _sync_units_global(self, row, unit):
         """按检测项编号把单位同步到所有其它相机工位（单位设置全局联动）。"""
@@ -6369,6 +6438,9 @@ class DebugView(QWidget):
             return
         # 规格/标称/补偿/收料位置统一以字符串存储，与 _collect_detect_settings 约定一致
         self._table_data[row][di] = text
+        # 2026-11-17：改了 106/107/108 的标称值/规格上下限 → 同步到向导第 3 步
+        if name in ("标称值", "规格下限", "规格上限"):
+            self._publish_dimension_edit(row)
         self._refresh_row_display(row)
 
     def _set_ok_ng_display(self, r):

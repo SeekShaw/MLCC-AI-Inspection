@@ -16,6 +16,7 @@ from PyQt6.QtGui import QFont
 from styles import COLORS
 from components import Card
 from size_diagrams import ElectrodeDiagram
+from dimension_sync import BRIDGE
 
 YAHEI = "Microsoft YaHei"
 
@@ -49,11 +50,14 @@ class _AutoWidthTable(QTableWidget):
     - 自然宽度 = max(表头文字宽, 该列最宽单元格文字宽) + 内边距；
     - 若各列自然宽度总和小于可视宽度，则按比例放大分配，铺满整行；
     - 若总和大于可视宽度，则按比例压缩并保留最小宽度（允许横向滚动）。
+    - 2026-11-17：表头文字按最终列宽**自动换行**（一行放不下则折行显示，不截断）。
     """
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self._natural = []
+        self._head_texts = []
+        self._wrapping = False
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -62,6 +66,78 @@ class _AutoWidthTable(QTableWidget):
     def set_natural_widths(self, widths):
         self._natural = list(widths)
         self._apply_widths()
+
+    def set_header_texts(self, texts):
+        """记录原始表头文字（折行计算用；不改写已设置的表头内容）。"""
+        self._head_texts = [str(t) for t in texts]
+
+    # ---------- 表头折行 ----------
+    @staticmethod
+    def _wrap_paragraph(para, avail, fm):
+        """把一段文字按可用宽度折行（中文逐字断行，英文尽量按词断行）。"""
+        if not para:
+            return [""]
+        if fm.horizontalAdvance(para) <= avail:
+            return [para]
+        lines = []
+        cur = ""
+        for ch in para:
+            if fm.horizontalAdvance(cur + ch) <= avail:
+                cur += ch
+                continue
+            if (ch.isascii() and ch.isalnum() and cur
+                    and cur[-1].isascii() and cur[-1].isalnum()):
+                cut = cur.rfind(" ")
+                if cut > 0:
+                    lines.append(cur[:cut])
+                    cur = cur[cut + 1:] + ch
+                    continue
+            lines.append(cur)
+            cur = ch
+        if cur:
+            lines.append(cur)
+        return lines or [""]
+
+    def _wrap_text(self, text, avail, fm=None):
+        """按可用宽度折行整段表头文字（保留原有显式换行）。返回带 \\n 的文本。"""
+        fm = fm or self.horizontalHeader().fontMetrics()
+        avail = max(20, int(avail))
+        out = []
+        for para in str(text).split("\n"):
+            out.extend(self._wrap_paragraph(para, avail, fm))
+        return "\n".join(out)
+
+    def header_height(self, widths=None):
+        """按给定列宽计算表头所需高度（各列折行后行数最大值 × 行高 + 内边距）。"""
+        widths = widths or self._natural
+        fm = self.horizontalHeader().fontMetrics()
+        lines = 1
+        for c, text in enumerate(self._head_texts):
+            w = widths[c] if c < len(widths) else 100
+            lines = max(lines, len(self._wrap_text(text, w - 12, fm).split("\n")))
+        return lines * fm.height() + 14
+
+    def _apply_header_wrap(self, widths):
+        """按最终列宽重排表头文字（放不下则自动换行，不截断）。
+
+        表格尚未完成布局（未显示 / 可视区过窄）时保持原始表头文字，避免过早折行。
+        """
+        if not self._head_texts or self._wrapping:
+            return
+        if not self.isVisible() or self.viewport().width() < 200:
+            return
+        self._wrapping = True
+        try:
+            fm = self.horizontalHeader().fontMetrics()
+            for c, text in enumerate(self._head_texts):
+                if c >= len(widths):
+                    break
+                wrapped = self._wrap_text(text, widths[c] - 12, fm)
+                item = self.horizontalHeaderItem(c)
+                if item is not None and item.text() != wrapped:
+                    item.setText(wrapped)
+        finally:
+            self._wrapping = False
 
     def _apply_widths(self):
         if not self._natural or self.columnCount() == 0:
@@ -91,6 +167,7 @@ class _AutoWidthTable(QTableWidget):
             i += 1
         for c, w in enumerate(ints):
             self.setColumnWidth(c, w)
+        self._apply_header_wrap(ints)
 
 
 class ProductSizeReferenceDialog(QDialog):
@@ -168,6 +245,7 @@ class ProductSizeReferenceDialog(QDialog):
         table = _AutoWidthTable()
         table.setColumnCount(len(headers))
         table.setHorizontalHeaderLabels(headers)
+        table.set_header_texts(headers)
         rows = data_table
         table.setRowCount(len(rows))
         table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
@@ -177,12 +255,15 @@ class ProductSizeReferenceDialog(QDialog):
         header = table.horizontalHeader()
         header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         header.setMinimumSectionSize(56)
+        # 2026-11-17：列头字体与下方数据同号（10px），仅加粗 + 橙色区分；
+        # 列宽按内容自适应，放不下时表头自动换行（不截断）。
+        header.setFont(_yahei(10, True))
         table.setStyleSheet(
             f"QTableWidget {{ background-color: {COLORS['bg_card']}; "
             f"color: {COLORS['text_primary']}; gridline-color: {COLORS['border']}; "
             f"border: 1px solid {COLORS['border']}; border-radius: 4px; font-size: 10px; }}"
             f"QHeaderView::section {{ background-color: {COLORS['bg_panel']}; "
-            f"color: {COLORS['accent_orange']}; font-weight: bold; "
+            f"color: {COLORS['accent_orange']}; font-size: 10px; font-weight: bold; "
             f"border: 1px solid {COLORS['border']}; padding: 4px; }}"
             f"QTableWidget::item {{ padding: 2px; }}")
         for r, row in enumerate(rows):
@@ -193,27 +274,26 @@ class ProductSizeReferenceDialog(QDialog):
                 item = QTableWidgetItem(shown if shown else "—")
                 item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
                 table.setItem(r, c, item)
-        # 自然列宽 = max(表头宽, 最宽单元格宽) + 内边距
+        # 自然列宽 = max(表头文字宽, 最宽单元格宽) + 内边距
         fm = table.fontMetrics()
+        hfm = header.fontMetrics()
         natural = []
         for c in range(table.columnCount()):
             head_item = table.horizontalHeaderItem(c)
-            w = fm.horizontalAdvance(head_item.text() if head_item else "") + 30
+            head_text = head_item.text() if head_item else ""
+            head_w = max((hfm.horizontalAdvance(ln) for ln in head_text.split("\n")),
+                          default=0)
+            w = head_w + 30
             for r in range(table.rowCount()):
                 it = table.item(r, c)
                 if it is not None:
                     w = max(w, fm.horizontalAdvance(it.text()) + 30)
             natural.append(max(w, 56))
         table.set_natural_widths(natural)
-        # 行高固定 + 表头高度按表头行数计算：保证表格高度可精确计算（不再随窗口拉伸）
+        # 行高固定 + 表头高度按折行后的行数计算：保证表格高度可精确计算（不再随窗口拉伸）
         for r in range(table.rowCount()):
             table.setRowHeight(r, self._ROW_H)
-        lines = 1
-        for c in range(table.columnCount()):
-            it = table.horizontalHeaderItem(c)
-            if it is not None:
-                lines = max(lines, len(it.text().split("\n")))
-        header_h = table.fontMetrics().height() * lines + 22
+        header_h = table.header_height(natural)
         table.horizontalHeader().setFixedHeight(header_h)
         table_h = header_h + self._ROW_H * table.rowCount() + 2 * table.frameWidth()
         table.setFixedHeight(table_h)
@@ -412,6 +492,7 @@ class NewProductDialog(QDialog):
 
         self._step = 0
         self._ui_ready = False
+        self._syncing_from_bridge = False   # 防止与调试界面互相回写时循环
 
         # 收集的数据
         self.product_type = edit_product.get("product_type", "电容") if self._is_edit else "电容"
@@ -433,6 +514,13 @@ class NewProductDialog(QDialog):
         self._camera_combos = []
 
         self._build_ui()
+        # 2026-11-17：订阅尺寸同步桥——调试界面检测列表改了标称值/规格上下限后，
+        # 立即回填第 3 步的标称值与上下公差（反向同步）。
+        BRIDGE.changed.connect(self._on_bridge_changed)
+        # 2026-11-17：编辑产品时，若调试界面已人工改过同款产品的尺寸，
+        # 以同步桥中的最新值为准（与检测列表保持一致）。
+        if self._is_edit:
+            self._apply_bridge_values()
         # 高度按内容自适应：取两步页面所需高度较大者 + 边距，避免过大留白
         content_h = max(self.stack.widget(0).sizeHint().height(),
                         self.stack.widget(1).sizeHint().height())
@@ -449,13 +537,61 @@ class NewProductDialog(QDialog):
         英制列为空（如电阻前两行、晶振多数行）时按公制列匹配；均未命中则回退
         电容口径的 MODEL_NOMINAL_SIZES。
         """
+        row = cls._lookup_row(product_type, product_model)
+        if row is not None:
+            return (row[3], row[4], row[5])
+        return cls.MODEL_NOMINAL_SIZES.get(product_model, ("", "", ""))
+
+    @classmethod
+    def _lookup_row(cls, product_type, product_model):
+        """在 PRODUCT_SIZE_TABLE 中定位 (产品类型, 规格) 命中的行；未命中返回 None。"""
         for row in cls.PRODUCT_SIZE_TABLE:
             if row[0] == product_type and row[1] and product_model == row[1]:
-                return (row[3], row[4], row[5])
+                return row
         for row in cls.PRODUCT_SIZE_TABLE:
             if row[0] == product_type and row[2] and product_model == row[2]:
-                return (row[3], row[4], row[5])
-        return cls.MODEL_NOMINAL_SIZES.get(product_model, ("", "", ""))
+                return row
+        return None
+
+    @classmethod
+    def lookup_dimensions(cls, product_type, product_model):
+        """按「产品尺寸参考」表返回三个维度的标称值与上下公差。
+
+        2026-11-17 需求：向导第 3 步的标称值/公差均按参考表加载。
+        返回：{"length": {"nominal", "lower_tol", "upper_tol"}, …}；
+        参考表未覆盖的规格回退到 MODEL_NOMINAL_SIZES + 默认公差。
+        """
+        dims = {}
+        row = cls._lookup_row(product_type, product_model)
+        if row is not None:
+            pairs = (("length", row[3], row[6]), ("width", row[4], row[7]),
+                     ("thickness", row[5], row[8]))
+            for key, nominal, tol in pairs:
+                lower, upper = cls._split_tolerance(tol)
+                dims[key] = {"nominal": str(nominal),
+                             "lower_tol": lower, "upper_tol": upper}
+        else:
+            sizes = cls.MODEL_NOMINAL_SIZES.get(product_model, ("", "", ""))
+            for idx, key in enumerate(("length", "width", "thickness")):
+                dims[key] = {"nominal": sizes[idx],
+                             "lower_tol": cls.DEFAULT_LOWER_TOL,
+                             "upper_tol": cls.DEFAULT_UPPER_TOL}
+        return dims
+
+    @classmethod
+    def _split_tolerance(cls, tol):
+        """把参考表公差「±0.05」拆成下公差/上公差；无数据时用默认公差。"""
+        text = str(tol or "").strip()
+        if text in ("", "—", "-", "--"):
+            return cls.DEFAULT_LOWER_TOL, cls.DEFAULT_UPPER_TOL
+        if text.startswith("±"):
+            num = text[1:].strip()
+            try:
+                float(num)
+            except ValueError:
+                return cls.DEFAULT_LOWER_TOL, cls.DEFAULT_UPPER_TOL
+            return f"-{num}", num
+        return text, text
 
     def _default_nominal(self, key):
         """按当前产品类型 + 产品型号返回该维度的标称尺寸。"""
@@ -481,13 +617,20 @@ class NewProductDialog(QDialog):
         return f"{value:.{digits}f}"
 
     def _init_dimension(self, key, ep):
-        """初始化并回显单个尺寸的标称/公差/规格属性（兼容旧配方仅含标称值）。"""
+        """初始化并回显单个尺寸的标称/公差/规格属性（兼容旧配方仅含标称值）。
+
+        2026-11-17：新建产品时标称值与上下公差均按「产品尺寸参考」表加载；
+        编辑旧配方时保留配方中已保存的标称值与公差。
+        """
         base = f"product_{key}"
-        setattr(self, base, str(ep.get(base, self._default_nominal(key))))
+        ref = self.lookup_dimensions(self.product_type, self.product_model).get(key, {})
+        setattr(self, base, str(ep.get(base, ref.get("nominal", ""))))
         setattr(self, f"{base}_lower_tol",
-                str(ep.get(f"{base}_lower_tol", self.DEFAULT_LOWER_TOL)))
+                str(ep.get(f"{base}_lower_tol",
+                           ref.get("lower_tol", self.DEFAULT_LOWER_TOL))))
         setattr(self, f"{base}_upper_tol",
-                str(ep.get(f"{base}_upper_tol", self.DEFAULT_UPPER_TOL)))
+                str(ep.get(f"{base}_upper_tol",
+                           ref.get("upper_tol", self.DEFAULT_UPPER_TOL))))
         self._recalc_spec(key)
 
     def _recalc_spec(self, key):
@@ -500,7 +643,7 @@ class NewProductDialog(QDialog):
         setattr(self, f"{base}_spec_upper", self._compute_spec(nominal, upper))
 
     def _on_dimension_edited(self, key, field):
-        """输入框编辑回调：写回属性，联动重算规格显示。"""
+        """输入框编辑回调：写回属性，联动重算规格显示，并同步到调试界面。"""
         if field == "nominal":
             attr = f"product_{key}"
             edits = self._size_edits
@@ -511,6 +654,8 @@ class NewProductDialog(QDialog):
         self._recalc_spec(key)
         if self._ui_ready:
             self._sync_spec_displays(key)
+            if not getattr(self, "_syncing_from_bridge", False):
+                self._publish_dimensions()
 
     def _sync_spec_displays(self, key):
         """把计算出的规格下限/上限刷新到只读显示框。"""
@@ -520,12 +665,115 @@ class NewProductDialog(QDialog):
         self._spec_displays[f"{base}_spec_upper"].setText(
             getattr(self, f"{base}_spec_upper"))
 
-    def _apply_model_sizes(self):
-        """产品型号/类型变更后，用映射表刷新三个标称尺寸输入框（连带公差重算规格）。"""
+    @staticmethod
+    def _compute_tol(spec, nominal):
+        """由规格值反算公差（公差 = 规格值 − 标称值），精度与标称值一致。"""
+        try:
+            value = float(spec) - float(nominal)
+        except (TypeError, ValueError):
+            return ""
+        if abs(value) < 1e-9:
+            value = 0.0
+
+        def _decimals(text):
+            s = str(text)
+            return len(s.split(".")[1]) if "." in s else 0
+
+        digits = min(max(2, _decimals(nominal), _decimals(spec)), 4)
+        return f"{value:.{digits}f}"
+
+    def _apply_bridge_values(self):
+        """把同步桥中与当前(类型,型号)匹配的调试界面最新尺寸回填到第 3 步。
+
+        仅当桥上最新值来自调试界面的人工修改（source="debug"）时才回填，
+        避免程序联动值覆盖配方中已保存的尺寸。
+        """
+        if BRIDGE.source != "debug":
+            return
+        ctx = tuple(BRIDGE.context or ("", ""))
+        if ctx != (self.product_type, self.product_model):
+            return
+        values = BRIDGE.snapshot()
+        if not values:
+            return
+        self._on_bridge_changed(values, "debug")
+
+    def _publish_dimensions(self):
+        """把当前三个维度的标称值/规格上下限发布到同步桥（供调试界面刷新）。"""
+        records = {}
+        for key, _label in self.DIMENSIONS:
+            base = f"product_{key}"
+            records[key] = {
+                "nominal": getattr(self, base),
+                "lower": getattr(self, f"{base}_spec_lower"),
+                "upper": getattr(self, f"{base}_spec_upper"),
+            }
+        BRIDGE.publish(records, source="dialog",
+                       context=(self.product_type, self.product_model))
+
+    def _on_bridge_changed(self, values, source):
+        """接收调试界面（检测列表 106/107/108）修改后的尺寸并回填向导第 3 步。
+
+        标称值直接回填；上下公差按「公差 = 规格 − 标称」反算，规格上下限随之重算。
+        仅响应调试界面发出（source="debug"）的变更，避免与自身/程序回写互相触发。
+        """
+        if source != "debug" or getattr(self, "_syncing_from_bridge", False):
+            return
         if not hasattr(self, "_size_edits"):
             return
-        for key, _label in self.DIMENSIONS:
-            self._size_edits[f"product_{key}"].setText(self._default_nominal(key))
+        self._syncing_from_bridge = True
+        try:
+            for key, _label in self.DIMENSIONS:
+                rec = (values or {}).get(key)
+                if not rec:
+                    continue
+                base = f"product_{key}"
+                nominal = str(rec.get("nominal", ""))
+                if not nominal:
+                    continue
+                self._size_edits[base].setText(nominal)
+                setattr(self, base, nominal)
+                lo_tol = self._compute_tol(rec.get("lower", ""), nominal)
+                up_tol = self._compute_tol(rec.get("upper", ""), nominal)
+                if lo_tol:
+                    self._tol_edits[f"{base}_lower_tol"].setText(lo_tol)
+                    setattr(self, f"{base}_lower_tol", lo_tol)
+                if up_tol:
+                    self._tol_edits[f"{base}_upper_tol"].setText(up_tol)
+                    setattr(self, f"{base}_upper_tol", up_tol)
+                self._recalc_spec(key)
+                self._sync_spec_displays(key)
+        finally:
+            self._syncing_from_bridge = False
+
+    def _apply_model_sizes(self):
+        """产品型号/类型变更后：按「产品尺寸参考」刷新标称值与上下公差。
+
+        2026-11-17 需求：第 3 步的标称值/公差/规格均默认按参考表加载，可再手工修改。
+        """
+        if not hasattr(self, "_size_edits"):
+            return
+        self._loading_reference = True
+        try:
+            dims = self.lookup_dimensions(self.product_type, self.product_model)
+            for key, _label in self.DIMENSIONS:
+                base = f"product_{key}"
+                rec = dims.get(key, {})
+                self._size_edits[base].setText(rec.get("nominal", ""))
+                self._tol_edits[f"{base}_lower_tol"].setText(
+                    rec.get("lower_tol", self.DEFAULT_LOWER_TOL))
+                self._tol_edits[f"{base}_upper_tol"].setText(
+                    rec.get("upper_tol", self.DEFAULT_UPPER_TOL))
+                setattr(self, base, self._size_edits[base].text())
+                setattr(self, f"{base}_lower_tol",
+                        self._tol_edits[f"{base}_lower_tol"].text())
+                setattr(self, f"{base}_upper_tol",
+                        self._tol_edits[f"{base}_upper_tol"].text())
+                self._recalc_spec(key)
+                self._sync_spec_displays(key)
+        finally:
+            self._loading_reference = False
+        self._publish_dimensions()
 
     def _open_size_reference(self):
         """打开「产品尺寸参考」分类表格窗口（非模态、不置顶、不遮挡当前窗口）。"""
@@ -597,19 +845,16 @@ class NewProductDialog(QDialog):
         layout.setContentsMargins(20, 16, 20, 8)
         layout.setSpacing(16)
 
-        # 第1行：产品类型
-        # 第2行：产品型号
-        rows = [
-            ("1.产品类型：", self.PRODUCT_TYPES, "product_type", self.product_type),
-            ("2.产品型号：", self.PRODUCT_MODELS, "product_model", self.product_model),
-        ]
-        for lab, items, attr, default in rows:
+        # 2026-11-17 需求：行序调整为「产品类型 → 产品类型（自定义） → 产品型号 →
+        # 产品型号（自定义） → 产品描述 → 3.输入产品尺寸」——自定义行紧跟对应的选择行。
+
+        def _combo_row(lab, items, attr, default):
+            """一行「标签 + 下拉选择」（标题行用橙色）。"""
             row = QHBoxLayout()
             row.setSpacing(12)
             label = QLabel(lab)
             label.setFixedWidth(150)
             label.setFont(_yahei(12))
-            # 2026-11-17：「1.产品类型」「2.产品型号」改为橙色，与「3.输入产品尺寸」一致
             label.setStyleSheet(f"color: {COLORS['accent_orange']};")
             cb = QComboBox()
             cb.addItems(items)
@@ -625,9 +870,40 @@ class NewProductDialog(QDialog):
             row.addWidget(label)
             row.addWidget(cb)
             row.addStretch()
-            layout.addLayout(row)
+            return row
 
-        # 第3行：产品描述（非必填，可自定义输入；有输入则显示，文字清晰可见）
+        def _custom_row(lab, attr, default):
+            """一行「标签 + 自定义输入」（非必填，覆盖默认展示文案）。"""
+            row = QHBoxLayout()
+            row.setSpacing(12)
+            label = QLabel(lab)
+            label.setFixedWidth(150)
+            label.setFont(_yahei(12))
+            label.setStyleSheet(f"color: {COLORS['text_primary']};")
+            le = QLineEdit(default)
+            le.setFixedSize(250, 32)
+            le.setFont(_yahei(12))
+            le.setPlaceholderText("（可选）")
+            le.textChanged.connect(lambda v, a=attr: setattr(self, a, v))
+            row.addWidget(label)
+            row.addWidget(le)
+            row.addStretch()
+            return row
+
+        # 第1行：产品类型
+        layout.addLayout(_combo_row("1.产品类型：", self.PRODUCT_TYPES,
+                                     "product_type", self.product_type))
+        # 第2行：产品类型（自定义）
+        layout.addLayout(_custom_row("产品类型（自定义）", "custom_type_display",
+                                      self.custom_type_display))
+        # 第3行：产品型号
+        layout.addLayout(_combo_row("2.产品型号：", self.PRODUCT_MODELS,
+                                     "product_model", self.product_model))
+        # 第4行：产品型号（自定义）
+        layout.addLayout(_custom_row("产品型号（自定义）", "custom_model_display",
+                                      self.custom_model_display))
+
+        # 第5行：产品描述（非必填，可自定义输入；有输入则显示，文字清晰可见）
         desc_row = QHBoxLayout()
         desc_row.setSpacing(12)
         desc_label = QLabel("产品描述：")
@@ -644,29 +920,6 @@ class NewProductDialog(QDialog):
         desc_row.addWidget(self._desc_edit)
         desc_row.addStretch()
         layout.addLayout(desc_row)
-
-        # 第4/5行：产品类型/型号 自定义显示名称（非必填，覆盖默认展示文案；有输入则显示）
-        # 标签名与产品管理页表头一致：「产品类型（自定义）」「产品型号（自定义）」
-        custom_rows = [
-            ("产品类型（自定义）", "custom_type_display", self.custom_type_display),
-            ("产品型号（自定义）", "custom_model_display", self.custom_model_display),
-        ]
-        for lab, attr, default in custom_rows:
-            row = QHBoxLayout()
-            row.setSpacing(12)
-            label = QLabel(lab)
-            label.setFixedWidth(150)
-            label.setFont(_yahei(12))
-            label.setStyleSheet(f"color: {COLORS['text_primary']};")
-            le = QLineEdit(default)
-            le.setFixedSize(250, 32)
-            le.setFont(_yahei(12))
-            le.setPlaceholderText("（可选）")
-            le.textChanged.connect(lambda v, a=attr: setattr(self, a, v))
-            row.addWidget(label)
-            row.addWidget(le)
-            row.addStretch()
-            layout.addLayout(row)
 
         # 第6行起：3.输入产品尺寸
         # 排列：标称值 / 下公差 / 上公差 / 规格下限 / 规格上限

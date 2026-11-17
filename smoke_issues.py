@@ -2923,15 +2923,15 @@ check(_npd2.DEFAULT_LOWER_TOL == "-0.05" and _npd2.DEFAULT_UPPER_TOL == "0.05",
       "新建产品: 下公差默认 -0.05、上公差默认 0.05")
 check(all(_npd2._tol_edits[f"product_{k}_{f}"].text() == d
           for k in ("length", "width", "thickness")
-          for f, d in (("lower_tol", "-0.05"), ("upper_tol", "0.05"))),
-      "新建产品: 三个尺寸的上下公差输入框均回填默认值")
+          for f, d in (("lower_tol", "-0.02"), ("upper_tol", "0.02"))),
+      "新建产品: 三个尺寸的上下公差按「产品尺寸参考」表回填 (电容01005 → ±0.02)")
 check(all(_npd2._spec_displays[f"product_{k}_{f}"].isReadOnly()
           for k in ("length", "width", "thickness")
           for f in ("spec_lower", "spec_upper")),
       "新建产品: 规格下限/上限只读（自动计算不可手动输入）")
-check(_npd2.product_length_spec_lower == "0.35"
-      and _npd2.product_length_spec_upper == "0.45"
-      and _npd2._spec_displays["product_length_spec_lower"].text() == "0.35",
+check(_npd2.product_length_spec_lower == "0.38"
+      and _npd2.product_length_spec_upper == "0.42"
+      and _npd2._spec_displays["product_length_spec_lower"].text() == "0.38",
       "新建产品: 规格下限=标称+下公差、上限=标称+上公差")
 from styles import COLORS as _COLORS
 _orange = _COLORS["accent_orange"]
@@ -3181,8 +3181,8 @@ check(all(abs(s - vp) <= 4 and mn >= 56
           for s, vp, mn in _width_report.values()),
       f"尺寸参考: 四个分页列宽按内容自适应且铺满可视区域 (实际 {_width_report})")
 _cap_w = [_ref3._tables["MLCC电容"].columnWidth(c) for c in range(12)]
-check(_cap_w[9] > _cap_w[0] and _cap_w[9] > _cap_w[3],
-      f"尺寸参考: 列宽按内容差异化自适应（电极列 > 窄列） (实际 {_cap_w})")
+check(_cap_w[1] > _cap_w[3] and _cap_w[9] > _cap_w[0],
+      f"尺寸参考: 列宽按内容差异化自适应（长文本列 > 窄列） (实际 {_cap_w})")
 # 底部电极结构图示：矢量绘制（ElectrodeDiagram），电容/电阻/电感各一张
 from size_diagrams import ElectrodeDiagram as _ED
 _diags = [w for w in _ref3.findChildren(_ED) if w.objectName() == "diagram_image"]
@@ -3262,6 +3262,103 @@ _src_app_sw = open("C:/Users/Lenovo/WorkBuddy/Teruo/src/app.py", encoding="utf-8
 check("apply_product_dimensions(product)" in _src_app_sw
       and "apply_product_dimensions(self.current_product)" in _src_app_sw,
       "尺寸联动: 产品切换与初始化均调用 apply_product_dimensions")
+
+# ============ 2026-11-17：向导第3步按参考表加载 + 与检测列表双向同步 + 布局/表头调整 ============
+# (1) 「产品尺寸参考」→ 向导第 3 步：标称值 + 上下公差一并加载
+_dims_cap = _NPD.lookup_dimensions("电容", "0201")
+check(_dims_cap["length"] == {"nominal": "0.60", "lower_tol": "-0.05",
+                               "upper_tol": "0.05"}
+      and _dims_cap["width"]["nominal"] == "0.30"
+      and _dims_cap["thickness"]["nominal"] == "0.30",
+      f"向导尺寸: 按产品尺寸参考表取标称值与上下公差 (实际 {_dims_cap['length']})")
+_npdE = _NPD(None)
+_npdE._product_combos["product_type"].setCurrentText("电阻")
+_npdE._product_combos["product_model"].setCurrentText("0201")
+check(_npdE.product_length == "0.60" and _npdE.product_length_lower_tol == "-0.03"
+      and _npdE.product_length_upper_tol == "0.03"
+      and _npdE.product_length_spec_lower == "0.57"
+      and _npdE.product_length_spec_upper == "0.63"
+      and _npdE._size_edits["product_length"].text() == "0.60"
+      and _npdE._tol_edits["product_length_lower_tol"].text() == "-0.03",
+      "向导第3步: 选定类型/规格后按参考表加载标称值与公差（可再手工修改）")
+# (2) 向导第 3 步 ↔ 调试界面检测列表 106/107/108 双向同步
+_dvlE = DebugView(camera_name="下表面", main_window=None)
+_row106 = None
+for _r, _row in enumerate(_dvlE._table_data):
+    if str(_row[1]) == "106":
+        _row106 = _r
+        break
+_cnE = _dvlE._col_by_header("标称值")
+_clE = _dvlE._col_by_header("规格下限")
+_chE = _dvlE._col_by_header("规格上限")
+_npdE._size_edits["product_length"].setText("0.99")
+check(_row106 is not None
+      and str(_dvlE._table_data[_row106][3]) == "0.99"
+      and str(_dvlE._table_data[_row106][6]) == "0.96"
+      and str(_dvlE._table_data[_row106][7]) == "1.02",
+      f"尺寸同步: 向导第3步改标称值 → 检测列表 106 同步 "
+      f"(实际 {_dvlE._table_data[_row106][3:8] if _row106 is not None else None})")
+_dvlE._table.item(_row106, _cnE).setText("1.23")
+_dvlE._table.item(_row106, _clE).setText("1.10")
+_dvlE._table.item(_row106, _chE).setText("1.36")
+check(_npdE.product_length == "1.23" and _npdE.product_length_lower_tol == "-0.13"
+      and _npdE.product_length_upper_tol == "0.13"
+      and _npdE.product_length_spec_lower == "1.10"
+      and _npdE.product_length_spec_upper == "1.36"
+      and _npdE._size_edits["product_length"].text() == "1.23",
+      f"尺寸同步: 检测列表 106 改标称值/规格上下限 → 向导回填并反算公差 "
+      f"(实际 {_npdE.product_length}, {_npdE.product_length_lower_tol}, "
+      f"{_npdE.product_length_upper_tol}, {_npdE.product_length_spec_lower}, "
+      f"{_npdE.product_length_spec_upper})")
+# (3) 向导布局：自定义行紧跟对应选择行
+_labE = [lb.text() for lb in _npdE.findChildren(_QLabel2)]
+_ordE = [_labE.index(t) for t in ("1.产品类型：", "产品类型（自定义）",
+                                   "2.产品型号：", "产品型号（自定义）",
+                                   "产品描述：", "3.输入产品尺寸")]
+check(_ordE == sorted(_ordE),
+      f"向导布局: 自定义行紧跟对应选择行（类型→类型自定义→型号→型号自定义→描述→尺寸） "
+      f"(实际顺序 {_ordE})")
+# (4) 参考表列头：与数据同号 10px、加粗异色；放不下自动换行（不截断）
+_refE = _PSRD(None)
+_refE.show()
+_QAppCls.processEvents()
+_hE = _refE._tables["MLCC电容"].horizontalHeader()
+check(_hE.font().pixelSize() == 10 and _hE.font().bold()
+      and "font-size: 10px" in _refE._tables["MLCC电容"].styleSheet(),
+      f"尺寸参考: 列头字体与下方数据同为 10px 并加粗异色 "
+      f"(实际 {_hE.font().pixelSize()}px bold={_hE.font().bold()})")
+_wrap_ok = True
+_wrap_detail = {}
+for _iE, (_tnE, _nE) in enumerate((("MLCC电容", 12), ("贴片电阻", 11),
+                                   ("贴片电感", 10), ("晶振", 12))):
+    _refE.tabs.setCurrentIndex(_iE)      # 逐页激活后测量（未激活页尚未布局）
+    _QAppCls.processEvents()
+    _tE = _refE._tables[_tnE]
+    _hfmE = _tE.horizontalHeader().fontMetrics()
+    _bad = []
+    for _cE in range(_nE):
+        _itE = _tE.horizontalHeaderItem(_cE)
+        if _itE is None:
+            continue
+        _wE = _tE.columnWidth(_cE)
+        for _lnE in _itE.text().split("\n"):
+            if _hfmE.horizontalAdvance(_lnE) > _wE - 4:
+                _wrap_ok = False
+                _bad.append((_cE, _lnE, _wE))
+    _wrap_detail[_tnE] = _bad
+check(_wrap_ok, f"尺寸参考: 四个分页列头文字均不超列宽（放不下自动换行） (实际 {_wrap_detail})")
+_refE.close()
+_refE.deleteLater()
+# (5) 贴片电感示意图：复用 MLCC 圆角盒、去掉中文标注、W 移到右下
+_src_diagE = open("C:/Users/Lenovo/WorkBuddy/Teruo/src/size_diagrams.py",
+                  encoding="utf-8").read()
+_ind_segE = (_src_diagE.split("def _paint_inductor")[1].split("    def ")[0]
+             if "def _paint_inductor" in _src_diagE else "")
+check("_draw_rounded_box" in _ind_segE
+      and all(s not in _ind_segE for s in ('"厚度 T"', '"宽度 W"',
+                                           '"电极宽度 D"', '"长度 L"'))
+      and '"D"' in _ind_segE and '"L"' in _ind_segE and '"T"' in _ind_segE,
+      "尺寸参考: 贴片电感示意图复用 MLCC 圆角盒、去掉中文标注（仅 T/W/D/L 符号）")
 
 # ============ 2026-11-12 修复：产品管理编辑/新增内容需持久化（退出再打开保留） ============
 import product_manager_dialog as _pmd
