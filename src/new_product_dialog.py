@@ -5,19 +5,17 @@
 """
 from __future__ import annotations
 
-import os
-import sys
-
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QPushButton,
     QComboBox, QFrame, QStackedWidget, QSizePolicy, QLineEdit,
     QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView, QTabWidget,
 )
 from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QFont, QPixmap
+from PyQt6.QtGui import QFont
 
 from styles import COLORS
 from components import Card
+from size_diagrams import ElectrodeDiagram
 
 YAHEI = "Microsoft YaHei"
 
@@ -27,6 +25,72 @@ def _yahei(size, bold=False):
     f.setPixelSize(size)
     f.setBold(bold)
     return f
+
+
+def _aggregate_rows(rows):
+    """把分页规格表转换为 lookup_nominal 使用的 12 元素聚合布局。
+
+    分页布局：(类型, 英制, 公制, L, L公差, W, W公差, T, T公差, 电极…)
+    聚合布局：(类型, 英制, 公制, L, W, T, L公差, W公差, T公差, 电极1, 电极2, 电极3)
+    电极列不足 3 列时以「—」补齐（电阻无 L2、电感仅有 D、晶振暂无电极数据）。
+    """
+    out = []
+    for r in rows:
+        base = (r[0], r[1], r[2], r[3], r[5], r[7], r[4], r[6], r[8])
+        tail = list(r[9:12])
+        tail += ["—"] * (3 - len(tail))
+        out.append(base + tuple(tail))
+    return out
+
+
+class _AutoWidthTable(QTableWidget):
+    """列宽自适应表格：按内容计算自然宽度，并铺满可视区域。
+
+    - 自然宽度 = max(表头文字宽, 该列最宽单元格文字宽) + 内边距；
+    - 若各列自然宽度总和小于可视宽度，则按比例放大分配，铺满整行；
+    - 若总和大于可视宽度，则按比例压缩并保留最小宽度（允许横向滚动）。
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._natural = []
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._apply_widths()
+
+    def set_natural_widths(self, widths):
+        self._natural = list(widths)
+        self._apply_widths()
+
+    def _apply_widths(self):
+        if not self._natural or self.columnCount() == 0:
+            return
+        header = self.horizontalHeader()
+        header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+        avail = max(self.viewport().width(), 100)
+        total = sum(self._natural)
+        if total <= 0:
+            return
+        min_w = 56
+        if total <= avail:
+            # 有余量：按比例放大铺满
+            extra = avail - total
+            widths = [w + extra * w / total for w in self._natural]
+        else:
+            # 超宽：按比例压缩（不低于最小宽度，超出部分允许横向滚动）
+            widths = [max(min_w, w * avail / total) for w in self._natural]
+        ints = [int(w) for w in widths]
+        # 取整余数补给最宽的列，保证列宽总和与可视宽度一致（无空隙）
+        rest = avail - sum(ints)
+        order = sorted(range(len(ints)), key=lambda c: -widths[c])
+        i = 0
+        while rest > 0 and order:
+            ints[order[i % len(order)]] += 1
+            rest -= 1
+            i += 1
+        for c, w in enumerate(ints):
+            self.setColumnWidth(c, w)
 
 
 class ProductSizeReferenceDialog(QDialog):
@@ -61,10 +125,10 @@ class ProductSizeReferenceDialog(QDialog):
             f"QTabBar::tab:selected {{ background-color: {COLORS['bg_card']}; "
             f"color: {COLORS['accent_orange']}; font-weight: bold; }}")
         self._tables = {}
-        for tab_name, headers, ptype, note_text, img_name in NewProductDialog.REFERENCE_PAGES:
-            page, table = self._build_page(headers, ptype, note_text, img_name)
+        for tab_name, headers, data_table, note_text, img_kind in NewProductDialog.REFERENCE_PAGES:
+            page, table = self._build_page(headers, data_table, note_text, img_kind)
             self.tabs.addTab(page, tab_name)
-            self._tables[ptype] = table
+            self._tables[tab_name] = table
         root.addWidget(self.tabs, 1)
 
         close_row = QHBoxLayout()
@@ -77,30 +141,26 @@ class ProductSizeReferenceDialog(QDialog):
         close_row.addWidget(close_btn)
         root.addLayout(close_row)
 
-    def _build_page(self, headers, product_type, note_text, img_name):
-        """构建单个分页：上部表格 + 下部电极结构图示说明。返回承载 QWidget。"""
+    def _build_page(self, headers, data_table, note_text, img_kind):
+        """构建单个分页：上部表格 + 下部电极结构图示说明。返回 (承载 QWidget, 表格)。"""
         page = QFrame()
         page.setStyleSheet(f"QFrame {{ background-color: {COLORS['bg_card']}; }}")
         v = QVBoxLayout(page)
         v.setContentsMargins(8, 8, 8, 8)
         v.setSpacing(8)
 
-        table = QTableWidget()
+        table = _AutoWidthTable()
         table.setColumnCount(len(headers))
         table.setHorizontalHeaderLabels(headers)
-        # 电阻用独立规格表，其余从聚合表按类型过滤
-        if product_type == "电阻":
-            rows = NewProductDialog.RESISTOR_SIZE_TABLE
-        else:
-            rows = [r for r in NewProductDialog.PRODUCT_SIZE_TABLE if r[0] == product_type]
+        rows = data_table
         table.setRowCount(len(rows))
         table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         table.setAlternatingRowColors(True)
         table.verticalHeader().setVisible(False)
         header = table.horizontalHeader()
-        header.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
-        header.setStretchLastSection(True)
+        header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+        header.setMinimumSectionSize(56)
         table.setStyleSheet(
             f"QTableWidget {{ background-color: {COLORS['bg_card']}; "
             f"color: {COLORS['text_primary']}; gridline-color: {COLORS['border']}; "
@@ -117,9 +177,21 @@ class ProductSizeReferenceDialog(QDialog):
                 item = QTableWidgetItem(shown if shown else "—")
                 item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
                 table.setItem(r, c, item)
+        # 自然列宽 = max(表头宽, 最宽单元格宽) + 内边距
+        fm = table.fontMetrics()
+        natural = []
+        for c in range(table.columnCount()):
+            head_item = table.horizontalHeaderItem(c)
+            w = fm.horizontalAdvance(head_item.text() if head_item else "") + 30
+            for r in range(table.rowCount()):
+                it = table.item(r, c)
+                if it is not None:
+                    w = max(w, fm.horizontalAdvance(it.text()) + 30)
+            natural.append(max(w, 56))
+        table.set_natural_widths(natural)
         v.addWidget(table, 1)
 
-        # 图示说明区
+        # 图示说明区（矢量绘制：线条分明、文字清晰）
         diag_box = QFrame()
         diag_box.setStyleSheet(
             f"QFrame {{ background-color: {COLORS['bg_panel']}; "
@@ -127,18 +199,11 @@ class ProductSizeReferenceDialog(QDialog):
         diag_layout = QHBoxLayout(diag_box)
         diag_layout.setContentsMargins(10, 8, 10, 8)
         diag_layout.setSpacing(14)
-        img_label = QLabel()
-        img_label.setObjectName("diagram_image")
-        img_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        path = self._diagram_path(img_name) if img_name else ""
-        pixmap = QPixmap(path) if path else QPixmap()
-        if not pixmap.isNull():
-            img_label.setPixmap(
-                pixmap.scaledToHeight(210, Qt.TransformationMode.SmoothTransformation))
-        else:
-            img_label.setText("（暂无结构示意图）")
-            img_label.setStyleSheet(f"color: {COLORS['text_secondary']};")
-        diag_layout.addWidget(img_label, 3)
+        if img_kind:
+            diagram = ElectrodeDiagram(img_kind)
+            diagram.setObjectName("diagram_image")
+            diagram.setMinimumHeight(200)
+            diag_layout.addWidget(diagram, 3)
         note = QLabel("尺寸 / 电极参数说明（单位：mm）\n\n" + note_text)
         note.setFont(_yahei(11))
         note.setWordWrap(True)
@@ -147,16 +212,6 @@ class ProductSizeReferenceDialog(QDialog):
         diag_layout.addWidget(note, 2)
         v.addWidget(diag_box)
         return page, table
-
-    @staticmethod
-    def _diagram_path(name="mlcc_electrode_diagram.png"):
-        """示意图路径：打包后取 exe 同级 assets，开发时取项目根 assets。"""
-        if getattr(sys, "frozen", False):
-            base = os.path.dirname(os.path.abspath(sys.executable))
-        else:
-            base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        path = os.path.join(base, "assets", name)
-        return path if os.path.exists(path) else ""
 
     @staticmethod
     def _close_btn_style():
@@ -187,60 +242,28 @@ class NewProductDialog(QDialog):
         "0805": ("2.00", "1.25", "1.25"),
         "1206": ("3.20", "1.60", "1.60"),
     }
-    # 2026-11-17 需求：四类产品的尺寸规格清单，每项 12 元素：
-    # (产品类型, 英制, 公制, L, W, T, L公差, W公差, T公差, BWmin, BWmax, L2)
-    # 电容 8 行公差/电极数据按用户提供的 MLCC 规格表逐行录入；
-    # 电阻/电感/晶振 用户暂未提供公差/电极数据，相应列留「—」占位。
-    PRODUCT_SIZE_TABLE = [
-        # 电容（MLCC）——公差与电极数据来自用户规格表
-        ("电容", "008004", "0201", "0.250", "0.125", "0.125", "±0.013", "±0.013", "±0.013", "0.05", "0.10", "0.05"),
-        ("电容", "01005", "0402", "0.40", "0.20", "0.20", "±0.02", "±0.02", "±0.02", "0.07", "0.14", "0.13"),
-        ("电容", "0201", "0603", "0.60", "0.30", "0.30", "±0.05", "±0.05", "±0.05", "0.10", "0.20", "0.20"),
-        ("电容", "0402", "1005", "1.00", "0.50", "0.50", "±0.05", "±0.05", "±0.10", "0.15", "0.35", "0.30"),
-        ("电容", "0603", "1608", "1.60", "0.80", "0.80", "±0.15", "±0.15", "±0.15", "0.20", "0.60", "0.40"),
-        ("电容", "0805", "2012", "2.00", "1.25", "1.25", "±0.20", "±0.20", "±0.20", "0.25", "0.75", "0.70"),
-        ("电容", "1206", "3216", "3.20", "1.60", "1.60", "±0.20", "±0.20", "±0.20", "0.25", "0.75", "1.40"),
-        ("电容", "1210", "3225", "3.20", "2.50", "2.20", "±0.20", "±0.20", "±0.20", "0.25", "0.75", "1.40"),
-        # 电阻（公差/电极暂无数据，占位 —）
-        ("电阻", "", "0201", "0.25", "0.13", "0.10", "—", "—", "—", "—", "—", "—"),
-        ("电阻", "", "0402", "0.40", "0.20", "0.13", "—", "—", "—", "—", "—", "—"),
-        ("电阻", "0201", "0603", "0.60", "0.30", "0.23", "—", "—", "—", "—", "—", "—"),
-        ("电阻", "0402", "1005", "1.00", "0.50", "0.35", "—", "—", "—", "—", "—", "—"),
-        ("电阻", "0603", "1608", "1.60", "0.80", "0.45", "—", "—", "—", "—", "—", "—"),
-        ("电阻", "0805", "2012", "2.00", "1.25", "0.55", "—", "—", "—", "—", "—", "—"),
-        ("电阻", "1206", "3216", "3.20", "1.60", "0.62", "—", "—", "—", "—", "—", "—"),
-        # 电感（公差/电极暂无数据，占位 —）
-        ("电感", "01005", "L0402", "0.40", "0.20", "0.20", "—", "—", "—", "—", "—", "—"),
-        ("电感", "0201", "L0603", "0.60", "0.30", "0.23", "—", "—", "—", "—", "—", "—"),
-        ("电感", "0402", "L1005", "1.00", "0.50", "0.30", "—", "—", "—", "—", "—", "—"),
-        ("电感", "0603", "L1608", "1.60", "0.80", "0.40", "—", "—", "—", "—", "—", "—"),
-        ("电感", "0805", "L2012", "2.00", "1.20", "0.50", "—", "—", "—", "—", "—", "—"),
-        ("电感", "1206", "L3216", "3.20", "1.60", "0.55", "—", "—", "—", "—", "—", "—"),
-        ("电感", "1210", "L3225", "3.20", "2.50", "0.55", "—", "—", "—", "—", "—", "—"),
-        ("电感", "1812", "L4832", "4.80", "3.20", "0.55", "—", "—", "—", "—", "—", "—"),
-        ("电感", "2010", "L5025", "5.00", "2.50", "0.55", "—", "—", "—", "—", "—", "—"),
-        ("电感", "2512", "L6432", "6.40", "3.20", "0.55", "—", "—", "—", "—", "—", "—"),
-        # 晶振（公差/电极暂无数据，占位 —）
-        ("晶振", "01005", "L0402", "0.40", "0.20", "0.20", "—", "—", "—", "—", "—", "—"),
-        ("晶振", "", "1210", "1.20", "1.00", "0.30", "—", "—", "—", "—", "—", "—"),
-        ("晶振", "", "1612", "1.60", "1.20", "0.35", "—", "—", "—", "—", "—", "—"),
-        ("晶振", "", "2016", "2.00", "1.60", "0.45", "—", "—", "—", "—", "—", "—"),
-        ("晶振", "", "2520", "2.50", "2.00", "0.45", "—", "—", "—", "—", "—", "—"),
-        ("晶振", "", "3225", "3.20", "2.50", "0.55", "—", "—", "—", "—", "—", "—"),
-    ]
     REFERENCE_TYPES = ("电容", "电阻", "电感", "晶振")
+    # 各分页表头：前两列统一为「产品规格（英制）/（公制）」
+    _SPEC_HEAD = ("产品类型", "产品规格（英制）", "产品规格（公制）")
     # 电容表头：L/W/T + 公差 + 电极 BWmin/BWmax/L2
-    REFERENCE_HEADERS = ("产品类型", "产品尺寸(英制 inch)", "产品尺寸(公制 mm)",
-                         "L 长度", "L长度公差", "W 宽度", "W宽度公差",
-                         "T 厚度", "T厚度公差",
-                         "最小电极宽度\nBWmin", "最大电极宽度\nBWmax", "最小电极间距\nL2")
+    CAPACITOR_HEADERS = _SPEC_HEAD + (
+        "L 长度", "L长度公差", "W 宽度", "W宽度公差",
+        "T 厚度", "T厚度公差",
+        "最小电极宽度\nBWmin", "最大电极宽度\nBWmax", "最小电极间距\nL2")
     # 电阻表头：L/W/T + 公差 + 顶面电极宽度A / 底面电极宽度B（无 L2）
-    RESISTOR_HEADERS = ("产品类型", "产品尺寸(英制 inch)", "产品尺寸(公制 mm)",
-                        "L 长度", "L长度公差", "W 宽度", "W宽度公差",
-                        "T 厚度", "T厚度公差",
-                        "顶面电极宽度\nA", "底面电极宽度\nB")
-    # 电感/晶振表头：沿用 L/W/T + 公差 + 电极占位（暂无详细数据）
-    SIMPLE_HEADERS = REFERENCE_HEADERS
+    RESISTOR_HEADERS = _SPEC_HEAD + (
+        "L 长度", "L长度公差", "W 宽度", "W宽度公差",
+        "T 厚度", "T厚度公差",
+        "顶面电极宽度\nA", "底面电极宽度\nB")
+    # 电感表头：L/W/T + 公差 + 电极宽度 D
+    INDUCTOR_HEADERS = _SPEC_HEAD + (
+        "L 长度", "L长度公差", "W 宽度", "W宽度公差",
+        "T 厚度", "T厚度公差", "电极宽度\nD")
+    # 晶振表头：沿用 L/W/T + 公差 + 电极占位（暂无详细数据）
+    CRYSTAL_HEADERS = CAPACITOR_HEADERS
+    # 向后兼容别名
+    REFERENCE_HEADERS = CAPACITOR_HEADERS
+    SIMPLE_HEADERS = CAPACITOR_HEADERS
     # 贴片电阻规格表（7 行）——按用户提供的 Chip-R 规格表逐行录入
     RESISTOR_SIZE_TABLE = [
         ("电阻", "01005", "0402", "0.40", "±0.02", "0.20", "±0.02", "0.13", "±0.02", "0.10±0.03", "0.10±0.03"),
@@ -251,20 +274,63 @@ class NewProductDialog(QDialog):
         ("电阻", "1206", "3216", "3.20", "±0.20", "1.60", "±0.15", "0.62", "±0.10", "0.45±0.20", "0.40±0.20"),
         ("电阻", "1210", "3225", "3.20", "±0.20", "2.55", "±0.20", "0.62", "±0.10", "0.45±0.20", "0.40±0.20"),
     ]
-    # 分页配置：(tab 名, 表头, 数据表, 说明文字, 示意图文件名)
+    # 贴片电感规格表（8 行）——按用户提供的 Chip Inductor 规格表逐行录入
+    INDUCTOR_SIZE_TABLE = [
+        ("电感", "01005", "0402", "0.40", "±0.02", "0.20", "±0.02", "0.20", "±0.02", "0.095±0.025"),
+        ("电感", "0201", "0603", "0.60", "±0.03", "0.30", "±0.03", "0.30", "±0.03", "0.15±0.05"),
+        ("电感", "0402", "1005", "1.00", "±0.15", "0.50", "±0.15", "0.50", "±0.15", "0.25±0.10"),
+        ("电感", "0603", "1608", "1.60", "±0.20", "0.80", "±0.20", "0.80", "±0.20", "0.30±0.20"),
+        ("电感", "0805", "2012", "2.00", "±0.20", "1.20", "±0.20", "0.90", "±0.20", "0.50±0.25"),
+        ("电感", "1206", "3216", "3.20", "±0.20", "1.60", "±0.20", "0.90", "±0.20", "0.50±0.25"),
+        ("电感", "1210", "3225", "3.20", "±0.20", "2.50", "±0.20", "1.30", "±0.20", "0.50±0.25"),
+        ("电感", "1812", "4832", "4.80", "±0.20", "3.20", "±0.20", "1.50", "±0.20", "0.50±0.30"),
+    ]
+    # 贴片电容规格表（8 行）——按用户提供的 MLCC 规格表逐行录入
+    CAPACITOR_SIZE_TABLE = [
+        ("电容", "008004", "0201", "0.250", "±0.013", "0.125", "±0.013", "0.125", "±0.013", "0.05", "0.10", "0.05"),
+        ("电容", "01005", "0402", "0.40", "±0.02", "0.20", "±0.02", "0.20", "±0.02", "0.07", "0.14", "0.13"),
+        ("电容", "0201", "0603", "0.60", "±0.05", "0.30", "±0.05", "0.30", "±0.05", "0.10", "0.20", "0.20"),
+        ("电容", "0402", "1005", "1.00", "±0.05", "0.50", "±0.05", "0.50", "±0.10", "0.15", "0.35", "0.30"),
+        ("电容", "0603", "1608", "1.60", "±0.15", "0.80", "±0.15", "0.80", "±0.15", "0.20", "0.60", "0.40"),
+        ("电容", "0805", "2012", "2.00", "±0.20", "1.25", "±0.20", "1.25", "±0.20", "0.25", "0.75", "0.70"),
+        ("电容", "1206", "3216", "3.20", "±0.20", "1.60", "±0.20", "1.60", "±0.20", "0.25", "0.75", "1.40"),
+        ("电容", "1210", "3225", "3.20", "±0.20", "2.50", "±0.20", "2.20", "±0.20", "0.25", "0.75", "1.40"),
+    ]
+    # 贴片晶振规格表（6 行）——公差/电极暂无数据，占位 —
+    CRYSTAL_SIZE_TABLE = [
+        ("晶振", "01005", "0402", "0.40", "—", "0.20", "—", "0.20", "—", "—", "—", "—"),
+        ("晶振", "", "1210", "1.20", "—", "1.00", "—", "0.30", "—", "—", "—", "—"),
+        ("晶振", "", "1612", "1.60", "—", "1.20", "—", "0.35", "—", "—", "—", "—"),
+        ("晶振", "", "2016", "2.00", "—", "1.60", "—", "0.45", "—", "—", "—", "—"),
+        ("晶振", "", "2520", "2.50", "—", "2.00", "—", "0.45", "—", "—", "—", "—"),
+        ("晶振", "", "3225", "3.20", "—", "2.50", "—", "0.55", "—", "—", "—", "—"),
+    ]
+    # 2026-11-17 需求：四类产品的尺寸规格清单聚合视图（由各分页规格表派生），
+    # 每项 12 元素 (产品类型, 英制, 公制, L, W, T, L公差, W公差, T公差, 电极1, 电极2, 电极3)，
+    # 供 lookup_nominal 二维查表使用（避免数据重复维护）。
+    PRODUCT_SIZE_TABLE = (
+        _aggregate_rows(CAPACITOR_SIZE_TABLE)
+        + _aggregate_rows(RESISTOR_SIZE_TABLE)
+        + _aggregate_rows(INDUCTOR_SIZE_TABLE)
+        + _aggregate_rows(CRYSTAL_SIZE_TABLE)
+    )
+    # 分页配置：(tab 名, 表头, 数据表, 说明文字, 示意图键)
     REFERENCE_PAGES = (
-        ("MLCC电容", REFERENCE_HEADERS, "电容",
+        ("MLCC电容", CAPACITOR_HEADERS, CAPACITOR_SIZE_TABLE,
          "电容本体尺寸与两端电极（BW）结构：L 长度、W 宽度、T 厚度；"
          "BWmin~BWmax 为电极覆盖宽度范围，L2 为两端电极间最小净距 (L2 = L − 左BW − 右BW)。",
-         "mlcc_electrode_diagram.png"),
-        ("贴片电阻", RESISTOR_HEADERS, "电阻",
+         "mlcc"),
+        ("贴片电阻", RESISTOR_HEADERS, RESISTOR_SIZE_TABLE,
          "贴片电阻三视图：L 长度、W 宽度、T 厚度；"
          "A 为顶面电极宽度、B 为底面电极宽度（详见 Top/Side/Bottom View）。",
-         "resistor_electrode_diagram.png"),
-        ("贴片电感", SIMPLE_HEADERS, "电感",
-         "贴片电感常见尺寸参考（公差/电极参数待后续补充）。", ""),
-        ("晶振", SIMPLE_HEADERS, "晶振",
-         "贴片晶振常见尺寸参考（公差/电极参数待后续补充）。", ""),
+         "resistor"),
+        ("贴片电感", INDUCTOR_HEADERS, INDUCTOR_SIZE_TABLE,
+         "贴片电感本体尺寸与电极结构：L 长度、W 宽度、T 厚度；"
+         "D 为两端电极（镀层端头）覆盖宽度。",
+         "inductor"),
+        ("晶振", CRYSTAL_HEADERS, CRYSTAL_SIZE_TABLE,
+         "贴片晶振常见尺寸参考（公差/电极参数待后续补充）。",
+         ""),
     )
     # 尺寸字段顺序：键后缀、中文标签
     DIMENSIONS = [
