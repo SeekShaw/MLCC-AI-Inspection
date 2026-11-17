@@ -41,10 +41,31 @@ class ProductSizeReferenceDialog(QDialog):
         root.setContentsMargins(14, 14, 14, 14)
         root.setSpacing(10)
 
+        head_row = QHBoxLayout()
+        head_row.setSpacing(10)
         tip = QLabel("下表为各产品类型常见规格的标称尺寸参考（单位：mm）。")
         tip.setFont(_yahei(10))
         tip.setStyleSheet(f"color: {COLORS['text_secondary']};")
-        root.addWidget(tip)
+        head_row.addWidget(tip)
+        head_row.addStretch()
+        # 2026-11-17 需求：表格右上角产品类型下拉筛选
+        filter_lbl = QLabel("产品类型：")
+        filter_lbl.setFont(_yahei(10))
+        filter_lbl.setStyleSheet(f"color: {COLORS['text_secondary']};")
+        head_row.addWidget(filter_lbl)
+        self._filter_combo = QComboBox()
+        self._filter_combo.setFont(_yahei(10))
+        self._filter_combo.setFixedSize(90, 26)
+        self._filter_combo.addItem("全部")
+        self._filter_combo.addItems(list(NewProductDialog.REFERENCE_TYPES))
+        self._filter_combo.setStyleSheet(
+            f"QComboBox {{ background-color: {COLORS['bg_card']}; "
+            f"color: {COLORS['text_primary']}; border: 1px solid {COLORS['border']}; "
+            f"border-radius: 4px; padding: 1px 6px; }}")
+        self._filter_combo.currentTextChanged.connect(
+            lambda v: self._populate_table(v))
+        head_row.addWidget(self._filter_combo)
+        root.addLayout(head_row)
 
         self.table = QTableWidget()
         self.table.setColumnCount(len(NewProductDialog.REFERENCE_HEADERS))
@@ -66,11 +87,7 @@ class ProductSizeReferenceDialog(QDialog):
             f"border: 1px solid {COLORS['border']}; padding: 4px; }}"
             f"QTableWidget::item {{ padding: 2px; }}")
 
-        for r, row in enumerate(NewProductDialog.PRODUCT_SIZE_TABLE):
-            for c, text in enumerate(row):
-                item = QTableWidgetItem(text if text else "—")
-                item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-                self.table.setItem(r, c, item)
+        self._populate_table("全部")
         root.addWidget(self.table, 1)
 
         close_row = QHBoxLayout()
@@ -82,6 +99,20 @@ class ProductSizeReferenceDialog(QDialog):
         close_btn.clicked.connect(self.close)
         close_row.addWidget(close_btn)
         root.addLayout(close_row)
+
+    def _populate_table(self, product_type):
+        """按产品类型筛选填充表格；公制列去掉首字母 L 后显示。"""
+        rows = [row for row in NewProductDialog.PRODUCT_SIZE_TABLE
+                if product_type in ("", "全部") or row[0] == product_type]
+        self.table.setRowCount(len(rows))
+        for r, row in enumerate(rows):
+            for c, text in enumerate(row):
+                shown = text
+                if c == 2 and text.startswith("L"):   # 公制列删除首字母 L 显示
+                    shown = text[1:]
+                item = QTableWidgetItem(shown if shown else "—")
+                item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                self.table.setItem(r, c, item)
 
     @staticmethod
     def _close_btn_style():

@@ -2641,13 +2641,13 @@ check(_ddlg2 is not None and _ddlg2.isVisible()
 from PyQt6.QtWidgets import QSpinBox as _QSpin2, QDoubleSpinBox as _QDSpin2
 from PyQt6.QtWidgets import QRadioButton as _QRBtn2, QLabel as _QLabel2
 _cats2 = {rb.text(): rb for rb in _ddlg2.findChildren(_QRBtn2)}
-check(sorted(_cats2) == ["A类缺陷", "B类缺陷", "C类缺陷"]
-      and _cats2["A类缺陷"].isChecked()
-      and not _cats2["B类缺陷"].isChecked(),
-      f"缺陷定义: 含 A/B/C 三类单选且默认选中 A 类 (实际 {sorted(_cats2)})")
+check(sorted(_cats2) == sorted(["缺陷不分档", "A档缺陷", "B档缺陷", "C档缺陷"])
+      and _cats2["A档缺陷"].isChecked()
+      and not _cats2["B档缺陷"].isChecked(),
+      f"缺陷定义: 含不分档+A/B/C 四档单选且默认选中 A 档 (实际 {sorted(_cats2)})")
 _descs2 = [lb.text() for lb in _ddlg2.findChildren(_QLabel2) if "判定说明" in lb.text()]
-check(any("A 类缺陷参数" in t and "输出为 1" in t for t in _descs2),
-      "缺陷定义: 窗口内含判定说明（默认 A 类参数判断、符合则为缺陷输出 1）")
+check(any("A 档缺陷参数" in t and "输出为 1" in t for t in _descs2),
+      "缺陷定义: 窗口内含判定说明（默认 A 档参数判断、符合则为缺陷输出 1）")
 _spins = _ddlg2.findChildren(_QSpin2)     # 缺陷个数 最小值/最大值
 _dspins = _ddlg2.findChildren(_QDSpin2)   # 6 个数值参数 最小值/最大值
 check(len(_spins) == 2 and len(_dspins) == 12,
@@ -2661,16 +2661,16 @@ check([round(s.value(), 2) for s in _dspins] ==
       f"(实际 {[round(s.value(), 2) for s in _dspins]} 个数 "
       f"{[_spins[0].value(), _spins[1].value()]})")
 # B 类默认：个数 1~2，其余数值范围与 A 类一致
-_cats2["B类缺陷"].setChecked(True); app.processEvents()
+_cats2["B档缺陷"].setChecked(True); app.processEvents()
 check(_spins[0].value() == 1 and _spins[1].value() == 2
       and [round(s.value(), 2) for s in _dspins] ==
       [0.0, 20.0, 0.0, 20.0, 0.0, 20.0, 0.0, 20.0, 0.0, 9.0, 0.0, 9.0],
-      f"缺陷定义: B 类默认个数 1~2、其余范围与 A 类一致 "
+      f"缺陷定义: B 档默认个数 1~2、其余范围与 A 档一致 "
       f"(实际 个数={[ _spins[0].value(), _spins[1].value()]})")
-# 修改 B 类（总面积上限 30、个数 2~3）并切回 A 类触发暂存；A 类个数最小>最大验证对调
-_dspins[11].setValue(30.0)            # B 类缺陷总面积 最大 → 30
-_spins[0].setValue(2); _spins[1].setValue(3)   # B 类个数 → 2~3
-_cats2["A类缺陷"].setChecked(True); app.processEvents()
+# 修改 B 档（总面积上限 30、个数 2~3）并切回 A 档触发暂存；A 档个数最小>最大验证对调
+_dspins[11].setValue(30.0)            # B 档缺陷总面积 最大 → 30
+_spins[0].setValue(2); _spins[1].setValue(3)   # B 档个数 → 2~3
+_cats2["A档缺陷"].setChecked(True); app.processEvents()
 _spins[0].setValue(5); _spins[1].setValue(1)   # A 类个数 5~1 → 暂存自动对调 1~5
 _okb = [b for b in _ddlg2.findChildren(_QPushButton) if b.text() == "确定"][0]
 _okb.click(); app.processEvents()
@@ -2679,8 +2679,10 @@ check(_rec1.get("A", {}).get("count") == {"min": 1.0, "max": 5.0}
       and _rec1.get("A", {}).get("len_max") == {"min": 0.0, "max": 20.0}
       and _rec1.get("B", {}).get("count") == {"min": 2.0, "max": 3.0}
       and _rec1.get("B", {}).get("area_total") == {"min": 0.0, "max": 30.0}
-      and _rec1.get("C", {}).get("count") == {"min": 1.0, "max": 2.0},
-      f"缺陷定义: 确定后按类别写回范围参数（实际 {_rec1})")
+      and _rec1.get("C", {}).get("count") == {"min": 1.0, "max": 2.0}
+      and _rec1.get("N", {}).get("count") == {"min": 1, "max": 1}
+      and _rec1.get("output_size") is False,
+      f"缺陷定义: 确定后按档位写回范围参数(含不分档N档/默认不输出尺寸)（实际 {_rec1})")
 check(getattr(dv, "_defect_dlg") is not None
       and not dv._defect_dlg.isVisible(),
       "缺陷定义: 确定后窗口关闭，再次打开回显上次值")
@@ -2690,12 +2692,27 @@ check(_spins2b[0].value() == 1 and _spins2b[1].value() == 5,
       f"缺陷定义: 再次打开落在最后确认类别并回显范围 "
       f"(实际 个数={[ _spins2b[0].value(), _spins2b[1].value()]})")
 # B 类参数已按类别应用：切到 B 类，缺陷总面积最大值应为 30
-_rb_b2 = [rb for rb in dv._defect_dlg.findChildren(_QRBtn2) if rb.text() == "B类缺陷"][0]
+_rb_b2 = [rb for rb in dv._defect_dlg.findChildren(_QRBtn2) if rb.text() == "B档缺陷"][0]
 _rb_b2.setChecked(True); app.processEvents()
 _dspins2b = dv._defect_dlg.findChildren(_QDSpin2)
 check(_dspins2b[10].value() == 0.0 and _dspins2b[11].value() == 30.0,
-      f"缺陷定义: B 类范围参数已应用并回显 (实际 缺陷总面积="
+      f"缺陷定义: B 档范围参数已应用并回显 (实际 缺陷总面积="
       f"{[_dspins2b[10].value(), _dspins2b[11].value()]})")
+# 2026-11-17：缺陷不分档 + 输出缺陷尺寸开关（默认不输出，仅不分档可选）
+from PyQt6.QtWidgets import QCheckBox as _QChk2
+_chk_out = [c for c in dv._defect_dlg.findChildren(_QChk2) if c.text() == "输出缺陷尺寸"]
+check(len(_chk_out) == 1 and not _chk_out[0].isChecked() and not _chk_out[0].isEnabled(),
+      "缺陷定义: 含「输出缺陷尺寸」开关，B档下默认不勾选且禁用")
+_rb_n = [rb for rb in dv._defect_dlg.findChildren(_QRBtn2) if rb.text() == "缺陷不分档"][0]
+_rb_n.setChecked(True); app.processEvents()
+check(_chk_out[0].isEnabled() and not _chk_out[0].isChecked(),
+      "缺陷定义: 切到「缺陷不分档」后输出缺陷尺寸开关可用、默认不勾选")
+_chk_out[0].setChecked(True)
+_okb2 = [b for b in dv._defect_dlg.findChildren(_QPushButton) if b.text() == "确定"][0]
+_okb2.click(); app.processEvents()
+_rec1n = dv._defect_defs.get(_r1, {})
+check(_rec1n.get("cur") == "N" and _rec1n.get("output_size") is True,
+      f"缺陷定义: 不分档勾选输出尺寸后写回 cur=N/output_size=True (实际 {_rec1n.get('cur')},{_rec1n.get('output_size')})")
 dv._defect_dlg.close()
 dv._defect_defs.pop(_r1, None)
 
@@ -3038,6 +3055,51 @@ _btn_bottom = _npd5.action_btn.mapToGlobal(_npd5.action_btn.rect().bottomRight()
 check(_btn_bottom <= _win_bottom,
       f"新建产品: 底部按钮完整落在窗口内 (btn={_btn_bottom}, win={_win_bottom})")
 _npd5.deleteLater()
+
+# ============ 2026-11-17：参考窗口公制去 L + 产品类型筛选 + 产品尺寸→检测项联动 ============
+# 需求3：公制列去掉首字母 L；右上角产品类型下拉筛选
+_ref3 = _PSRD(None)
+_metric_vals = [_ref3.table.item(r, 2).text() for r in range(_ref3.table.rowCount())]
+check(all(not v.startswith("L") for v in _metric_vals),
+      f"尺寸参考: 公制列已去除首字母 L (实际含L={[v for v in _metric_vals if v.startswith('L')][:3]})")
+check(hasattr(_ref3, "_filter_combo")
+      and _ref3._filter_combo.itemText(0) == "全部"
+      and all(t in [_ref3._filter_combo.itemText(i)
+                    for i in range(_ref3._filter_combo.count())]
+              for t in ("电容", "电阻", "电感", "晶振")),
+      "尺寸参考: 右上角含产品类型下拉筛选(全部/电容/电阻/电感/晶振)")
+_ref3._filter_combo.setCurrentText("电感")
+check(_ref3.table.rowCount() == 10
+      and all(_ref3.table.item(r, 0).text() == "电感"
+              for r in range(_ref3.table.rowCount())),
+      f"尺寸参考: 筛选电感后仅显示电感 10 行 (实际 {_ref3.table.rowCount()})")
+_ref3._filter_combo.setCurrentText("晶振")
+check(_ref3.table.rowCount() == 6,
+      f"尺寸参考: 筛选晶振后仅显示晶振 6 行 (实际 {_ref3.table.rowCount()})")
+_ref3.deleteLater()
+# 需求1：产品尺寸 → 检测项 106/107/108 标称/规格上下限联动
+check(DebugView.PRODUCT_DIM_DETECT == {"length": "106", "width": "107", "thickness": "108"},
+      "尺寸联动: 长/宽/厚映射到检测项 106/107/108")
+_dvl = DebugView(camera_name="下表面", main_window=None)
+_prod_dims = {
+    "product_length": "1.00", "product_length_spec_lower": "0.95", "product_length_spec_upper": "1.05",
+    "product_width": "0.50", "product_width_spec_lower": "0.45", "product_width_spec_upper": "0.55",
+    "product_thickness": "0.30", "product_thickness_spec_lower": "0.25", "product_thickness_spec_upper": "0.35",
+}
+_n = _dvl.apply_product_dimensions(_prod_dims)
+check(_n == 3, f"尺寸联动: apply_product_dimensions 写入 3 项 (实际 {_n})")
+_by_code = {str(row[1]): row for row in _dvl._table_data}
+check(_by_code["106"][3] == "1.00" and _by_code["106"][6] == "0.95" and _by_code["106"][7] == "1.05"
+      and _by_code["107"][3] == "0.50" and _by_code["107"][6] == "0.45" and _by_code["107"][7] == "0.55"
+      and _by_code["108"][3] == "0.30" and _by_code["108"][6] == "0.25" and _by_code["108"][7] == "0.35",
+      f"尺寸联动: 106/107/108 标称与规格上下限按配方写入 "
+      f"(实际 {[_by_code[c][3:8] for c in ('106','107','108')]})")
+_dvl.deleteLater()
+# app.py 的 _switch_product 已接入联动
+_src_app_sw = open("C:/Users/Lenovo/WorkBuddy/Teruo/src/app.py", encoding="utf-8").read()
+check("apply_product_dimensions(product)" in _src_app_sw
+      and "apply_product_dimensions(self.current_product)" in _src_app_sw,
+      "尺寸联动: 产品切换与初始化均调用 apply_product_dimensions")
 
 # ============ 2026-11-12 修复：产品管理编辑/新增内容需持久化（退出再打开保留） ============
 import product_manager_dialog as _pmd

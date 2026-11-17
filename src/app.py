@@ -666,6 +666,12 @@ class MainWindow(QMainWindow):
             dv = DebugView(camera_name=name, main_window=self)
             self.debug_views.append(dv)
             self.stack.addWidget(dv)
+        # 2026-11-17：初始化后把当前产品尺寸联动到各工位检测项 106/107/108
+        for dv in self.debug_views:
+            try:
+                dv.apply_product_dimensions(self.current_product)
+            except Exception:
+                pass
         # 占位页面
         self._placeholders = []
         for _ in range(3):
@@ -1919,6 +1925,12 @@ class MainWindow(QMainWindow):
         prod_view = getattr(self, "production", None)
         if prod_view is not None:
             prod_view._report_product = product   # 同步「生产报表」筛选数据示例值
+        # 2026-11-17 需求：产品长/宽/厚标称与规格上下限 → 检测项 106/107/108 联动
+        for dv in getattr(self, "debug_views", []) or []:
+            try:
+                dv.apply_product_dimensions(product)
+            except Exception:
+                pass
         self._align_header_buttons()
 
     @staticmethod
