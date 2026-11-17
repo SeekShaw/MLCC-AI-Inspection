@@ -96,13 +96,18 @@ class _AutoWidthTable(QTableWidget):
 class ProductSizeReferenceDialog(QDialog):
     """产品尺寸参考：按产品类型分页的规格清单（非模态、不置顶、不遮挡）。"""
 
+    # 2026-11-17：分页高度自适应参数
+    _ROW_H = 22      # 表格行高（固定，保证各页表格高度可精确计算）
+    _DIAG_H = 210    # 示意图区高度
+    _NOTE_W = 380    # 说明文字估算宽度（用于计算自动换行后的高度）
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("产品尺寸参考")
         self.setModal(False)
         self.setWindowFlags(self.windowFlags() & ~Qt.WindowType.WindowStaysOnTopHint)
         self.setStyleSheet(f"QDialog {{ background-color: {COLORS['bg_dark']}; }}")
-        self.setFixedSize(1180, 800)
+        self.setFixedWidth(1180)   # 2026-11-17：宽度固定；高度按四页内容自适应
 
         root = QVBoxLayout(self)
         root.setContentsMargins(14, 14, 14, 14)
@@ -125,10 +130,13 @@ class ProductSizeReferenceDialog(QDialog):
             f"QTabBar::tab:selected {{ background-color: {COLORS['bg_card']}; "
             f"color: {COLORS['accent_orange']}; font-weight: bold; }}")
         self._tables = {}
+        self._page_boxes = []
         for tab_name, headers, data_table, note_text, img_kind in NewProductDialog.REFERENCE_PAGES:
-            page, table = self._build_page(headers, data_table, note_text, img_kind)
+            page, table, box, note, table_h, has_diagram = self._build_page(
+                headers, data_table, note_text, img_kind)
             self.tabs.addTab(page, tab_name)
             self._tables[tab_name] = table
+            self._page_boxes.append((page, box, note, table_h, has_diagram))
         root.addWidget(self.tabs, 1)
 
         close_row = QHBoxLayout()
@@ -141,8 +149,16 @@ class ProductSizeReferenceDialog(QDialog):
         close_row.addWidget(close_btn)
         root.addLayout(close_row)
 
+        # 2026-11-17：窗口高度按四页内容自适应（取最高页），消除页内大片留白
+        self._fit_height(tip)
+
     def _build_page(self, headers, data_table, note_text, img_kind):
-        """构建单个分页：上部表格 + 下部电极结构图示说明。返回 (承载 QWidget, 表格)。"""
+        """构建单个分页：上部表格 + 下部电极结构图示说明。
+
+        2026-11-17：表格高度按内容固定（表头高 + 行高 × 行数），分页不再纵向拉伸，
+        消除表格与图示之间的大片留白。
+        返回 (承载 QWidget, 表格, 说明框, 表格高度, 是否有示意图)。
+        """
         page = QFrame()
         page.setStyleSheet(f"QFrame {{ background-color: {COLORS['bg_card']}; }}")
         v = QVBoxLayout(page)
@@ -189,7 +205,19 @@ class ProductSizeReferenceDialog(QDialog):
                     w = max(w, fm.horizontalAdvance(it.text()) + 30)
             natural.append(max(w, 56))
         table.set_natural_widths(natural)
-        v.addWidget(table, 1)
+        # 行高固定 + 表头高度按表头行数计算：保证表格高度可精确计算（不再随窗口拉伸）
+        for r in range(table.rowCount()):
+            table.setRowHeight(r, self._ROW_H)
+        lines = 1
+        for c in range(table.columnCount()):
+            it = table.horizontalHeaderItem(c)
+            if it is not None:
+                lines = max(lines, len(it.text().split("\n")))
+        header_h = table.fontMetrics().height() * lines + 22
+        table.horizontalHeader().setFixedHeight(header_h)
+        table_h = header_h + self._ROW_H * table.rowCount() + 2 * table.frameWidth()
+        table.setFixedHeight(table_h)
+        v.addWidget(table, 0)
 
         # 图示说明区（矢量绘制：线条分明、文字清晰）
         diag_box = QFrame()
@@ -202,16 +230,45 @@ class ProductSizeReferenceDialog(QDialog):
         if img_kind:
             diagram = ElectrodeDiagram(img_kind)
             diagram.setObjectName("diagram_image")
-            diagram.setMinimumHeight(200)
+            diagram.setFixedHeight(self._DIAG_H)
             diag_layout.addWidget(diagram, 3)
         note = QLabel("尺寸 / 电极参数说明（单位：mm）\n\n" + note_text)
         note.setFont(_yahei(11))
         note.setWordWrap(True)
         note.setAlignment(Qt.AlignmentFlag.AlignTop)
         note.setStyleSheet(f"color: {COLORS['text_primary']};")
+        # 说明文字高度按估算宽度预先计算，避免换行后被裁切
+        note_h = note.heightForWidth(self._NOTE_W)
         diag_layout.addWidget(note, 2)
-        v.addWidget(diag_box)
-        return page, table
+        diag_box.setFixedHeight((max(self._DIAG_H, note_h) if img_kind else note_h) + 16)
+        # 说明文字铺满说明框高度并顶部对齐，避免在框内上下居中漂浮
+        note.setFixedHeight(diag_box.height() - 16)
+        v.addWidget(diag_box, 0)
+        # 底部弹性空白：保证表格与说明框保持既定间距，不被布局均分拉伸
+        v.addStretch(1)
+        return page, table, diag_box, note, table_h, bool(img_kind)
+
+    def _fit_height(self, tip):
+        """窗口高度自适应：取四个分页内容高度的最大值，页面按内容紧凑排布。"""
+        def page_height(table_h, box, has_diagram):
+            h = table_h + 16          # 分页上下边距
+            if box is not None:
+                h += 8 + box.height()   # 分页间距 + 说明框
+            return h
+
+        max_page_h = max(page_height(t, b, d) for _p, b, _n, t, d in self._page_boxes)
+        # 无示意图的分页（晶振）：说明框补足到页高，避免页尾出现大片空白
+        for _page, box, note, table_h, has_diagram in self._page_boxes:
+            if box is not None and not has_diagram:
+                need = max_page_h - table_h - 8 - 16
+                if need > box.height():
+                    box.setFixedHeight(need)
+                    note.setFixedHeight(need - 16)
+        bar = self.tabs.tabBar()
+        bar.adjustSize()
+        tabs_h = max_page_h + bar.height() + 4
+        total = 14 + 14 + tip.sizeHint().height() + 10 + tabs_h + 10 + 28
+        self.setFixedHeight(total)
 
     @staticmethod
     def _close_btn_style():
@@ -296,14 +353,15 @@ class NewProductDialog(QDialog):
         ("电容", "1206", "3216", "3.20", "±0.20", "1.60", "±0.20", "1.60", "±0.20", "0.25", "0.75", "1.40"),
         ("电容", "1210", "3225", "3.20", "±0.20", "2.50", "±0.20", "2.20", "±0.20", "0.25", "0.75", "1.40"),
     ]
-    # 贴片晶振规格表（6 行）——公差/电极暂无数据，占位 —
+    # 贴片晶振规格表（7 行）——按用户提供的晶振规格表逐行录入（英制列暂缺，电极参数占位 —）
     CRYSTAL_SIZE_TABLE = [
-        ("晶振", "01005", "0402", "0.40", "—", "0.20", "—", "0.20", "—", "—", "—", "—"),
-        ("晶振", "", "1210", "1.20", "—", "1.00", "—", "0.30", "—", "—", "—", "—"),
-        ("晶振", "", "1612", "1.60", "—", "1.20", "—", "0.35", "—", "—", "—", "—"),
-        ("晶振", "", "2016", "2.00", "—", "1.60", "—", "0.45", "—", "—", "—", "—"),
-        ("晶振", "", "2520", "2.50", "—", "2.00", "—", "0.45", "—", "—", "—", "—"),
-        ("晶振", "", "3225", "3.20", "—", "2.50", "—", "0.55", "—", "—", "—", "—"),
+        ("晶振", "", "1210", "1.20", "±0.03", "1.00", "±0.03", "0.30", "±0.05", "—", "—", "—"),
+        ("晶振", "", "1612", "1.60", "±0.10", "1.20", "±0.10", "0.35", "±0.05", "—", "—", "—"),
+        ("晶振", "", "2016", "2.00", "±0.10", "1.60", "±0.10", "0.50", "±0.05", "—", "—", "—"),
+        ("晶振", "", "2520", "2.50", "±0.10", "2.00", "±0.10", "0.55", "±0.05", "—", "—", "—"),
+        ("晶振", "", "3225", "3.20", "±0.10", "2.50", "±0.10", "0.70", "±0.10", "—", "—", "—"),
+        ("晶振", "", "5032", "5.00", "±0.20", "3.20", "±0.20", "1.20", "±0.15", "—", "—", "—"),
+        ("晶振", "", "7050", "7.00", "±0.20", "5.00", "±0.20", "1.40", "±0.15", "—", "—", "—"),
     ]
     # 2026-11-17 需求：四类产品的尺寸规格清单聚合视图（由各分页规格表派生），
     # 每项 12 元素 (产品类型, 英制, 公制, L, W, T, L公差, W公差, T公差, 电极1, 电极2, 电极3)，
@@ -329,7 +387,8 @@ class NewProductDialog(QDialog):
          "D 为两端电极（镀层端头）覆盖宽度。",
          "inductor"),
         ("晶振", CRYSTAL_HEADERS, CRYSTAL_SIZE_TABLE,
-         "贴片晶振常见尺寸参考（公差/电极参数待后续补充）。",
+         "贴片晶振常见尺寸参考：L 长度、W 宽度、T 厚度及对应公差"
+         "（英制规格与电极参数待后续补充）。",
          ""),
     )
     # 尺寸字段顺序：键后缀、中文标签

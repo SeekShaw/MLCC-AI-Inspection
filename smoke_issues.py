@@ -2993,10 +2993,10 @@ check(_pmd_dlg3.products[-1].get("product_length_lower_tol") == "-0.08"
 _pmd_dlg3.deleteLater()
 
 # ============ 2026-11-17：产品尺寸分类表 + 参考窗口 + 窗口高度自适应 ============
-check(len(_NPD.PRODUCT_SIZE_TABLE) == 29
+check(len(_NPD.PRODUCT_SIZE_TABLE) == 30
       and set(_NPD.REFERENCE_TYPES) == {"电容", "电阻", "电感", "晶振"}
       and all(len(row) == 12 for row in _NPD.PRODUCT_SIZE_TABLE),
-      f"尺寸参考表: 四类共 29 条规格、每行 12 元素 (实际 {len(_NPD.PRODUCT_SIZE_TABLE)})")
+      f"尺寸参考表: 四类共 30 条规格、每行 12 元素 (实际 {len(_NPD.PRODUCT_SIZE_TABLE)})")
 check(len(_NPD.REFERENCE_HEADERS) == 12
       and _NPD.REFERENCE_HEADERS[0] == "产品类型"
       and _NPD.REFERENCE_HEADERS[1] == "产品规格（英制）"
@@ -3031,7 +3031,8 @@ _ref_expected = {
     ("电感", "0805"): ("2.00", "1.20", "0.90"),
     ("电感", "1812"): ("4.80", "3.20", "1.50"),
     ("晶振", "1612"): ("1.60", "1.20", "0.35"),
-    ("晶振", "3225"): ("3.20", "2.50", "0.55"),
+    ("晶振", "3225"): ("3.20", "2.50", "0.70"),
+    ("晶振", "7050"): ("7.00", "5.00", "1.40"),
 }
 check(all(_NPD.lookup_nominal(t, s) == exp
           for (t, s), exp in _ref_expected.items()),
@@ -3073,8 +3074,8 @@ check(_ref.tabs.count() == 4
 check(_ref._tables["MLCC电容"].rowCount() == 8 and _ref._tables["MLCC电容"].columnCount() == 12
       and _ref._tables["贴片电阻"].rowCount() == 7 and _ref._tables["贴片电阻"].columnCount() == 11
       and _ref._tables["贴片电感"].rowCount() == 8 and _ref._tables["贴片电感"].columnCount() == 10
-      and _ref._tables["晶振"].rowCount() == 6,
-      "产品尺寸参考: 电容8行×12列/电阻7行×11列/电感8行×10列/晶振6行")
+      and _ref._tables["晶振"].rowCount() == 7,
+      "产品尺寸参考: 电容8行×12列/电阻7行×11列/电感8行×10列/晶振7行")
 _ref.deleteLater()
 # 窗口高度自适应（远小于旧的 820，且底部按钮完整可见）
 check(_npd5.height() <= 620 and _npd5.height() >= 500,
@@ -3130,9 +3131,32 @@ check([_ind.item(7, c).text() for c in range(10)]
 _ind_metric = [_ind.item(r, 2).text() for r in range(_ind.rowCount())]
 check(_ind_metric == ["0402", "0603", "1005", "1608", "2012", "3216", "3225", "4832"],
       f"尺寸参考: 电感页公制列无 L 前缀 (实际 {_ind_metric})")
-# 晶振页沿用原表
-check(_ref3._tables["晶振"].rowCount() == 6,
-      "尺寸参考: 晶振 6 行沿用原表")
+# 晶振页：按用户提供的晶振规格表更新（7 行：1210~7050，含 L/W/T 三项公差）
+_cry = _ref3._tables["晶振"]
+check(_cry.rowCount() == 7 and _cry.columnCount() == 12,
+      "尺寸参考: 晶振页 7 行×12 列")
+_cry_metric = [_cry.item(r, 2).text() for r in range(_cry.rowCount())]
+check(_cry_metric == ["1210", "1612", "2016", "2520", "3225", "5032", "7050"],
+      f"尺寸参考: 晶振页公制列为 1210~7050 (实际 {_cry_metric})")
+_cry_imperial = [_cry.item(r, 1).text() for r in range(_cry.rowCount())]
+check(all(v == "—" for v in _cry_imperial),
+      f"尺寸参考: 晶振页英制列暂无数据，统一显示占位符 (实际 {_cry_imperial})")
+check([_cry.item(0, c).text() for c in range(3, 12)]
+      == ["1.20", "±0.03", "1.00", "±0.03", "0.30", "±0.05", "—", "—", "—"],
+      f"尺寸参考: 晶振1210 行 L/W/T 及公差正确 "
+      f"(实际 {[_cry.item(0, c).text() for c in range(3, 12)]})")
+check([_cry.item(4, c).text() for c in range(3, 9)]
+      == ["3.20", "±0.10", "2.50", "±0.10", "0.70", "±0.10"],
+      f"尺寸参考: 晶振3225 行 T=0.70、公差 ±0.10 "
+      f"(实际 {[_cry.item(4, c).text() for c in range(3, 9)]})")
+check([_cry.item(6, c).text() for c in range(3, 9)]
+      == ["7.00", "±0.20", "5.00", "±0.20", "1.40", "±0.15"],
+      f"尺寸参考: 晶振7050 末行 L/W/T 及公差正确 "
+      f"(实际 {[_cry.item(6, c).text() for c in range(3, 9)]})")
+check(_NPD.lookup_nominal("晶振", "3225") == ("3.20", "2.50", "0.70")
+      and _NPD.lookup_nominal("晶振", "7050") == ("7.00", "5.00", "1.40"),
+      f"尺寸参考: 晶振按公制规格查表命中 "
+      f"(3225={_NPD.lookup_nominal('晶振', '3225')}, 7050={_NPD.lookup_nominal('晶振', '7050')})")
 # 四个分页表头前三列统一为「产品类型/产品规格（英制）/（公制）」
 _head_ok = []
 for _tn in ("MLCC电容", "贴片电阻", "贴片电感", "晶振"):
@@ -3174,6 +3198,45 @@ check(any("BWmin" in lb.text() and "L2" in lb.text()
       and any("顶面电极宽度" in lb.text() and "底面电极宽度" in lb.text()
               for lb in _ref3.findChildren(_QLabel2)),
       "尺寸参考: 含电容 BW/L2 与电阻 A/B 电极文字说明")
+# 2026-11-17 需求2：各分页按内容高度自适应（表格不再纵向拉伸），窗口取四页最高者
+_names4 = ("MLCC电容", "贴片电阻", "贴片电感", "晶振")
+_h_report = {}
+for _i, _tn in enumerate(_names4):
+    _t = _ref3._tables[_tn]
+    _expect_h = _t.horizontalHeader().height() + 22 * _t.rowCount() + 2 * _t.frameWidth()
+    _h_report[_tn] = (_t.height(), _expect_h)
+check(all(abs(a - b) <= 2 for a, b in _h_report.values()),
+      f"尺寸参考: 各分页表格高度=表头高+行高×行数（内容自适应，不再拉伸） (实际 {_h_report})")
+# 表格与说明框紧邻：页内无中部大片留白
+_gap_report = {}
+for _i, _tn in enumerate(_names4):
+    _pg = _ref3.tabs.widget(_i)
+    _box = _pg.layout().itemAt(1).widget()
+    _t = _ref3._tables[_tn]
+    _gap_report[_tn] = _box.y() - (_t.y() + _t.height())
+check(all(g <= 12 for g in _gap_report.values()),
+      f"尺寸参考: 表格与图示说明框紧邻排列，页内无大片留白 (实际间距 {_gap_report})")
+# 窗口高度取四页内容高度的最大值（明显小于旧的固定 800）
+_bar = _ref3.tabs.tabBar()
+_max_page = max(_ref3._tables[n].horizontalHeader().height()
+                 + 22 * _ref3._tables[n].rowCount()
+                 + 2 * _ref3._tables[n].frameWidth() + 8
+                 + _ref3.tabs.widget(i).layout().itemAt(1).widget().height() + 16
+                 for i, n in enumerate(_names4))
+check(_ref3.height() < 800 and _ref3.height() >= 520
+      and abs(_ref3.tabs.height() - _bar.height() - _max_page) <= 12,
+      f"尺寸参考: 窗口高度按四页最高者自适应 (窗口高 {_ref3.height()}, 页内容高 {_max_page})")
+# 2026-11-17 需求3：MLCC 示意图按新图重绘（圆角立体盒 + 底部 BW/L2/L + 左侧 T + 右下 W）
+_src_diagrams = open("C:/Users/Lenovo/WorkBuddy/Teruo/src/size_diagrams.py",
+                      encoding="utf-8").read()
+check("_draw_rounded_box" in _src_diagrams
+      and "addRoundedRect" in _src_diagrams
+      and all(f'"{s}"' in _src_diagrams for s in ("BW", "L2", "T", "W")),
+      "尺寸参考: MLCC 示意图改为圆角立体盒，标注体系含 T/W/BW/L2/L")
+_mlcc_diag = [d for d in _diags if d.kind == "mlcc"]
+check(len(_mlcc_diag) == 1 and _mlcc_diag[0].height() == 210,
+      f"尺寸参考: MLCC 示意图高度固定为 210px (实际 "
+      f"{[d.height() for d in _mlcc_diag]})")
 _ref3.close()
 _ref3.deleteLater()
 # 需求1：产品尺寸 → 检测项 106/107/108 标称/规格上下限联动
