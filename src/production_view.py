@@ -45,6 +45,7 @@ from alarm_config import (
     feature_door_alarm_plan, sq_plan,
     feature_ion_fan_alarm, ion_fan_plan,
     feature_glass_rotation_alarm, glass_rotation_plan, glass_rotation_count,
+    glass_clean_count_mode, glass_clean_days,
 )
 
 # 设备状态实时行的显示名（报警 / 恢复日志用，避免「旋转盘」与「转盘速度」混用）
@@ -3427,11 +3428,14 @@ class ProductionView(_ReportExportMixin, QWidget):
         self._estop_due_ts = None           # 本次运行随机安排的「急停被按下」时刻（5~60 分钟后）
         self._ion_fan_abnormal = False      # 离子风扇异常报警态（默认开启，运行中低概率出现）
         self._pending_routed = set()        # 已按「抽盒超时剔除逻辑」改判为待定的料盒（日志去重）
-        # 玻璃使用转数累计：生产运行时按 DD 马达转速 × 真实流逝时间累计旋转圈数，
-        # 达到「玻璃使用转数报警」设定阈值即按所选报警方案记红色报警（不触发停机）。
-        # 每次启动生产从 0 累计（见 _on_start），达阈值只记一次（_glass_rota_alarmed 守卫）。
+        # 玻璃盘清洁计数累计：按「计数方式」（圈数 / 天数）统计——
+        # 圈数模式按 DD 马达转速 × 真实流逝时间累计，每次启动生产从 0 累计；
+        # 天数模式按距上次「次数清零」的天数统计（跨运行段累计）。
+        # 达到「玻璃盘清洁计数报警」阈值即按所选方案记红色报警（不触发停机），
+        # 达阈值只记一次（_glass_rota_alarmed 守卫）。
         self._glass_rotations = 0.0
         self._glass_rota_alarmed = False
+        self._glass_clean_last_ts = time.time()   # 天数模式：上次清洁计数清零时刻
         self._last_rot_ts = None            # 上次累计旋转圈数的真实时刻（time.monotonic()）
         self._products_per_tick = 20      # 每个播放节拍模拟经过的产品数
         # 时间基实时累计状态（播放态）：保证一分钟内「总数」差值 ≈ 显示的平均速度。
@@ -4204,7 +4208,7 @@ class ProductionView(_ReportExportMixin, QWidget):
                 thr = valve_life_threshold(key)
                 pct = min(100.0, used / thr * 100) if thr else 0.0
             elif name == "玻璃盘使用转数":
-                # 百分比 = 已转圈数 /「玻璃使用转数报警」设定的圈数阈值
+                # 百分比 = 已转圈数 /「玻璃盘清洁计数报警」设定的圈数阈值
                 used = getattr(self, "_glass_rotations", 0.0)
                 thr = glass_rotation_count()
                 pct = min(100.0, used / thr * 100) if thr else 0.0
@@ -5376,8 +5380,8 @@ class ProductionView(_ReportExportMixin, QWidget):
                 cb()
 
     # ------------------------------------------------------------------
-    # 玻璃使用转数报警：生产运行时累计 DD 马达（玻璃盘）旋转圈数，达到设定
-    # 阈值即按所选报警方案记红色报警（不触发停机）。累计值每次启动生产从 0 重新累计。
+    # 玻璃盘清洁计数报警（圈数模式）：生产运行时累计 DD 马达（玻璃盘）旋转圈数，
+    # 达到设定阈值即按所选报警方案记红色报警（不触发停机）。累计值每次启动生产从 0 重新累计。
     # ------------------------------------------------------------------
     def _accumulate_rotation(self):
         """按真实流逝时间 × 当前 DD 马达转速累计玻璃盘旋转圈数（仅生产运行时）。"""
@@ -5399,7 +5403,7 @@ class ProductionView(_ReportExportMixin, QWidget):
     def _refresh_glass_rotation_row(self):
         """把玻璃盘累计旋转圈数刷新到设备状态「玻璃盘使用转数」行。
 
-        百分比 = 已转圈数 /「玻璃使用转数报警」设定的圈数阈值；
+        百分比 = 已转圈数 /「玻璃盘清洁计数报警」设定的圈数阈值；
         数值框 = 已转圈数（随生产运行实时累计），单位固定为「圈」。
         """
         rec = getattr(self, "_status_recs", {}).get("玻璃盘使用转数")
@@ -5427,21 +5431,39 @@ class ProductionView(_ReportExportMixin, QWidget):
         rec["val_box"].setText(f"{fly:.0f}")
 
     def _check_glass_rotation_alarm(self):
-        """玻璃使用转数报警：累计旋转圈数达阈值即按所选方案记一次红色报警（不触发停机）。"""
+        """玻璃盘清洁计数报警：按计数方式（圈数 / 天数）判断，达阈值记一次红色报警（不停机）。
+
+        - 圈数模式：累计旋转圈数 ≥ 圈数阈值；
+        - 天数模式：距上次「次数清零」的天数 ≥ 天数阈值（跨运行段累计）。
+        """
         if not getattr(self, "_playing", False):
             return
         if not feature_glass_rotation_alarm():
             return
+        if getattr(self, "_glass_rota_alarmed", False):
+            return
+        plan = state_plan_by_alias(glass_rotation_plan())
+        plan_name = plan.get("alias", glass_rotation_plan()) if plan else glass_rotation_plan()
+        if glass_clean_count_mode() == "天数":
+            thr = glass_clean_days()
+            last_ts = getattr(self, "_glass_clean_last_ts", None)
+            if last_ts is None:
+                self._glass_clean_last_ts = time.time()
+                return
+            days = max(0.0, (time.time() - last_ts) / 86400.0)
+            if days < thr:
+                return
+            self._glass_rota_alarmed = True
+            self._push_alarm(
+                f"玻璃盘清洁计数报警：距上次清洁计数清零已 {days:.1f} 天，"
+                f"已达阈值 {thr} 天（报警方案：{plan_name}）", stop=False)
+            return
         thr = glass_rotation_count()
         if self._glass_rotations < thr:
             return
-        if getattr(self, "_glass_rota_alarmed", False):
-            return
         self._glass_rota_alarmed = True
-        plan = state_plan_by_alias(glass_rotation_plan())
-        plan_name = plan.get("alias", glass_rotation_plan()) if plan else glass_rotation_plan()
         self._push_alarm(
-            f"玻璃使用转数报警：玻璃盘累计旋转 {self._glass_rotations:.0f} 圈，"
+            f"玻璃盘清洁计数报警：玻璃盘累计旋转 {self._glass_rotations:.0f} 圈，"
             f"已达阈值 {thr} 圈（报警方案：{plan_name}）", stop=False)
 
     # ------------------------------------------------------------------
@@ -6611,7 +6633,7 @@ class ProductionView(_ReportExportMixin, QWidget):
             self.set_vision_online(True, force=True, log=False, remind=False)  # 启动即置为在线（示例演示始终在线）
             self._clear_estop()          # 启动时解除上一次的急停报警状态
             self._schedule_estop_random()  # 本次运行随机安排一次急停（5~60 分钟后，绝大多数演示不会触发）
-            # 玻璃使用转数累计：本次启动生产从 0 重新累计（无论是否保留其它统计）
+            # 玻璃盘清洁计数（圈数模式）：本次启动生产从 0 重新累计（天数模式基准不清零）
             self._glass_rotations = 0.0
             self._glass_rota_alarmed = False
             self._last_rot_ts = None
@@ -6738,13 +6760,14 @@ class ProductionView(_ReportExportMixin, QWidget):
         return dict(getattr(self, "_valve_used", {}))
 
     def reset_glass_rotation(self):
-        """把玻璃盘累计旋转圈数（已旋转次数）清零并重新开始计数。
+        """玻璃盘清洁计数「次数清零」：累计圈数与清洁计时基准一并清零重计。
 
-        2026-11-12 需求：报警设置「玻璃使用转数报警」区块新增「次数清零」按钮调用。
-        清零同时重置累计时间戳与已报警标志，下次生产运行从 0 重新累计。
+        2026-11-17 需求：报警设置「玻璃盘清洁计数报警」区块「次数清零」按钮调用。
+        圈数模式下次生产运行从 0 重新累计；天数模式从当前时刻重新计时。
         """
         self._glass_rotations = 0.0
         self._last_rot_ts = None
+        self._glass_clean_last_ts = time.time()
         self._glass_rota_alarmed = False
         self._refresh_glass_rotation_row()
 
@@ -6782,8 +6805,8 @@ class ProductionView(_ReportExportMixin, QWidget):
         # 绝不会因为清零而停止更新数据。
         self._accumulate_batch()
         self._tick_count += 1
-        # 玻璃使用转数累计：生产运行时按 DD 马达转速 × 真实流逝时间累计旋转圈数，
-        # 达到「玻璃使用转数报警」设定阈值即记红色报警（不触发停机）。
+        # 玻璃盘清洁计数（圈数模式）：按 DD 马达转速 × 真实流逝时间累计旋转圈数，
+        # 达到「玻璃盘清洁计数报警」设定阈值即记红色报警（不触发停机）。
         self._accumulate_rotation()
         if self._tick_count % self._refresh_every == 0:
             self._refresh_live_stats()

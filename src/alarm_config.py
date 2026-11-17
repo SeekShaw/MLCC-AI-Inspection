@@ -146,12 +146,16 @@ DEFAULT_ALARM = {
         "glass_disk_jump_plan": "方案 1",
         # 玻璃盘上下跳动超限报警条件：连续超限次数（达到该次数才触发报警），示例值 10 次
         "glass_disk_jump_count": 10,
-        # 玻璃使用转数报警：默认关闭；玻璃盘（DD 马达）累计旋转圈数达到设定阈值即按所选
-        # 报警方案（别名，默认「方案 1」）记录并显示报警（不触发停机），重新启动生产时从 0 累计
+        # 玻璃盘清洁计数报警（原「玻璃使用转数报警」）：默认关闭；按所选计数方式
+        # （圈数 / 天数）统计，达到阈值即按所选报警方案记录并显示报警（不触发停机）。
+        # 圈数模式：重新启动生产时从 0 累计；天数模式：按距上次「次数清零」的天数统计。
         "glass_rotation_alarm": False,
         "glass_rotation_plan": "方案 1",
-        # 玻璃使用转数报警阈值：累计旋转圈数（圈），达到该值即按所选报警方案报警，示例 100000 圈
+        # 圈数模式阈值：累计旋转圈数（圈），示例 100000 圈
         "glass_rotation_count": 100000,
+        # 清洁计数方式：圈数 / 天数（默认圈数）；天数模式阈值单位为天（默认 7 天）
+        "glass_clean_count_mode": "圈数",
+        "glass_clean_days": 7,
         # 检测项良率预警：阈值在调试界面「良率预警设置」列按检测项逐行设置，
         # 此处仅选择触发预警时所按的报警方案（别名，默认取第一个方案）
         "item_yield_plan": "方案 1",
@@ -511,21 +515,33 @@ def feature_glass_disk_jump_count():
 
 
 def feature_glass_rotation_alarm():
-    """玻璃使用转数报警：默认关闭；玻璃盘累计旋转圈数达阈值即按所选报警方案报警（不触发停机）。"""
+    """玻璃盘清洁计数报警：默认关闭；按计数方式（圈数/天数）达阈值即按所选方案报警（不停机）。"""
     return bool(ALARM["features"].get("glass_rotation_alarm",
                                       DEFAULT_ALARM["features"]["glass_rotation_alarm"]))
 
 
 def glass_rotation_plan():
-    """玻璃使用转数报警所选报警方案（别名），默认取第一个方案。"""
+    """玻璃盘清洁计数报警所选报警方案（别名），默认取第一个方案。"""
     return str(ALARM["features"].get("glass_rotation_plan",
                                      DEFAULT_ALARM["features"]["glass_rotation_plan"]))
 
 
 def glass_rotation_count():
-    """玻璃使用转数报警阈值（圈）：玻璃盘累计旋转圈数达到该值即按所选报警方案报警（默认 100000 圈）。"""
+    """玻璃盘清洁计数报警阈值（圈数模式）：累计旋转圈数达到该值即报警（默认 100000 圈）。"""
     return int(ALARM["features"].get("glass_rotation_count",
                                      DEFAULT_ALARM["features"]["glass_rotation_count"]))
+
+
+def glass_clean_count_mode():
+    """玻璃盘清洁计数方式：圈数 / 天数（默认圈数）。"""
+    return str(ALARM["features"].get("glass_clean_count_mode",
+                                     DEFAULT_ALARM["features"]["glass_clean_count_mode"]))
+
+
+def glass_clean_days():
+    """玻璃盘清洁计数报警阈值（天数模式）：距上次清洁计数清零达到该天数即报警（默认 7 天）。"""
+    return int(ALARM["features"].get("glass_clean_days",
+                                     DEFAULT_ALARM["features"]["glass_clean_days"]))
 
 
 def sq_plan(key):

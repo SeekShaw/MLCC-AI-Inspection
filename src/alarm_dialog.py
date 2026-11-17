@@ -41,6 +41,7 @@ from alarm_config import (
     feature_ion_fan_alarm, ion_fan_plan,
     feature_glass_disk_jump_alarm, glass_disk_jump_plan, feature_glass_disk_jump_count,
     feature_glass_rotation_alarm, glass_rotation_plan, glass_rotation_count,
+    glass_clean_count_mode, glass_clean_days,
     cont_mix_plan, cont_tilt_plan, cont_stick_plan, cont_fly_plan,
     valve_alarm_pct, valve_alarm_plan, valve_stop_pct, valve_stop_enabled, sq_plan, item_yield_plan,
     state_plans_count, state_plans, state_plan_aliases,
@@ -985,8 +986,9 @@ class AlarmSettingsDialog(QDialog):
         t_glass.sw.toggled.connect(_sync_glass)
         _sync_glass(t_glass.is_on())
 
-        # 玻璃使用转数报警（默认关闭）+ 报警方案（可选）+ 旋转圈数阈值（圈）
-        t_grot = self._make_toggle("玻璃使用转数报警", feature_glass_rotation_alarm(), _FEAT_NAME_W)
+        # 玻璃盘清洁计数报警（原「玻璃使用转数报警」，默认关闭）+ 报警方案（可选）
+        # + 计数方式（圈数 / 天数）+ 阈值（随计数方式切换单位：圈 / 天）
+        t_grot = self._make_toggle("玻璃盘清洁计数报警", feature_glass_rotation_alarm(), _FEAT_NAME_W)
         grot_lbl = QLabel("报警方案")
         grot_lbl.setFixedWidth(56)
         grot_lbl.setStyleSheet(f"color: {COLORS['text_primary']}; font-size: 12px;")
@@ -998,36 +1000,62 @@ class AlarmSettingsDialog(QDialog):
         _grot_row.addSpacing(8)
         _grot_row.addWidget(grot_lbl)
         _grot_row.addWidget(self._glass_rotation_plan_combo)
-        # 旋转圈数阈值（示例 100000 圈，玻璃盘累计旋转圈数达到该值即按所选报警方案报警）
-        grot_count_lbl = QLabel("旋转圈数")
-        grot_count_lbl.setStyleSheet(f"color: {COLORS['text_primary']}; font-size: 12px;")
+        # 2026-11-17 需求：增加「计数方式」选择——圈数 / 天数
+        mode_lbl = QLabel("计数方式")
+        mode_lbl.setStyleSheet(f"color: {COLORS['text_primary']}; font-size: 12px;")
+        self._glass_clean_mode_combo = QComboBox()
+        self._glass_clean_mode_combo.addItems(["圈数", "天数"])
+        self._glass_clean_mode_combo.setCurrentText(glass_clean_count_mode())
+        self._glass_clean_mode_combo.setFixedWidth(90)
+        self._glass_clean_mode_combo.setStyleSheet(self._combo_style())
+        _grot_row.addSpacing(12)
+        _grot_row.addWidget(mode_lbl)
+        _grot_row.addWidget(self._glass_clean_mode_combo)
+        # 阈值：圈数模式 = 累计旋转圈数（示例 100000 圈）；天数模式 = 距上次清洁计数
+        # 清零的天数（默认 7 天）。达到阈值即按所选报警方案报警。
+        self._glass_clean_count_lbl = QLabel("旋转圈数")
+        self._glass_clean_count_lbl.setStyleSheet(
+            f"color: {COLORS['text_primary']}; font-size: 12px;")
         self._glass_rotation_count_spin = QSpinBox()
         self._glass_rotation_count_spin.setFixedWidth(_SPIN_W)
-        self._glass_rotation_count_spin.setRange(1, 9_999_999)
-        self._glass_rotation_count_spin.setSingleStep(1000)
-        self._glass_rotation_count_spin.setValue(glass_rotation_count())
-        self._glass_rotation_count_spin.setSuffix(" 圈")
         self._glass_rotation_count_spin.setStyleSheet(self._spin_style())
-        _grot_row.addSpacing(16)
-        _grot_row.addWidget(grot_count_lbl)
+        _grot_row.addSpacing(12)
+        _grot_row.addWidget(self._glass_clean_count_lbl)
         _grot_row.addWidget(self._glass_rotation_count_spin)
-        # 「次数清零」按钮：位于「旋转圈数」阈值右侧，点击后把玻璃盘累计旋转圈数
-        # （已旋转次数）清零并重新开始计数，不改动报警阈值本身。仅超级管理员可见、可用。
+        # 「次数清零」按钮：把累计圈数与清洁计时基准一并清零并重新开始计数，
+        # 不改动报警阈值本身。仅超级管理员可见、可用。
         if self._is_super_admin and self._on_reset_glass_rotation is not None:
             grot_clear_btn = QPushButton("次数清零")
             grot_clear_btn.setFixedWidth(90)
-            grot_clear_btn.setToolTip("把玻璃盘已旋转次数清零并重新开始计数（不影响旋转圈数报警阈值）")
+            grot_clear_btn.setToolTip(
+                "把玻璃盘清洁计数清零（累计圈数/清洁天数）并重新开始计数，不影响报警阈值")
             grot_clear_btn.setStyleSheet(self._clear_btn_style())
             grot_clear_btn.clicked.connect(self._on_reset_glass_rotation)
             _grot_row.addWidget(grot_clear_btn)
         _grot_row.addStretch()
         inner.addLayout(_grot_row)
 
+        def _on_clean_mode_changed(mode):
+            """切换计数方式：阈值标签/单位/范围/默认值随「圈数 / 天数」联动。"""
+            days = str(mode) == "天数"
+            self._glass_clean_count_lbl.setText("清洁天数" if days else "旋转圈数")
+            self._glass_rotation_count_spin.setRange(1, 365 if days else 9_999_999)
+            self._glass_rotation_count_spin.setSingleStep(1 if days else 1000)
+            self._glass_rotation_count_spin.setValue(
+                glass_clean_days() if days else glass_rotation_count())
+            self._glass_rotation_count_spin.setSuffix(" 天" if days else " 圈")
+
+        self._glass_clean_mode_combo.currentTextChanged.connect(_on_clean_mode_changed)
+        _on_clean_mode_changed(self._glass_clean_mode_combo.currentText())
+
         def _sync_grot(on_):
             grot_lbl.setEnabled(on_)
             self._glass_rotation_plan_combo.setEnabled(on_)
             self._glass_rotation_plan_combo.setStyleSheet(self._combo_style(disabled=not on_))
-            grot_count_lbl.setEnabled(on_)
+            mode_lbl.setEnabled(on_)
+            self._glass_clean_mode_combo.setEnabled(on_)
+            self._glass_clean_mode_combo.setStyleSheet(self._combo_style(disabled=not on_))
+            self._glass_clean_count_lbl.setEnabled(on_)
             self._glass_rotation_count_spin.setEnabled(on_)
             self._glass_rotation_count_spin.setStyleSheet(self._spin_style(disabled=not on_))
 
@@ -1293,10 +1321,14 @@ class AlarmSettingsDialog(QDialog):
         ALARM["features"]["glass_disk_jump_alarm"] = self._feat_toggles["glass_disk_jump"].is_on()
         ALARM["features"]["glass_disk_jump_plan"] = self._glass_disk_jump_plan_combo.currentText()
         ALARM["features"]["glass_disk_jump_count"] = int(self._glass_disk_jump_count_spin.value())
-        # 玻璃使用转数报警（开关与报警方案下拉 + 旋转圈数阈值）
+        # 玻璃盘清洁计数报警（开关 / 报警方案 / 计数方式 / 对应阈值）
         ALARM["features"]["glass_rotation_alarm"] = self._feat_toggles["glass_rotation"].is_on()
         ALARM["features"]["glass_rotation_plan"] = self._glass_rotation_plan_combo.currentText()
-        ALARM["features"]["glass_rotation_count"] = int(self._glass_rotation_count_spin.value())
+        ALARM["features"]["glass_clean_count_mode"] = self._glass_clean_mode_combo.currentText()
+        if self._glass_clean_mode_combo.currentText() == "天数":
+            ALARM["features"]["glass_clean_days"] = int(self._glass_rotation_count_spin.value())
+        else:
+            ALARM["features"]["glass_rotation_count"] = int(self._glass_rotation_count_spin.value())
         save_alarm_config()
 
     def _on_apply(self):

@@ -1627,6 +1627,7 @@ class AdvancedSettingsDialog(QDialog):
             ("beep", "启用蜂鸣报警提示"),
             ("auto_clear_confirm", "启动时弹窗确认料盒已清空"),
             ("debug_overlay", "调试界面显示坐标叠加层"),
+            ("oee", "设备稼动率计算"),
         ]:
             sw, _, row = self._make_switch_row(
                 label,
@@ -1990,6 +1991,9 @@ class AdvancedSettingsDialog(QDialog):
         self.app._adv_settings[key] = bool(checked)
         self.app.production.log_operation(
             self.app.current_user["name"], f"高级设置：{key} = {checked}")
+        if key == "oee" and hasattr(self.app, "set_oee_enabled"):
+            # 设备稼动率计算：开启即在底部状态栏「开始运行时间」右侧显示，关闭即隐藏
+            self.app.set_oee_enabled(bool(checked))
 
     def _on_auto_clear_toggle(self, checked):
         """料盒取出计数自动清零：写入报警配置 features.auto_clear 并持久化。"""

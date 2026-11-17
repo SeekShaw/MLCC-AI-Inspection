@@ -422,6 +422,8 @@ class MainWindow(QMainWindow):
             "beep": True,
             "auto_clear_confirm": True,
             "debug_overlay": False,
+            # 设备稼动率计算：开启后在底部状态栏「开始运行时间」右侧显示稼动率（默认关闭）
+            "oee": False,
             "special_com": "COM16",
             "algo_threads": 3,
             "measure_decimals": 4,
@@ -758,6 +760,7 @@ class MainWindow(QMainWindow):
         self._run_accum_secs = 0.0      # 已累计运行秒数（不含当前未停止的运行段）
         self._run_session_t0 = None     # 当前运行段起始（time.monotonic()）；None=未在运行
         self._run_start_wall = None     # 最近一次「设备启动」的墙钟时间（字符串）
+        self._oee_start_mono = None     # 稼动率统计起点：首次「设备启动」时刻（time.monotonic()）
         self.lbl_runtime_footer = QLabel("运行时间：00H:00M:00S")
         self.lbl_runtime_footer.setStyleSheet(
             f"color: {COLORS['text_secondary']}; font-size: 11px; cursor: pointer;")
@@ -767,6 +770,14 @@ class MainWindow(QMainWindow):
         self.lbl_runtime_footer.mousePressEvent = lambda e: self._toggle_runtime_text()
         footer_layout.addWidget(self.lbl_runtime_footer)
         self._placeholders.append(self.lbl_runtime_footer)
+        # 设备稼动率：2026-11-17 需求——高级设置「设备稼动率计算」开启后显示在
+        # 「开始运行时间」标签右侧；关闭时隐藏。稼动率 = 累计运行时间 / 自首次
+        # 设备启动以来的经过时间 × 100%（停止期间计入分母但不计入分子）。
+        self.lbl_oee_footer = QLabel("设备稼动率：--")
+        self.lbl_oee_footer.setStyleSheet(
+            f"color: {COLORS['text_secondary']}; font-size: 11px;")
+        self.lbl_oee_footer.setVisible(bool(self._adv_settings.get("oee", False)))
+        footer_layout.addWidget(self.lbl_oee_footer)
         # 运行计时刷新定时器：仅运行中启动；停止后标签冻结在已累计值（暂停计入）
         self._runtime_timer = QTimer(self)
         self._runtime_timer.setInterval(1000)
@@ -1678,6 +1689,34 @@ class MainWindow(QMainWindow):
         else:
             self.lbl_runtime_footer.setText(
                 f"运行时间：{self._format_runtime(self._runtime_current_secs())}")
+        self._refresh_oee_footer()
+
+    def _refresh_oee_footer(self):
+        """按「设备稼动率计算」开关刷新底部稼动率标签（开关关闭则隐藏）。
+
+        稼动率 = 累计运行时间 / 自首次设备启动以来的经过时间 × 100%；
+        停止期间分母继续累加、分子暂停，故稼动率随停机会下降；未启动时显示「--」。
+        """
+        lbl = getattr(self, "lbl_oee_footer", None)
+        if lbl is None:
+            return
+        on = bool(getattr(self, "_adv_settings", {}).get("oee", False))
+        lbl.setVisible(on)
+        if not on:
+            return
+        t0 = getattr(self, "_oee_start_mono", None)
+        if t0 is None:
+            lbl.setText("设备稼动率：--")
+            return
+        elapsed = max(1e-6, time.monotonic() - t0)
+        rate = min(100.0, max(0.0, self._runtime_current_secs() / elapsed * 100.0))
+        lbl.setText(f"设备稼动率：{rate:.1f}%")
+
+    def set_oee_enabled(self, checked):
+        """高级设置切换「设备稼动率计算」：立即显示/隐藏底部稼动率标签。"""
+        self._adv_settings["oee"] = bool(checked)
+        self.lbl_oee_footer.setVisible(bool(checked))
+        self._refresh_oee_footer()
 
     def _toggle_runtime_text(self):
         """点击标签：在「运行时间」与「开始运行时间」之间切换显示。"""
@@ -1686,6 +1725,7 @@ class MainWindow(QMainWindow):
 
     def _refresh_sysres_footer(self):
         """刷新底部「CPU / 内存」占用：按当前电脑实际情况显示（每 2s 由定时器调用）。"""
+        self._refresh_oee_footer()   # 停机期间也持续刷新稼动率（分子冻结、分母继续）
         if not _HAS_WIN_RES:
             self.lbl_cpu_footer.setText("CPU: --%")
             self.lbl_mem_footer.setText("内存: --%")
@@ -1776,6 +1816,9 @@ class MainWindow(QMainWindow):
         self._run_start_wall = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         self.lbl_runtime_footer.setToolTip(f"开始运行时间：{self._run_start_wall}")
         self._run_session_t0 = time.monotonic()
+        # 稼动率统计起点：首次设备启动时记录，之后启停不重置（全程统计）
+        if getattr(self, "_oee_start_mono", None) is None:
+            self._oee_start_mono = self._run_session_t0
         self._runtime_timer.start()
         self._refresh_runtime_footer()
         self._startup_log("calling production.start_playback()")

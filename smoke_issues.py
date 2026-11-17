@@ -2074,6 +2074,43 @@ from styles import COLORS as _COLORS
 check(_COLORS["text_secondary"] in _mw.lbl_defect_view.styleSheet()
       and _COLORS["accent_blue"] not in _mw.lbl_defect_view.styleSheet(),
       "底部状态栏:「缺陷图查看」颜色与其他底部按钮一致（非蓝色）")
+
+# —— 2026-11-17：设备稼动率计算开关 + 底部状态栏「开始运行时间」右侧显示 ——
+_oee_lbl = getattr(_mw, "lbl_oee_footer", None)
+check(_oee_lbl is not None and not _oee_lbl.isVisible()
+      and _mw._adv_settings.get("oee") is False,
+      f"稼动率: 默认关闭且底部状态栏不显示 (实际 visible="
+      f"{_oee_lbl.isVisible() if _oee_lbl else None})")
+_i_runtime_lbl = _footer.indexOf(_mw.lbl_runtime_footer)
+_i_oee_lbl = _footer.indexOf(_oee_lbl)
+check(_i_runtime_lbl >= 0 and _i_oee_lbl == _i_runtime_lbl + 1,
+      f"稼动率: 显示在「开始运行时间」标签右侧 "
+      f"(runtime={_i_runtime_lbl}, oee={_i_oee_lbl})")
+check('("oee", "设备稼动率计算")' in src_nav and '"oee": False' in src_app
+      and "set_oee_enabled" in src_nav and "_refresh_oee_footer" in src_app,
+      "高级设置: 「设备稼动率计算」开关与底部状态栏联动已接入")
+import time as _t_oee
+_oee_t0_bak = _mw._oee_start_mono
+_oee_acc_bak = _mw._run_accum_secs
+_oee_sess_bak = _mw._run_session_t0
+_mw.set_oee_enabled(True)
+_mw._oee_start_mono = _t_oee.monotonic() - 100.0
+_mw._run_accum_secs = 60.0
+_mw._run_session_t0 = None
+_mw._refresh_oee_footer()
+_oee_txt = _oee_lbl.text()
+try:
+    _oee_rate = float(_oee_txt.split("：", 1)[1].rstrip("%"))
+except (IndexError, ValueError):
+    _oee_rate = -1.0
+check(_oee_lbl.isVisible() and "设备稼动率：" in _oee_txt and 58.0 <= _oee_rate <= 62.0,
+      f"稼动率: 开启后按 运行时间/开机经过时间 显示百分比 (实际 {_oee_txt})")
+_mw.set_oee_enabled(False)
+check(not _oee_lbl.isVisible(), "稼动率: 关闭后底部状态栏不再显示")
+_mw._oee_start_mono = _oee_t0_bak
+_mw._run_accum_secs = _oee_acc_bak
+_mw._run_session_t0 = _oee_sess_bak
+_mw._adv_settings["oee"] = False
 check(_mw._idle_limit_seconds() == 180,
       f"空闲确认: 周期取自用户配置（默认 3 分钟 = 180 秒）(实际 {_mw._idle_limit_seconds()})")
 check(_mw._idle_expired() is False, "空闲确认: 刚启动时未超时")
@@ -2236,6 +2273,75 @@ _clear_grot_user = [b for b in _dlg_g_user.findChildren(_QPushButton)
 check(len(_clear_grot_user) == 0,
       "次数清零: 非超级管理员不可见「次数清零」按钮")
 _dlg_g_user._on_finished(0); _dlg_g_user.deleteLater()
+
+# ⑤b 2026-11-17：「玻璃使用转数报警」改名「玻璃盘清洁计数报警」+ 计数方式（圈数/天数）
+_src_ac3 = open("C:/Users/Lenovo/WorkBuddy/Teruo/src/alarm_config.py", encoding="utf-8").read()
+_src_ad3 = open("C:/Users/Lenovo/WorkBuddy/Teruo/src/alarm_dialog.py", encoding="utf-8").read()
+check('"glass_clean_count_mode": "圈数"' in _src_ac3
+      and '"glass_clean_days": 7' in _src_ac3
+      and "玻璃盘清洁计数报警" in _src_ad3,
+      "清洁计数: 配置默认计数方式=圈数、天数阈值=7 天，界面标签已改名")
+_dlg_g3 = _ad2.AlarmSettingsDialog(
+    is_super_admin=True, on_reset_glass_rotation=lambda: None)
+_g_labels3 = [lb.text() for lb in _dlg_g3.findChildren(_QLabel)]
+check("玻璃盘清洁计数报警" in _g_labels3 and "计数方式" in _g_labels3,
+      f"清洁计数: 界面含「玻璃盘清洁计数报警」与「计数方式」标签 "
+      f"(实际 {[t for t in _g_labels3 if '报警' in t or '计数' in t]})")
+_mcombo = _dlg_g3._glass_clean_mode_combo
+check([_mcombo.itemText(i) for i in range(_mcombo.count())] == ["圈数", "天数"]
+      and _mcombo.currentText() == "圈数"
+      and _dlg_g3._glass_rotation_count_spin.suffix() == " 圈",
+      f"清洁计数: 计数方式两项且默认圈数（阈值单位圈） (实际 {_mcombo.currentText()})")
+_mcombo.setCurrentText("天数")
+check(_dlg_g3._glass_clean_count_lbl.text() == "清洁天数"
+      and _dlg_g3._glass_rotation_count_spin.suffix() == " 天"
+      and _dlg_g3._glass_rotation_count_spin.value() == 7
+      and _dlg_g3._glass_rotation_count_spin.maximum() == 365,
+      f"清洁计数: 切到天数后阈值改为 7 天（范围 1~365） "
+      f"(实际 {_dlg_g3._glass_clean_count_lbl.text()} "
+      f"{_dlg_g3._glass_rotation_count_spin.value()}"
+      f"{_dlg_g3._glass_rotation_count_spin.suffix()})")
+_dlg_g3._on_finished(0); _dlg_g3.deleteLater()
+# 天数模式报警判定：距上次清零 ≥ 阈值 → 红色报警且不停机；未达阈值不报警
+import time as _t_gclean
+_feat_bak3 = dict(_ac.ALARM["features"])
+_pushed3 = []
+_push_bak3 = pv._push_alarm
+_playing_bak3 = pv._playing
+_flag_bak3 = getattr(pv, "_glass_rota_alarmed", False)
+_ts_bak3 = getattr(pv, "_glass_clean_last_ts", None)
+try:
+    _ac.ALARM["features"].update({
+        "glass_rotation_alarm": True,
+        "glass_clean_count_mode": "天数",
+        "glass_clean_days": 7,
+    })
+    pv._playing = True
+    pv._glass_rota_alarmed = False
+    pv._glass_clean_last_ts = _t_gclean.time() - 8 * 86400
+    pv._push_alarm = lambda msg, stop=False: _pushed3.append((msg, stop))
+    pv._check_glass_rotation_alarm()
+    check(pv._glass_rota_alarmed and len(_pushed3) == 1
+          and "玻璃盘清洁计数报警" in _pushed3[0][0]
+          and "8.0 天" in _pushed3[0][0] and _pushed3[0][1] is False,
+          f"清洁计数: 天数模式达 7 天阈值触发红色报警且不停机 (实际 {_pushed3})")
+    pv._glass_rota_alarmed = False
+    pv._glass_clean_last_ts = _t_gclean.time()
+    pv._check_glass_rotation_alarm()
+    check(not pv._glass_rota_alarmed and len(_pushed3) == 1,
+          f"清洁计数: 未达天数阈值不报警 (实际报警 {len(_pushed3)} 次)")
+finally:
+    pv._push_alarm = _push_bak3
+    pv._playing = _playing_bak3
+    pv._glass_rota_alarmed = _flag_bak3
+    pv._glass_clean_last_ts = _ts_bak3
+    _ac.ALARM["features"].clear()
+    _ac.ALARM["features"].update(_feat_bak3)
+# 「次数清零」同时重置天数计时基准
+pv.reset_glass_rotation()
+check(abs(pv._glass_clean_last_ts - _t_gclean.time()) < 5,
+      f"次数清零: 同步重置清洁天数计时基准为当前时刻 (实际 {pv._glass_clean_last_ts})")
+pv._glass_rotations = _grot_bak
 # ④ 触发设定：已重构为「相机参数表格 + 底部自动获取触发位置」按钮
 _tsd = _TSD(_mw)
 _auto_pos_btns = [b for b in _tsd.findChildren(_QPushButton)
