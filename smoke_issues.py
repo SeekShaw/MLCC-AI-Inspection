@@ -2642,17 +2642,20 @@ from PyQt6.QtWidgets import QSpinBox as _QSpin2, QDoubleSpinBox as _QDSpin2
 from PyQt6.QtWidgets import QRadioButton as _QRBtn2, QLabel as _QLabel2
 _cats2 = {rb.text(): rb for rb in _ddlg2.findChildren(_QRBtn2)}
 check(sorted(_cats2) == sorted(["缺陷不分档", "A档缺陷", "B档缺陷", "C档缺陷"])
-      and _cats2["A档缺陷"].isChecked()
+      and _cats2["缺陷不分档"].isChecked()
       and not _cats2["B档缺陷"].isChecked(),
-      f"缺陷定义: 含不分档+A/B/C 四档单选且默认选中 A 档 (实际 {sorted(_cats2)})")
+      f"缺陷定义: 含不分档+A/B/C 四档单选且默认选中「缺陷不分档」 (实际 {sorted(_cats2)})")
 _descs2 = [lb.text() for lb in _ddlg2.findChildren(_QLabel2) if "判定说明" in lb.text()]
-check(any("A 档缺陷参数" in t and "输出为 1" in t for t in _descs2),
-      "缺陷定义: 窗口内含判定说明（默认 A 档参数判断、符合则为缺陷输出 1）")
+check(any("缺陷不分档" in t and "输出为 1" in t for t in _descs2),
+      "缺陷定义: 窗口内含判定说明（默认不分档、按范围判定、符合则缺陷输出 1）")
 _spins = _ddlg2.findChildren(_QSpin2)     # 缺陷个数 最小值/最大值
 _dspins = _ddlg2.findChildren(_QDSpin2)   # 6 个数值参数 最小值/最大值
 check(len(_spins) == 2 and len(_dspins) == 12,
       f"缺陷定义: 7 参数均为范围设置（各含最小值/最大值两个输入框） "
       f"(实际 spin={len(_spins)}, dspin={len(_dspins)})")
+# 2026-11-17 需求：默认「缺陷不分档」→ 下方参数项及数值设置全部删除（隐藏）
+check(not _dspins[0].isVisible() and not _spins[0].isVisible(),
+      "缺陷定义: 选中「缺陷不分档」时下方参数项及数值设置全部隐藏")
 # A 类默认范围：0~20 / 0~20% / 0~20 / 0~20% / 0~9 / 0~9 / 个数 1~1
 check([round(s.value(), 2) for s in _dspins] ==
       [0.0, 20.0, 0.0, 20.0, 0.0, 20.0, 0.0, 20.0, 0.0, 9.0, 0.0, 9.0]
@@ -2662,6 +2665,8 @@ check([round(s.value(), 2) for s in _dspins] ==
       f"{[_spins[0].value(), _spins[1].value()]})")
 # B 类默认：个数 1~2，其余数值范围与 A 类一致
 _cats2["B档缺陷"].setChecked(True); app.processEvents()
+check(_dspins[0].isVisible() and _spins[0].isVisible(),
+      "缺陷定义: 切到 A/B/C 档时恢复显示参数项与数值设置")
 check(_spins[0].value() == 1 and _spins[1].value() == 2
       and [round(s.value(), 2) for s in _dspins] ==
       [0.0, 20.0, 0.0, 20.0, 0.0, 20.0, 0.0, 20.0, 0.0, 9.0, 0.0, 9.0],
@@ -2701,18 +2706,32 @@ check(_dspins2b[10].value() == 0.0 and _dspins2b[11].value() == 30.0,
 # 2026-11-17：缺陷不分档 + 输出缺陷尺寸开关（默认不输出，仅不分档可选）
 from PyQt6.QtWidgets import QCheckBox as _QChk2
 _chk_out = [c for c in dv._defect_dlg.findChildren(_QChk2) if c.text() == "输出缺陷尺寸"]
-check(len(_chk_out) == 1 and not _chk_out[0].isChecked() and not _chk_out[0].isEnabled(),
-      "缺陷定义: 含「输出缺陷尺寸」开关，B档下默认不勾选且禁用")
+check(len(_chk_out) == 1 and not _chk_out[0].isChecked() and not _chk_out[0].isVisible(),
+      "缺陷定义: 含「输出缺陷尺寸」开关，A/B/C 档下不出现且默认不勾选")
 _rb_n = [rb for rb in dv._defect_dlg.findChildren(_QRBtn2) if rb.text() == "缺陷不分档"][0]
 _rb_n.setChecked(True); app.processEvents()
-check(_chk_out[0].isEnabled() and not _chk_out[0].isChecked(),
-      "缺陷定义: 切到「缺陷不分档」后输出缺陷尺寸开关可用、默认不勾选")
+check(_chk_out[0].isVisible() and _chk_out[0].isEnabled() and not _chk_out[0].isChecked(),
+      "缺陷定义: 切到「缺陷不分档」后输出缺陷尺寸开关出现、可用、默认不勾选")
 _chk_out[0].setChecked(True)
 _okb2 = [b for b in dv._defect_dlg.findChildren(_QPushButton) if b.text() == "确定"][0]
 _okb2.click(); app.processEvents()
 _rec1n = dv._defect_defs.get(_r1, {})
 check(_rec1n.get("cur") == "N" and _rec1n.get("output_size") is True,
       f"缺陷定义: 不分档勾选输出尺寸后写回 cur=N/output_size=True (实际 {_rec1n.get('cur')},{_rec1n.get('output_size')})")
+# 2026-11-17 需求：没有缺陷定义的检测项，其「检测项目」文字置灰；有定义的恢复常规颜色
+from styles import COLORS as _COLORS_DEF
+_c_name_def = dv._col_by_header("检测项目")
+_item_def = dv._table.item(_r1, _c_name_def)
+_r_nodef = next((r for r in range(len(dv._table_data))
+                  if r not in dv._defect_defs), None)
+_item_nodef = (dv._table.item(_r_nodef, _c_name_def)
+                if _r_nodef is not None else None)
+check(_item_def is not None and _item_nodef is not None
+      and _item_def.foreground().color().name().lower()
+      == _COLORS_DEF["text_primary"].lower()
+      and _item_nodef.foreground().color().name().lower()
+      == _COLORS_DEF["text_secondary"].lower(),
+      "缺陷定义: 没有缺陷定义的检测项文字置灰、有定义的恢复常规颜色")
 dv._defect_dlg.close()
 dv._defect_defs.pop(_r1, None)
 
@@ -3193,11 +3212,10 @@ from PyQt6.QtWidgets import QLabel as _QLabel2
 check(not [lb for lb in _ref3.findChildren(_QLabel2)
            if lb.objectName() == "diagram_image"],
       "尺寸参考: 示意图为矢量控件绘制（非位图 QLabel），缩放不失真")
-check(any("BWmin" in lb.text() and "L2" in lb.text()
-          for lb in _ref3.findChildren(_QLabel2))
-      and any("顶面电极宽度" in lb.text() and "底面电极宽度" in lb.text()
-              for lb in _ref3.findChildren(_QLabel2)),
-      "尺寸参考: 含电容 BW/L2 与电阻 A/B 电极文字说明")
+check(not any("尺寸 / 电极参数说明" in lb.text()
+              for lb in _ref3.findChildren(_QLabel2))
+      and all(d.toolTip() for d in _diags),
+      "尺寸参考: 示例图右侧文字说明已删除（说明改为图示悬停提示）")
 # 2026-11-17 需求2：各分页按内容高度自适应（表格不再纵向拉伸），窗口取四页最高者
 _names4 = ("MLCC电容", "贴片电阻", "贴片电感", "晶振")
 _h_report = {}
@@ -3211,18 +3229,31 @@ check(all(abs(a - b) <= 2 for a, b in _h_report.values()),
 _gap_report = {}
 for _i, _tn in enumerate(_names4):
     _pg = _ref3.tabs.widget(_i)
-    _box = _pg.layout().itemAt(1).widget()
+    _lay = _pg.layout()
+    _box = _lay.itemAt(1).widget() if _lay.count() > 1 else None
+    if _box is None:
+        continue
     _t = _ref3._tables[_tn]
     _gap_report[_tn] = _box.y() - (_t.y() + _t.height())
-check(all(g <= 12 for g in _gap_report.values()),
-      f"尺寸参考: 表格与图示说明框紧邻排列，页内无大片留白 (实际间距 {_gap_report})")
+check(len(_gap_report) == 3 and all(g <= 12 for g in _gap_report.values()),
+      f"尺寸参考: 表格与图示框紧邻排列，页内无大片留白 (实际间距 {_gap_report})")
 # 窗口高度取四页内容高度的最大值（明显小于旧的固定 800）
 _bar = _ref3.tabs.tabBar()
-_max_page = max(_ref3._tables[n].horizontalHeader().height()
-                 + 22 * _ref3._tables[n].rowCount()
-                 + 2 * _ref3._tables[n].frameWidth() + 8
-                 + _ref3.tabs.widget(i).layout().itemAt(1).widget().height() + 16
-                 for i, n in enumerate(_names4))
+
+
+def _page_need_h(i, n):
+    """某分页的内容高度：表格高 + 间距 + 图示框高 + 分页边距。"""
+    _lay = _ref3.tabs.widget(i).layout()
+    _bx = _lay.itemAt(1).widget() if _lay.count() > 1 else None
+    _h = _ref3._tables[n].horizontalHeader().height() \
+        + 22 * _ref3._tables[n].rowCount() \
+        + 2 * _ref3._tables[n].frameWidth() + 16
+    if _bx is not None:
+        _h += 8 + _bx.height()
+    return _h
+
+
+_max_page = max(_page_need_h(i, n) for i, n in enumerate(_names4))
 check(_ref3.height() < 800 and _ref3.height() >= 520
       and abs(_ref3.tabs.height() - _bar.height() - _max_page) <= 12,
       f"尺寸参考: 窗口高度按四页最高者自适应 (窗口高 {_ref3.height()}, 页内容高 {_max_page})")

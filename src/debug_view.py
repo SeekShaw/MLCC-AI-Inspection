@@ -3980,6 +3980,9 @@ class DebugView(QWidget):
         table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         table.setHorizontalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
         self._table = table
+        # 2026-11-17 需求：没有缺陷定义的检测项，其「检测项目」文字置灰
+        for _r in range(table.rowCount()):
+            self._sync_defect_name_color(_r)
         # 2026-11-11：文本列（标称值/补偿值/规格下限/规格上限/收料位置）手动编辑后
         # 回写底层 _table_data，并重判检测结果——否则编辑只停留在单元格显示、底层数据
         # 不变，导致「方案同步」「恢复至默认」「检测结果判定」均读到旧值（2026-11-11 反馈）。
@@ -5513,6 +5516,24 @@ class DebugView(QWidget):
         if b is not None:
             b.setEnabled(self._defect_def_enabled(r))
 
+    def _sync_defect_name_color(self, r):
+        """该检测项没有缺陷定义 → 「检测项目」文字置灰；有定义则恢复常规颜色。
+
+        2026-11-17 需求：未配置缺陷定义的检测项在列表中以灰色文字显示。
+        """
+        table = getattr(self, "_table", None)
+        if table is None or not (0 <= r < len(self._table_data)):
+            return
+        c = self._col_by_header("检测项目")
+        if c < 0:
+            return
+        it = table.item(r, c)
+        if it is None:
+            return
+        has_def = r in getattr(self, "_defect_defs", {})
+        it.setForeground(QColor(COLORS["text_secondary"] if not has_def
+                                else COLORS["text_primary"]))
+
     # 缺陷档位（2026-11-17 需求）：新增「缺陷不分档」(N)，A/B/C 类改称档；
     # 每档 7 个参数，各参数为**范围设置**（最小值/最大值），默认选中 A 档。
     DEFECT_CATS = ("N", "A", "B", "C")   # N=不分档
@@ -5667,7 +5688,8 @@ class DebugView(QWidget):
             return
         # 旧存档迁移为 N/A/B/C 范围结构；深拷贝新结构，保证「取消」不污染已存值。
         old = getattr(self, "_defect_defs", {}).get(r)
-        start_cat = "A"
+        # 2026-11-17 需求：所有缺陷定义**默认「缺陷不分档」**（N）。
+        start_cat = "N"
         if isinstance(old, dict) and isinstance(old.get("A"), dict):
             rec = {}
             for cat in self.DEFECT_CATS:
@@ -5735,7 +5757,7 @@ class DebugView(QWidget):
         cat_row.addStretch()
         cat_radios[start_cat].setChecked(True)
         v.addLayout(cat_row)
-        # —— 输出缺陷尺寸：仅「缺陷不分档」可选，默认不输出（2026-11-17 需求）——
+        # —— 输出缺陷尺寸：仅「缺陷不分档」时出现，默认不输出（2026-11-17 需求）——
         size_row = QHBoxLayout()
         size_row.setSpacing(8)
         self._chk_output_size = QCheckBox("输出缺陷尺寸")
@@ -5747,9 +5769,10 @@ class DebugView(QWidget):
         v.addLayout(size_row)
 
         def _sync_output_size_enabled():
-            # 只在「缺陷不分档」选中时允许勾选；切到 A/B/C 档禁用且不输出。
+            # 2026-11-17 需求：「输出缺陷尺寸」的选择**只在「缺陷不分档」时出现**；
+            # 切到 A/B/C 档则隐藏且不输出。
             is_n = cat_radios["N"].isChecked()
-            self._chk_output_size.setEnabled(is_n)
+            self._chk_output_size.setVisible(is_n)
             if is_n:
                 self._chk_output_size.setChecked(rec.get("output_size", False))
             else:
@@ -5759,13 +5782,17 @@ class DebugView(QWidget):
 
         # —— 判定说明（2026-11-17 需求：窗口内增加描述）——
         desc = QLabel(
-            "判定说明：各参数按范围判定（最小值 ≤ 实测值 ≤ 最大值）。默认使用 "
-            "A 档缺陷参数进行判断，各参数均符合范围则判定为缺陷，缺陷结果输出为 1（NG）。"
-            "选择「缺陷不分档」时按不分档参数判定，并可设置是否输出缺陷尺寸。")
+            "判定说明：默认「缺陷不分档」，按不分档参数判定，并可设置是否输出缺陷尺寸；"
+            "选择 A/B/C 档时按该档参数范围判定（最小值 ≤ 实测值 ≤ 最大值），"
+            "各参数均符合范围则判定为缺陷，缺陷结果输出为 1（NG）。")
         desc.setWordWrap(True)
         desc.setStyleSheet(f"color:{COLORS['text_secondary']}; font-size:10px;")
         v.addWidget(desc)
-        # —— 7 个范围参数行（最小值 ~ 最大值）——
+        # —— 7 个范围参数行（最小值 ~ 最大值）；「缺陷不分档」时整体删除（隐藏）——
+        params_box = QWidget()
+        params_lay = QVBoxLayout(params_box)
+        params_lay.setContentsMargins(0, 0, 0, 0)
+        params_lay.setSpacing(6)
         widgets = []   # [(key, w_min, w_max), ...]
         for label, key, suffix in self._DEFECT_FIELDS:
             lbl = QLabel(label)
@@ -5796,8 +5823,15 @@ class DebugView(QWidget):
             wave.setStyleSheet(f"color:{COLORS['text_primary']}; font-size:11px;")
             hl.addWidget(wave, 0)
             hl.addWidget(w_max, 0)
-            v.addLayout(hl)
+            params_lay.addLayout(hl)
             widgets.append((key, w_min, w_max))
+        v.addWidget(params_box)
+
+        def _sync_params_visible():
+            # 2026-11-17 需求：选中「缺陷不分档」时，下面的参数项及数值设置全部删除。
+            params_box.setVisible(not cat_radios["N"].isChecked())
+
+        _sync_params_visible()
 
         state = {"cur": start_cat}
 
@@ -5826,6 +5860,7 @@ class DebugView(QWidget):
             _stash()
             _load(next(k for k, rb in cat_radios.items() if rb.isChecked()))
             _sync_output_size_enabled()
+            _sync_params_visible()
         for cat in self.DEFECT_CATS:
             cat_radios[cat].toggled.connect(lambda _on=False: _on_cat_toggled())
 
@@ -5850,6 +5885,7 @@ class DebugView(QWidget):
             rec["output_size"] = (bool(self._chk_output_size.isChecked())
                                   if cat_radios["N"].isChecked() else False)
             self._defect_defs[r] = rec
+            self._sync_defect_name_color(r)   # 有缺陷定义 → 文字恢复常规颜色
             self._dv_log(f"检测项「{name}」缺陷定义已更新（四档范围参数）"
                          + (f"，不分档输出缺陷尺寸={'开' if rec['output_size'] else '关'}"
                             if state["cur"] == "N" else "")

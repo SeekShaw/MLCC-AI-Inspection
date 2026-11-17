@@ -209,11 +209,11 @@ class ProductSizeReferenceDialog(QDialog):
         self._tables = {}
         self._page_boxes = []
         for tab_name, headers, data_table, note_text, img_kind in NewProductDialog.REFERENCE_PAGES:
-            page, table, box, note, table_h, has_diagram = self._build_page(
+            page, table, box, table_h, has_diagram = self._build_page(
                 headers, data_table, note_text, img_kind)
             self.tabs.addTab(page, tab_name)
             self._tables[tab_name] = table
-            self._page_boxes.append((page, box, note, table_h, has_diagram))
+            self._page_boxes.append((page, box, table_h, has_diagram))
         root.addWidget(self.tabs, 1)
 
         close_row = QHBoxLayout()
@@ -299,51 +299,38 @@ class ProductSizeReferenceDialog(QDialog):
         table.setFixedHeight(table_h)
         v.addWidget(table, 0)
 
-        # 图示说明区（矢量绘制：线条分明、文字清晰）
-        diag_box = QFrame()
-        diag_box.setStyleSheet(
-            f"QFrame {{ background-color: {COLORS['bg_panel']}; "
-            f"border: 1px solid {COLORS['border']}; border-radius: 4px; }}")
-        diag_layout = QHBoxLayout(diag_box)
-        diag_layout.setContentsMargins(10, 8, 10, 8)
-        diag_layout.setSpacing(14)
+        # 图示区（矢量绘制：线条分明、文字清晰）
+        # 2026-11-17 需求：删除示例图右侧的文字说明，说明文字改为图示的悬停提示。
+        diag_box = None
         if img_kind:
+            diag_box = QFrame()
+            diag_box.setStyleSheet(
+                f"QFrame {{ background-color: {COLORS['bg_panel']}; "
+                f"border: 1px solid {COLORS['border']}; border-radius: 4px; }}")
+            diag_layout = QHBoxLayout(diag_box)
+            diag_layout.setContentsMargins(10, 8, 10, 8)
+            diag_layout.setSpacing(0)
             diagram = ElectrodeDiagram(img_kind)
             diagram.setObjectName("diagram_image")
             diagram.setFixedHeight(self._DIAG_H)
-            diag_layout.addWidget(diagram, 3)
-        note = QLabel("尺寸 / 电极参数说明（单位：mm）\n\n" + note_text)
-        note.setFont(_yahei(11))
-        note.setWordWrap(True)
-        note.setAlignment(Qt.AlignmentFlag.AlignTop)
-        note.setStyleSheet(f"color: {COLORS['text_primary']};")
-        # 说明文字高度按估算宽度预先计算，避免换行后被裁切
-        note_h = note.heightForWidth(self._NOTE_W)
-        diag_layout.addWidget(note, 2)
-        diag_box.setFixedHeight((max(self._DIAG_H, note_h) if img_kind else note_h) + 16)
-        # 说明文字铺满说明框高度并顶部对齐，避免在框内上下居中漂浮
-        note.setFixedHeight(diag_box.height() - 16)
-        v.addWidget(diag_box, 0)
-        # 底部弹性空白：保证表格与说明框保持既定间距，不被布局均分拉伸
+            if note_text:
+                diagram.setToolTip("尺寸 / 电极参数说明（单位：mm）\n" + note_text)
+            diag_layout.addWidget(diagram, 1)
+            diag_box.setFixedHeight(self._DIAG_H + 16)
+            v.addWidget(diag_box, 0)
+        # 底部弹性空白：保证表格与图示框保持既定间距，不被布局均分拉伸
         v.addStretch(1)
-        return page, table, diag_box, note, table_h, bool(img_kind)
+        return page, table, diag_box, table_h, bool(img_kind)
 
     def _fit_height(self, tip):
         """窗口高度自适应：取四个分页内容高度的最大值，页面按内容紧凑排布。"""
-        def page_height(table_h, box, has_diagram):
-            h = table_h + 16          # 分页上下边距
+        def page_height(table_h, box):
+            h = table_h + 16              # 分页上下边距
             if box is not None:
-                h += 8 + box.height()   # 分页间距 + 说明框
+                h += 8 + box.height()     # 分页间距 + 图示框
             return h
 
-        max_page_h = max(page_height(t, b, d) for _p, b, _n, t, d in self._page_boxes)
-        # 无示意图的分页（晶振）：说明框补足到页高，避免页尾出现大片空白
-        for _page, box, note, table_h, has_diagram in self._page_boxes:
-            if box is not None and not has_diagram:
-                need = max_page_h - table_h - 8 - 16
-                if need > box.height():
-                    box.setFixedHeight(need)
-                    note.setFixedHeight(need - 16)
+        max_page_h = max(page_height(t, b) for _p, b, t, _d in self._page_boxes)
         bar = self.tabs.tabBar()
         bar.adjustSize()
         tabs_h = max_page_h + bar.height() + 4
