@@ -11,7 +11,7 @@ import sys
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QPushButton,
     QComboBox, QFrame, QStackedWidget, QSizePolicy, QLineEdit,
-    QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView,
+    QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView, QTabWidget,
 )
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QFont, QPixmap
@@ -30,7 +30,7 @@ def _yahei(size, bold=False):
 
 
 class ProductSizeReferenceDialog(QDialog):
-    """产品尺寸参考：按产品类型分类的规格清单（非模态、不置顶、不遮挡）。"""
+    """产品尺寸参考：按产品类型分页的规格清单（非模态、不置顶、不遮挡）。"""
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -38,96 +38,34 @@ class ProductSizeReferenceDialog(QDialog):
         self.setModal(False)
         self.setWindowFlags(self.windowFlags() & ~Qt.WindowType.WindowStaysOnTopHint)
         self.setStyleSheet(f"QDialog {{ background-color: {COLORS['bg_dark']}; }}")
-        self.setFixedSize(1160, 790)   # 2026-11-17：新增底部电极结构图示，高度 520 → 790
+        self.setFixedSize(1180, 800)
 
         root = QVBoxLayout(self)
         root.setContentsMargins(14, 14, 14, 14)
         root.setSpacing(10)
 
-        head_row = QHBoxLayout()
-        head_row.setSpacing(10)
-        tip = QLabel("下表为各产品类型常见规格的标称尺寸参考（单位：mm）。")
+        tip = QLabel("各产品类型的标称尺寸与电极参数参考（单位：mm），按类型分页查看。")
         tip.setFont(_yahei(10))
         tip.setStyleSheet(f"color: {COLORS['text_secondary']};")
-        head_row.addWidget(tip)
-        head_row.addStretch()
-        # 2026-11-17 需求：表格右上角产品类型下拉筛选
-        filter_lbl = QLabel("产品类型：")
-        filter_lbl.setFont(_yahei(10))
-        filter_lbl.setStyleSheet(f"color: {COLORS['text_secondary']};")
-        head_row.addWidget(filter_lbl)
-        self._filter_combo = QComboBox()
-        self._filter_combo.setFont(_yahei(10))
-        self._filter_combo.setFixedSize(90, 26)
-        self._filter_combo.addItem("全部")
-        self._filter_combo.addItems(list(NewProductDialog.REFERENCE_TYPES))
-        self._filter_combo.setStyleSheet(
-            f"QComboBox {{ background-color: {COLORS['bg_card']}; "
-            f"color: {COLORS['text_primary']}; border: 1px solid {COLORS['border']}; "
-            f"border-radius: 4px; padding: 1px 6px; }}")
-        self._filter_combo.currentTextChanged.connect(
-            lambda v: self._populate_table(v))
-        head_row.addWidget(self._filter_combo)
-        root.addLayout(head_row)
+        root.addWidget(tip)
 
-        self.table = QTableWidget()
-        self.table.setColumnCount(len(NewProductDialog.REFERENCE_HEADERS))
-        self.table.setHorizontalHeaderLabels(NewProductDialog.REFERENCE_HEADERS)
-        self.table.setRowCount(len(NewProductDialog.PRODUCT_SIZE_TABLE))
-        self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
-        self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
-        self.table.setAlternatingRowColors(True)
-        self.table.verticalHeader().setVisible(False)
-        header = self.table.horizontalHeader()
-        header.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
-        header.setStretchLastSection(True)
-        self.table.setStyleSheet(
-            f"QTableWidget {{ background-color: {COLORS['bg_card']}; "
-            f"color: {COLORS['text_primary']}; gridline-color: {COLORS['border']}; "
-            f"border: 1px solid {COLORS['border']}; border-radius: 4px; font-size: 10px; }}"
-            f"QHeaderView::section {{ background-color: {COLORS['bg_panel']}; "
-            f"color: {COLORS['accent_orange']}; font-weight: bold; "
-            f"border: 1px solid {COLORS['border']}; padding: 4px; }}"
-            f"QTableWidget::item {{ padding: 2px; }}")
-
-        self._populate_table("全部")
-        root.addWidget(self.table, 1)
-
-        # —— 底部：电极结构图示说明（2026-11-17 需求）——
-        diag_box = QFrame()
-        diag_box.setStyleSheet(
-            f"QFrame {{ background-color: {COLORS['bg_card']}; "
-            f"border: 1px solid {COLORS['border']}; border-radius: 4px; }}")
-        diag_layout = QHBoxLayout(diag_box)
-        diag_layout.setContentsMargins(10, 8, 10, 8)
-        diag_layout.setSpacing(14)
-
-        img_label = QLabel()
-        img_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        img_path = self._diagram_path()
-        pixmap = QPixmap(img_path) if img_path else QPixmap()
-        if not pixmap.isNull():
-            img_label.setPixmap(
-                pixmap.scaledToHeight(230, Qt.TransformationMode.SmoothTransformation))
-        else:
-            img_label.setText("（电极结构示意图未找到）")
-            img_label.setStyleSheet(f"color: {COLORS['text_secondary']};")
-        diag_layout.addWidget(img_label, 3)
-
-        note = QLabel(
-            "电极结构尺寸说明（单位：mm）\n\n"
-            "• L 长度：电容本体沿电极方向的总长度\n"
-            "• W 宽度：电容本体的宽度\n"
-            "• T 厚度：电容本体的厚度\n"
-            "• BW 电极宽度：两端电极（金属化端头）在 L 方向的覆盖宽度，"
-            "表中给出 BWmin ~ BWmax 范围\n"
-            "• L2 电极间距：两端电极之间的最小净距，L2 = L − (左 BW + 右 BW)")
-        note.setFont(_yahei(11))
-        note.setWordWrap(True)
-        note.setAlignment(Qt.AlignmentFlag.AlignTop)
-        note.setStyleSheet(f"color: {COLORS['text_primary']}; line-height: 150%;")
-        diag_layout.addWidget(note, 2)
-        root.addWidget(diag_box)
+        self.tabs = QTabWidget()
+        self.tabs.setStyleSheet(
+            f"QTabWidget::pane {{ border: 1px solid {COLORS['border']}; "
+            f"background-color: {COLORS['bg_card']}; border-radius: 4px; }}"
+            f"QTabBar::tab {{ background-color: {COLORS['bg_panel']}; "
+            f"color: {COLORS['text_secondary']}; padding: 6px 18px; "
+            f"border: 1px solid {COLORS['border']}; border-bottom: none; "
+            f"border-top-left-radius: 4px; border-top-right-radius: 4px; "
+            f"font-size: 11px; }}"
+            f"QTabBar::tab:selected {{ background-color: {COLORS['bg_card']}; "
+            f"color: {COLORS['accent_orange']}; font-weight: bold; }}")
+        self._tables = {}
+        for tab_name, headers, ptype, note_text, img_name in NewProductDialog.REFERENCE_PAGES:
+            page, table = self._build_page(headers, ptype, note_text, img_name)
+            self.tabs.addTab(page, tab_name)
+            self._tables[ptype] = table
+        root.addWidget(self.tabs, 1)
 
         close_row = QHBoxLayout()
         close_row.addStretch()
@@ -139,22 +77,38 @@ class ProductSizeReferenceDialog(QDialog):
         close_row.addWidget(close_btn)
         root.addLayout(close_row)
 
-    @staticmethod
-    def _diagram_path():
-        """电极结构示意图路径：打包后取 exe 同级 assets，开发时取项目根 assets。"""
-        name = "mlcc_electrode_diagram.png"
-        if getattr(sys, "frozen", False):
-            base = os.path.dirname(os.path.abspath(sys.executable))
-        else:
-            base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        path = os.path.join(base, "assets", name)
-        return path if os.path.exists(path) else ""
+    def _build_page(self, headers, product_type, note_text, img_name):
+        """构建单个分页：上部表格 + 下部电极结构图示说明。返回承载 QWidget。"""
+        page = QFrame()
+        page.setStyleSheet(f"QFrame {{ background-color: {COLORS['bg_card']}; }}")
+        v = QVBoxLayout(page)
+        v.setContentsMargins(8, 8, 8, 8)
+        v.setSpacing(8)
 
-    def _populate_table(self, product_type):
-        """按产品类型筛选填充表格；公制列去 L，公差/电极列按数据表逐行显示。"""
-        rows = [row for row in NewProductDialog.PRODUCT_SIZE_TABLE
-                if product_type in ("", "全部") or row[0] == product_type]
-        self.table.setRowCount(len(rows))
+        table = QTableWidget()
+        table.setColumnCount(len(headers))
+        table.setHorizontalHeaderLabels(headers)
+        # 电阻用独立规格表，其余从聚合表按类型过滤
+        if product_type == "电阻":
+            rows = NewProductDialog.RESISTOR_SIZE_TABLE
+        else:
+            rows = [r for r in NewProductDialog.PRODUCT_SIZE_TABLE if r[0] == product_type]
+        table.setRowCount(len(rows))
+        table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        table.setAlternatingRowColors(True)
+        table.verticalHeader().setVisible(False)
+        header = table.horizontalHeader()
+        header.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
+        header.setStretchLastSection(True)
+        table.setStyleSheet(
+            f"QTableWidget {{ background-color: {COLORS['bg_card']}; "
+            f"color: {COLORS['text_primary']}; gridline-color: {COLORS['border']}; "
+            f"border: 1px solid {COLORS['border']}; border-radius: 4px; font-size: 10px; }}"
+            f"QHeaderView::section {{ background-color: {COLORS['bg_panel']}; "
+            f"color: {COLORS['accent_orange']}; font-weight: bold; "
+            f"border: 1px solid {COLORS['border']}; padding: 4px; }}"
+            f"QTableWidget::item {{ padding: 2px; }}")
         for r, row in enumerate(rows):
             for c, text in enumerate(row):
                 shown = text
@@ -162,7 +116,47 @@ class ProductSizeReferenceDialog(QDialog):
                     shown = text[1:]
                 item = QTableWidgetItem(shown if shown else "—")
                 item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-                self.table.setItem(r, c, item)
+                table.setItem(r, c, item)
+        v.addWidget(table, 1)
+
+        # 图示说明区
+        diag_box = QFrame()
+        diag_box.setStyleSheet(
+            f"QFrame {{ background-color: {COLORS['bg_panel']}; "
+            f"border: 1px solid {COLORS['border']}; border-radius: 4px; }}")
+        diag_layout = QHBoxLayout(diag_box)
+        diag_layout.setContentsMargins(10, 8, 10, 8)
+        diag_layout.setSpacing(14)
+        img_label = QLabel()
+        img_label.setObjectName("diagram_image")
+        img_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        path = self._diagram_path(img_name) if img_name else ""
+        pixmap = QPixmap(path) if path else QPixmap()
+        if not pixmap.isNull():
+            img_label.setPixmap(
+                pixmap.scaledToHeight(210, Qt.TransformationMode.SmoothTransformation))
+        else:
+            img_label.setText("（暂无结构示意图）")
+            img_label.setStyleSheet(f"color: {COLORS['text_secondary']};")
+        diag_layout.addWidget(img_label, 3)
+        note = QLabel("尺寸 / 电极参数说明（单位：mm）\n\n" + note_text)
+        note.setFont(_yahei(11))
+        note.setWordWrap(True)
+        note.setAlignment(Qt.AlignmentFlag.AlignTop)
+        note.setStyleSheet(f"color: {COLORS['text_primary']};")
+        diag_layout.addWidget(note, 2)
+        v.addWidget(diag_box)
+        return page, table
+
+    @staticmethod
+    def _diagram_path(name="mlcc_electrode_diagram.png"):
+        """示意图路径：打包后取 exe 同级 assets，开发时取项目根 assets。"""
+        if getattr(sys, "frozen", False):
+            base = os.path.dirname(os.path.abspath(sys.executable))
+        else:
+            base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        path = os.path.join(base, "assets", name)
+        return path if os.path.exists(path) else ""
 
     @staticmethod
     def _close_btn_style():
@@ -235,10 +229,43 @@ class NewProductDialog(QDialog):
         ("晶振", "", "3225", "3.20", "2.50", "0.55", "—", "—", "—", "—", "—", "—"),
     ]
     REFERENCE_TYPES = ("电容", "电阻", "电感", "晶振")
+    # 电容表头：L/W/T + 公差 + 电极 BWmin/BWmax/L2
     REFERENCE_HEADERS = ("产品类型", "产品尺寸(英制 inch)", "产品尺寸(公制 mm)",
                          "L 长度", "L长度公差", "W 宽度", "W宽度公差",
                          "T 厚度", "T厚度公差",
                          "最小电极宽度\nBWmin", "最大电极宽度\nBWmax", "最小电极间距\nL2")
+    # 电阻表头：L/W/T + 公差 + 顶面电极宽度A / 底面电极宽度B（无 L2）
+    RESISTOR_HEADERS = ("产品类型", "产品尺寸(英制 inch)", "产品尺寸(公制 mm)",
+                        "L 长度", "L长度公差", "W 宽度", "W宽度公差",
+                        "T 厚度", "T厚度公差",
+                        "顶面电极宽度\nA", "底面电极宽度\nB")
+    # 电感/晶振表头：沿用 L/W/T + 公差 + 电极占位（暂无详细数据）
+    SIMPLE_HEADERS = REFERENCE_HEADERS
+    # 贴片电阻规格表（7 行）——按用户提供的 Chip-R 规格表逐行录入
+    RESISTOR_SIZE_TABLE = [
+        ("电阻", "01005", "0402", "0.40", "±0.02", "0.20", "±0.02", "0.13", "±0.02", "0.10±0.03", "0.10±0.03"),
+        ("电阻", "0201", "0603", "0.60", "±0.03", "0.30", "±0.03", "0.23", "±0.03", "0.10±0.05", "0.15±0.05"),
+        ("电阻", "0402", "1005", "1.00", "±0.05", "0.50", "±0.05", "0.35", "±0.05", "0.20±0.10", "0.25±0.10"),
+        ("电阻", "0603", "1608", "1.60", "±0.10", "0.80", "±0.10", "0.45", "±0.10", "0.30±0.20", "0.35±0.10"),
+        ("电阻", "0805", "2012", "2.00", "±0.20", "1.25", "±0.15", "0.55", "±0.10", "0.40±0.20", "0.35±0.20"),
+        ("电阻", "1206", "3216", "3.20", "±0.20", "1.60", "±0.15", "0.62", "±0.10", "0.45±0.20", "0.40±0.20"),
+        ("电阻", "1210", "3225", "3.20", "±0.20", "2.55", "±0.20", "0.62", "±0.10", "0.45±0.20", "0.40±0.20"),
+    ]
+    # 分页配置：(tab 名, 表头, 数据表, 说明文字, 示意图文件名)
+    REFERENCE_PAGES = (
+        ("MLCC电容", REFERENCE_HEADERS, "电容",
+         "电容本体尺寸与两端电极（BW）结构：L 长度、W 宽度、T 厚度；"
+         "BWmin~BWmax 为电极覆盖宽度范围，L2 为两端电极间最小净距 (L2 = L − 左BW − 右BW)。",
+         "mlcc_electrode_diagram.png"),
+        ("贴片电阻", RESISTOR_HEADERS, "电阻",
+         "贴片电阻三视图：L 长度、W 宽度、T 厚度；"
+         "A 为顶面电极宽度、B 为底面电极宽度（详见 Top/Side/Bottom View）。",
+         "resistor_electrode_diagram.png"),
+        ("贴片电感", SIMPLE_HEADERS, "电感",
+         "贴片电感常见尺寸参考（公差/电极参数待后续补充）。", ""),
+        ("晶振", SIMPLE_HEADERS, "晶振",
+         "贴片晶振常见尺寸参考（公差/电极参数待后续补充）。", ""),
+    )
     # 尺寸字段顺序：键后缀、中文标签
     DIMENSIONS = [
         ("length", "长度"),

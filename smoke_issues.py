@@ -3007,6 +3007,11 @@ check(len(_NPD.REFERENCE_HEADERS) == 12
       and "BWmax" in _NPD.REFERENCE_HEADERS[10]
       and "L2" in _NPD.REFERENCE_HEADERS[11],
       "尺寸参考表: 12 列含英制/公制/L/W/T公差 + BWmin/BWmax/L2 标注")
+check(len(_NPD.RESISTOR_HEADERS) == 11
+      and _NPD.RESISTOR_HEADERS[9].endswith("A")
+      and _NPD.RESISTOR_HEADERS[10].endswith("B")
+      and len(_NPD.RESISTOR_SIZE_TABLE) == 7,
+      "尺寸参考表: 电阻独立表头(顶面电极A/底面电极B)、7 行规格")
 # 逐行核对四张表的关键尺寸
 _ref_expected = {
     ("电容", "0201"): ("0.60", "0.30", "0.30"),
@@ -3047,11 +3052,16 @@ check(hasattr(_npd5, "_btn_size_ref")
 from new_product_dialog import ProductSizeReferenceDialog as _PSRD
 from PyQt6.QtCore import Qt as _Qt
 _ref = _PSRD(None)
-check(_ref.table.rowCount() == len(_NPD.PRODUCT_SIZE_TABLE)
-      and _ref.table.columnCount() == 12
+check(_ref.tabs.count() == 4
+      and [_ref.tabs.tabText(i) for i in range(4)]
+      == ["MLCC电容", "贴片电阻", "贴片电感", "晶振"]
       and not _ref.isModal()
       and not (_ref.windowFlags() & _Qt.WindowType.WindowStaysOnTopHint),
-      "产品尺寸参考: 弹窗为分类表格(31行12列)、非模态、不置顶")
+      "产品尺寸参考: 四个分页(MLCC电容/贴片电阻/贴片电感/晶振)、非模态、不置顶")
+check(_ref._tables["电容"].rowCount() == 8 and _ref._tables["电容"].columnCount() == 12
+      and _ref._tables["电阻"].rowCount() == 7 and _ref._tables["电阻"].columnCount() == 11
+      and _ref._tables["电感"].rowCount() == 10 and _ref._tables["晶振"].rowCount() == 6,
+      "产品尺寸参考: 电容8行×12列/电阻7行×11列/电感10行/晶振6行")
 _ref.deleteLater()
 # 窗口高度自适应（远小于旧的 820，且底部按钮完整可见）
 check(_npd5.height() <= 620 and _npd5.height() >= 500,
@@ -3063,45 +3073,48 @@ check(_btn_bottom <= _win_bottom,
       f"新建产品: 底部按钮完整落在窗口内 (btn={_btn_bottom}, win={_win_bottom})")
 _npd5.deleteLater()
 
-# ============ 2026-11-17：参考窗口公制去 L + 产品类型筛选 + 产品尺寸→检测项联动 ============
-# 需求3：公制列去掉首字母 L；右上角产品类型下拉筛选
+# ============ 2026-11-17：参考窗口四分页 + 公制去 L + 产品尺寸→检测项联动 ============
 _ref3 = _PSRD(None)
-_metric_vals = [_ref3.table.item(r, 2).text() for r in range(_ref3.table.rowCount())]
+# 电容页：公制去 L；公差/电极按 MLCC 规格表
+_cap = _ref3._tables["电容"]
+_metric_vals = [_cap.item(r, 2).text() for r in range(_cap.rowCount())]
 check(all(not v.startswith("L") for v in _metric_vals),
-      f"尺寸参考: 公制列已去除首字母 L (实际含L={[v for v in _metric_vals if v.startswith('L')][:3]})")
-# 新增 6 列：电容公差/电极来自用户 MLCC 规格表，其他类型占位 —
-_ref3_cap0 = [_ref3.table.item(0, c).text() for c in range(6, 12)]
-check(_ref3_cap0 == ["±0.013", "±0.013", "±0.013", "0.05", "0.10", "0.05"],
-      f"尺寸参考: 电容008004 公差/电极按规格表 (实际 {_ref3_cap0})")
-_ref3_cap0201 = [_ref3.table.item(2, c).text() for c in range(6, 12)]
-check(_ref3_cap0201 == ["±0.05", "±0.05", "±0.05", "0.10", "0.20", "0.20"]
-      and _ref3.table.item(0, 5).text() == "0.125",  # 008004 T=0.125（原 0.13 按表校正）
-      f"尺寸参考: 电容0201 公差/电极按规格表 (实际 {_ref3_cap0201})")
-_ref3_res = [_ref3.table.item(8, c).text() for c in range(6, 12)]
-check(all(v == "—" for v in _ref3_res),
-      f"尺寸参考: 电阻公差/电极暂无数据占位 — (实际 {_ref3_res})")
-# 底部电极结构图示说明区
+      f"尺寸参考: 电容页公制列已去除首字母 L (实际含L={[v for v in _metric_vals if v.startswith('L')][:3]})")
+_cap0 = [_cap.item(0, c).text() for c in range(6, 12)]
+check(_cap0 == ["±0.013", "±0.013", "±0.013", "0.05", "0.10", "0.05"],
+      f"尺寸参考: 电容008004 公差/电极按规格表 (实际 {_cap0})")
+_cap0201 = [_cap.item(2, c).text() for c in range(6, 12)]
+check(_cap0201 == ["±0.05", "±0.05", "±0.05", "0.10", "0.20", "0.20"]
+      and _cap.item(0, 5).text() == "0.125",
+      f"尺寸参考: 电容0201 公差/电极按规格表 (实际 {_cap0201})")
+# 电阻页：独立规格表（英制齐全、A/B 电极）
+_res = _ref3._tables["电阻"]
+check([_res.item(0, c).text() for c in range(11)]
+      == ["电阻", "01005", "0402", "0.40", "±0.02", "0.20", "±0.02", "0.13", "±0.02", "0.10±0.03", "0.10±0.03"]
+      and _res.horizontalHeaderItem(9).text().endswith("A")
+      and _res.horizontalHeaderItem(10).text().endswith("B"),
+      f"尺寸参考: 电阻页按 Chip-R 规格表(含A/B电极) "
+      f"(实际 {[_res.item(0, c).text() for c in range(11)]})")
+check([_res.item(6, c).text() for c in range(11)]
+      == ["电阻", "1210", "3225", "3.20", "±0.20", "2.55", "±0.20", "0.62", "±0.10", "0.45±0.20", "0.40±0.20"],
+      "尺寸参考: 电阻1210/3225 行数据正确")
+# 电感/晶振页沿用原表
+check(_ref3._tables["电感"].rowCount() == 10 and _ref3._tables["晶振"].rowCount() == 6,
+      "尺寸参考: 电感10行/晶振6行沿用原表")
+# 底部电极结构图示：电容 MLCC 图 + 电阻三视图
 from PyQt6.QtWidgets import QLabel as _QLabel2
-_diagram_ok = (any("BWmin" in lb.text() and "L2" in lb.text()
-                   for lb in _ref3.findChildren(_QLabel2))
-               and any(lb.pixmap() is not None and not lb.pixmap().isNull()
-                       for lb in _ref3.findChildren(_QLabel2))
-               and os.path.exists(_PSRD._diagram_path()))
-check(_diagram_ok, "尺寸参考: 含电极结构示意图与 BWmin/BWmax/L2 文字说明")
-check(hasattr(_ref3, "_filter_combo")
-      and _ref3._filter_combo.itemText(0) == "全部"
-      and all(t in [_ref3._filter_combo.itemText(i)
-                    for i in range(_ref3._filter_combo.count())]
-              for t in ("电容", "电阻", "电感", "晶振")),
-      "尺寸参考: 右上角含产品类型下拉筛选(全部/电容/电阻/电感/晶振)")
-_ref3._filter_combo.setCurrentText("电感")
-check(_ref3.table.rowCount() == 10
-      and all(_ref3.table.item(r, 0).text() == "电感"
-              for r in range(_ref3.table.rowCount())),
-      f"尺寸参考: 筛选电感后仅显示电感 10 行 (实际 {_ref3.table.rowCount()})")
-_ref3._filter_combo.setCurrentText("晶振")
-check(_ref3.table.rowCount() == 6,
-      f"尺寸参考: 筛选晶振后仅显示晶振 6 行 (实际 {_ref3.table.rowCount()})")
+_img_labels = [lb for lb in _ref3.findChildren(_QLabel2)
+               if lb.objectName() == "diagram_image" and lb.pixmap() is not None
+               and not lb.pixmap().isNull()]
+check(len(_img_labels) == 2
+      and os.path.exists(_PSRD._diagram_path("mlcc_electrode_diagram.png"))
+      and os.path.exists(_PSRD._diagram_path("resistor_electrode_diagram.png")),
+      f"尺寸参考: 电容/电阻分页各含透明底电极结构示意图 (实际 {len(_img_labels)} 张)")
+check(any("BWmin" in lb.text() and "L2" in lb.text()
+          for lb in _ref3.findChildren(_QLabel2))
+      and any("顶面电极宽度" in lb.text() and "底面电极宽度" in lb.text()
+              for lb in _ref3.findChildren(_QLabel2)),
+      "尺寸参考: 含电容 BW/L2 与电阻 A/B 电极文字说明")
 _ref3.deleteLater()
 # 需求1：产品尺寸 → 检测项 106/107/108 标称/规格上下限联动
 check(DebugView.PRODUCT_DIM_DETECT == {"length": "106", "width": "107", "thickness": "108"},
