@@ -35,7 +35,7 @@ class ProductSizeReferenceDialog(QDialog):
         self.setModal(False)
         self.setWindowFlags(self.windowFlags() & ~Qt.WindowType.WindowStaysOnTopHint)
         self.setStyleSheet(f"QDialog {{ background-color: {COLORS['bg_dark']}; }}")
-        self.setFixedSize(660, 520)
+        self.setFixedSize(1160, 520)   # 2026-11-17：表格增至 12 列，宽度 660 → 1160
 
         root = QVBoxLayout(self)
         root.setContentsMargins(14, 14, 14, 14)
@@ -101,12 +101,14 @@ class ProductSizeReferenceDialog(QDialog):
         root.addLayout(close_row)
 
     def _populate_table(self, product_type):
-        """按产品类型筛选填充表格；公制列去掉首字母 L 后显示。"""
+        """按产品类型筛选填充表格；公制列去 L，末尾追加公差/电极参数 6 列。"""
         rows = [row for row in NewProductDialog.PRODUCT_SIZE_TABLE
                 if product_type in ("", "全部") or row[0] == product_type]
         self.table.setRowCount(len(rows))
+        extra = NewProductDialog.REFERENCE_EXTRA_VALUES
         for r, row in enumerate(rows):
-            for c, text in enumerate(row):
+            values = list(row) + list(extra)
+            for c, text in enumerate(values):
                 shown = text
                 if c == 2 and text.startswith("L"):   # 公制列删除首字母 L 显示
                     shown = text[1:]
@@ -179,7 +181,12 @@ class NewProductDialog(QDialog):
     ]
     REFERENCE_TYPES = ("电容", "电阻", "电感", "晶振")
     REFERENCE_HEADERS = ("产品类型", "产品尺寸(英制 inch)", "产品尺寸(公制 mm)",
-                         "L 长度", "W 宽度", "T 厚度")
+                         "L 长度", "W 宽度", "T 厚度",
+                         "长度公差", "宽度公差", "厚度公差",
+                         "最小电极宽度", "最大电极宽度", "电极间距")
+    # 2026-11-17 需求：参考表新增 6 列的默认值。公差沿用新建产品默认 ±0.05；
+    # 电极宽度/间距用户暂未提供数据，留「—」占位（后续可在数据表补充）。
+    REFERENCE_EXTRA_VALUES = ("±0.05", "±0.05", "±0.05", "—", "—", "—")
     # 尺寸字段顺序：键后缀、中文标签
     DIMENSIONS = [
         ("length", "长度"),

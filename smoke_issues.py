@@ -2996,10 +2996,14 @@ _pmd_dlg3.deleteLater()
 check(len(_NPD.PRODUCT_SIZE_TABLE) == 30
       and set(_NPD.REFERENCE_TYPES) == {"电容", "电阻", "电感", "晶振"},
       f"尺寸参考表: 四类共 30 条规格 (实际 {len(_NPD.PRODUCT_SIZE_TABLE)})")
-check(len(_NPD.REFERENCE_HEADERS) == 6
+check(len(_NPD.REFERENCE_HEADERS) == 12
       and "英制" in _NPD.REFERENCE_HEADERS[1]
-      and "公制" in _NPD.REFERENCE_HEADERS[2],
-      "尺寸参考表: 6 列含英制/公制/长宽厚")
+      and "公制" in _NPD.REFERENCE_HEADERS[2]
+      and _NPD.REFERENCE_HEADERS[6:] == ("长度公差", "宽度公差", "厚度公差",
+                                          "最小电极宽度", "最大电极宽度", "电极间距"),
+      "尺寸参考表: 12 列含英制/公制/长宽厚 + 公差/电极参数 6 列")
+check(_NPD.REFERENCE_EXTRA_VALUES == ("±0.05", "±0.05", "±0.05", "—", "—", "—"),
+      "尺寸参考表: 公差列默认 ±0.05、电极参数列占位 —")
 # 逐行核对四张表的关键尺寸
 _ref_expected = {
     ("电容", "0201"): ("0.60", "0.30", "0.30"),
@@ -3041,10 +3045,10 @@ from new_product_dialog import ProductSizeReferenceDialog as _PSRD
 from PyQt6.QtCore import Qt as _Qt
 _ref = _PSRD(None)
 check(_ref.table.rowCount() == len(_NPD.PRODUCT_SIZE_TABLE)
-      and _ref.table.columnCount() == 6
+      and _ref.table.columnCount() == 12
       and not _ref.isModal()
       and not (_ref.windowFlags() & _Qt.WindowType.WindowStaysOnTopHint),
-      "产品尺寸参考: 弹窗为分类表格(30行6列)、非模态、不置顶")
+      "产品尺寸参考: 弹窗为分类表格(30行12列)、非模态、不置顶")
 _ref.deleteLater()
 # 窗口高度自适应（远小于旧的 820，且底部按钮完整可见）
 check(_npd5.height() <= 620 and _npd5.height() >= 500,
@@ -3062,6 +3066,13 @@ _ref3 = _PSRD(None)
 _metric_vals = [_ref3.table.item(r, 2).text() for r in range(_ref3.table.rowCount())]
 check(all(not v.startswith("L") for v in _metric_vals),
       f"尺寸参考: 公制列已去除首字母 L (实际含L={[v for v in _metric_vals if v.startswith('L')][:3]})")
+# 新增 6 列：公差 ±0.05、电极参数占位 —
+_ref3_extra = [[_ref3.table.item(r, c).text() for c in range(6, 12)]
+               for r in range(_ref3.table.rowCount())]
+check(all(row == ["±0.05", "±0.05", "±0.05", "—", "—", "—"]
+          for row in _ref3_extra),
+      f"尺寸参考: 每行含长度/宽度/厚度公差 ±0.05 与电极参数占位 — "
+      f"(实际首行 {_ref3_extra[0]})")
 check(hasattr(_ref3, "_filter_combo")
       and _ref3._filter_combo.itemText(0) == "全部"
       and all(t in [_ref3._filter_combo.itemText(i)
