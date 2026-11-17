@@ -11,7 +11,7 @@ from PyQt6.QtWidgets import (
     QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView, QTabWidget,
 )
 from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QFont
+from PyQt6.QtGui import QFont, QFontMetrics
 
 from styles import COLORS
 from components import Card
@@ -48,8 +48,9 @@ class _AutoWidthTable(QTableWidget):
     """列宽自适应表格：按内容计算自然宽度，并铺满可视区域。
 
     - 自然宽度 = max(表头文字宽, 该列最宽单元格文字宽) + 内边距；
-    - 若各列自然宽度总和小于可视宽度，则按比例放大分配，铺满整行；
-    - 若总和大于可视宽度，则按比例压缩并保留最小宽度（允许横向滚动）。
+    - 2026-11-17 需求 H：每列按**能完整显示列头名称的最小宽度**显示——
+      不再按比例放大铺满可视区域，也不再压缩到表头所需宽度以下
+      （超出可视区域时由横向滚动条承载）；
     - 2026-11-17：表头文字按最终列宽**自动换行**（一行放不下则折行显示，不截断）。
     """
 
@@ -144,27 +145,10 @@ class _AutoWidthTable(QTableWidget):
             return
         header = self.horizontalHeader()
         header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
-        avail = max(self.viewport().width(), 100)
-        total = sum(self._natural)
-        if total <= 0:
-            return
-        min_w = 56
-        if total <= avail:
-            # 有余量：按比例放大铺满
-            extra = avail - total
-            widths = [w + extra * w / total for w in self._natural]
-        else:
-            # 超宽：按比例压缩（不低于最小宽度，超出部分允许横向滚动）
-            widths = [max(min_w, w * avail / total) for w in self._natural]
-        ints = [int(w) for w in widths]
-        # 取整余数补给最宽的列，保证列宽总和与可视宽度一致（无空隙）
-        rest = avail - sum(ints)
-        order = sorted(range(len(ints)), key=lambda c: -widths[c])
-        i = 0
-        while rest > 0 and order:
-            ints[order[i % len(order)]] += 1
-            rest -= 1
-            i += 1
+        # 2026-11-17 需求 H：每列按「能完整显示列头名称的最小宽度」显示——
+        # 不再按比例放大铺满可视区域，也不再压缩到表头所需宽度以下；
+        # 自然宽度总和超出可视区域时由横向滚动条承载（列宽不被压缩，表头不折行）。
+        ints = [int(w) for w in self._natural]
         for c, w in enumerate(ints):
             self.setColumnWidth(c, w)
         self._apply_header_wrap(ints)
@@ -274,20 +258,23 @@ class ProductSizeReferenceDialog(QDialog):
                 item = QTableWidgetItem(shown if shown else "—")
                 item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
                 table.setItem(r, c, item)
-        # 自然列宽 = max(表头文字宽, 最宽单元格宽) + 内边距
-        fm = table.fontMetrics()
-        hfm = header.fontMetrics()
+        # 自然列宽 = max(表头完整显示所需宽度, 最宽单元格宽) + 内边距
+        # 2026-11-17 需求 H：按「能完整显示列头名称的最小宽度」设置——
+        # 用与实际渲染一致的 10px 字体（表头加粗）度量，避免样式表尚未 polish 时
+        # 按默认 12px 字体算出偏大的列宽；显式换行处按换行后最长的一行计算。
+        hfm = QFontMetrics(_yahei(10, True))
+        fm = QFontMetrics(_yahei(10))
         natural = []
         for c in range(table.columnCount()):
             head_item = table.horizontalHeaderItem(c)
             head_text = head_item.text() if head_item else ""
             head_w = max((hfm.horizontalAdvance(ln) for ln in head_text.split("\n")),
                           default=0)
-            w = head_w + 30
+            w = head_w + 14
             for r in range(table.rowCount()):
                 it = table.item(r, c)
                 if it is not None:
-                    w = max(w, fm.horizontalAdvance(it.text()) + 30)
+                    w = max(w, fm.horizontalAdvance(it.text()) + 14)
             natural.append(max(w, 56))
         table.set_natural_widths(natural)
         # 行高固定 + 表头高度按折行后的行数计算：保证表格高度可精确计算（不再随窗口拉伸）
@@ -368,21 +355,23 @@ class NewProductDialog(QDialog):
     }
     REFERENCE_TYPES = ("电容", "电阻", "电感", "晶振")
     # 各分页表头：前两列统一为「产品规格（英制）/（公制）」
-    _SPEC_HEAD = ("产品类型", "产品规格（英制）", "产品规格（公制）")
+    # 2026-11-17 需求 H：表头按指定位置**显式换行**显示——
+    # 「产品规格（英制）/（公制）」在括号前换行；L/W/T 三个公差列在「公差」前换行。
+    _SPEC_HEAD = ("产品类型", "产品规格\n（英制）", "产品规格\n（公制）")
     # 电容表头：L/W/T + 公差 + 电极 BWmin/BWmax/L2
     CAPACITOR_HEADERS = _SPEC_HEAD + (
-        "L 长度", "L长度公差", "W 宽度", "W宽度公差",
-        "T 厚度", "T厚度公差",
+        "L 长度", "L长度\n公差", "W 宽度", "W宽度\n公差",
+        "T 厚度", "T厚度\n公差",
         "最小电极宽度\nBWmin", "最大电极宽度\nBWmax", "最小电极间距\nL2")
     # 电阻表头：L/W/T + 公差 + 顶面电极宽度A / 底面电极宽度B（无 L2）
     RESISTOR_HEADERS = _SPEC_HEAD + (
-        "L 长度", "L长度公差", "W 宽度", "W宽度公差",
-        "T 厚度", "T厚度公差",
+        "L 长度", "L长度\n公差", "W 宽度", "W宽度\n公差",
+        "T 厚度", "T厚度\n公差",
         "顶面电极宽度\nA", "底面电极宽度\nB")
-    # 电感表头：L/W/T + 公差 + 电极宽度 D
+    # 电感表头：L/W/T + 公差 + 电极宽度 D（2026-11-17 需求 H：D 提到前面且不换行）
     INDUCTOR_HEADERS = _SPEC_HEAD + (
-        "L 长度", "L长度公差", "W 宽度", "W宽度公差",
-        "T 厚度", "T厚度公差", "电极宽度\nD")
+        "L 长度", "L长度\n公差", "W 宽度", "W宽度\n公差",
+        "T 厚度", "T厚度\n公差", "D电极宽度")
     # 晶振表头：沿用 L/W/T + 公差 + 电极占位（暂无详细数据）
     CRYSTAL_HEADERS = CAPACITOR_HEADERS
     # 向后兼容别名

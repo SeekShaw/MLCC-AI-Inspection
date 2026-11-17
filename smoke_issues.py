@@ -3018,26 +3018,27 @@ check(len(_NPD.PRODUCT_SIZE_TABLE) == 30
       f"尺寸参考表: 四类共 30 条规格、每行 12 元素 (实际 {len(_NPD.PRODUCT_SIZE_TABLE)})")
 check(len(_NPD.REFERENCE_HEADERS) == 12
       and _NPD.REFERENCE_HEADERS[0] == "产品类型"
-      and _NPD.REFERENCE_HEADERS[1] == "产品规格（英制）"
-      and _NPD.REFERENCE_HEADERS[2] == "产品规格（公制）"
-      and "L长度公差" in _NPD.REFERENCE_HEADERS[4]
-      and "W宽度公差" in _NPD.REFERENCE_HEADERS[6]
-      and "T厚度公差" in _NPD.REFERENCE_HEADERS[8]
+      and _NPD.REFERENCE_HEADERS[1] == "产品规格\n（英制）"
+      and _NPD.REFERENCE_HEADERS[2] == "产品规格\n（公制）"
+      and _NPD.REFERENCE_HEADERS[4] == "L长度\n公差"
+      and _NPD.REFERENCE_HEADERS[6] == "W宽度\n公差"
+      and _NPD.REFERENCE_HEADERS[8] == "T厚度\n公差"
       and "BWmin" in _NPD.REFERENCE_HEADERS[9]
       and "BWmax" in _NPD.REFERENCE_HEADERS[10]
       and "L2" in _NPD.REFERENCE_HEADERS[11],
-      "尺寸参考表: 12 列表头为 产品类型/产品规格（英制）/（公制）+ L/W/T公差 + BWmin/BWmax/L2")
+      "尺寸参考表: 12 列表头为 产品类型/产品规格（英制）/（公制）+ L/W/T公差 + BWmin/BWmax/L2"
+      "（2026-11-17 需求 H：规格/公差列头显式换行）")
 check(len(_NPD.RESISTOR_HEADERS) == 11
       and _NPD.RESISTOR_HEADERS[9].endswith("A")
       and _NPD.RESISTOR_HEADERS[10].endswith("B")
       and len(_NPD.RESISTOR_SIZE_TABLE) == 7,
       "尺寸参考表: 电阻独立表头(顶面电极A/底面电极B)、7 行规格")
 check(len(_NPD.INDUCTOR_HEADERS) == 10
-      and _NPD.INDUCTOR_HEADERS[9].endswith("D")
+      and _NPD.INDUCTOR_HEADERS[9] == "D电极宽度"
       and len(_NPD.INDUCTOR_SIZE_TABLE) == 8
       and all(len(r) == 10 for r in _NPD.INDUCTOR_SIZE_TABLE),
-      "尺寸参考表: 电感独立表头(电极宽度D)、8 行规格")
-check(all(h[:3] == ("产品类型", "产品规格（英制）", "产品规格（公制）")
+      "尺寸参考表: 电感独立表头(末列 D电极宽度，单行不换行)、8 行规格")
+check(all(h[:3] == ("产品类型", "产品规格\n（英制）", "产品规格\n（公制）")
           for h in (_NPD.CAPACITOR_HEADERS, _NPD.RESISTOR_HEADERS,
                     _NPD.INDUCTOR_HEADERS, _NPD.CRYSTAL_HEADERS)),
       "尺寸参考表: 四个分页表头前三列统一为 产品类型/产品规格（英制）/（公制）")
@@ -3149,8 +3150,8 @@ check([_res.item(6, c).text() for c in range(11)]
 # 电感页：按用户提供的 Chip Inductor 规格表更新（8 行 10 列，含 D 电极宽度）
 _ind = _ref3._tables["贴片电感"]
 check(_ind.rowCount() == 8 and _ind.columnCount() == 10
-      and _ind.horizontalHeaderItem(9).text().endswith("D"),
-      "尺寸参考: 电感页 8 行×10 列、末列为电极宽度 D")
+      and _ind.horizontalHeaderItem(9).text() == "D电极宽度",
+      "尺寸参考: 电感页 8 行×10 列、末列为「D电极宽度」（单行不换行）")
 check([_ind.item(0, c).text() for c in range(10)]
       == ["电感", "01005", "0402", "0.40", "±0.02", "0.20", "±0.02", "0.20", "±0.02", "0.095±0.025"],
       f"尺寸参考: 电感01005/0402 行数据正确 "
@@ -3195,14 +3196,31 @@ _head_ok = []
 for _tn in ("MLCC电容", "贴片电阻", "贴片电感", "晶振"):
     _t = _ref3._tables[_tn]
     _head_ok.append([_t.horizontalHeaderItem(c).text() for c in range(3)]
-                     == ["产品类型", "产品规格（英制）", "产品规格（公制）"])
+                     == ["产品类型", "产品规格\n（英制）", "产品规格\n（公制）"])
 check(all(_head_ok),
       f"尺寸参考: 四个分页表头前三列均为 产品类型/产品规格（英制）/（公制） (实际 {_head_ok})")
-# 列宽自适应：按内容计算自然宽度并铺满可视区域（无空隙、无固定宽度）
+# 2026-11-17 需求 H：表头显式换行（规格括号前换行、公差前换行、电感 D 单行）
+_hdr_break_bad = []
+for _tn, _ncol in (("MLCC电容", 12), ("贴片电阻", 11), ("贴片电感", 10), ("晶振", 12)):
+    _t = _ref3._tables[_tn]
+    _hs = [_t.horizontalHeaderItem(c).text() for c in range(_ncol)]
+    if _hs[1] != "产品规格\n（英制）" or _hs[2] != "产品规格\n（公制）":
+        _hdr_break_bad.append((_tn, "规格列", _hs[1], _hs[2]))
+    for _ci, _nm in ((4, "L长度"), (6, "W宽度"), (8, "T厚度")):
+        if _hs[_ci] != _nm + "\n公差":
+            _hdr_break_bad.append((_tn, _ci, _hs[_ci]))
+    if _tn == "贴片电感":
+        if _hs[9] != "D电极宽度" or "\n" in _hs[9]:
+            _hdr_break_bad.append((_tn, 9, _hs[9]))
+check(not _hdr_break_bad,
+      f"尺寸参考: 表头按需求 H 显式换行（规格/公差换行、电感 D电极宽度单行） "
+      f"(异常 {_hdr_break_bad})")
+# 列宽规则（2026-11-17 需求 H）：每列按「能完整显示列头名称的最小宽度」显示
 _ref3.show()
 from PyQt6.QtWidgets import QApplication as _QAppCls
 _QAppCls.processEvents()
 _width_report = {}
+_min_w_bad = {}
 for _i, _tn in enumerate(("MLCC电容", "贴片电阻", "贴片电感", "晶振")):
     _ref3.tabs.setCurrentIndex(_i)      # 逐页激活后测量（未激活页尚未布局）
     _QAppCls.processEvents()
@@ -3210,9 +3228,21 @@ for _i, _tn in enumerate(("MLCC电容", "贴片电阻", "贴片电感", "晶振"
     _ws = [_t.columnWidth(c) for c in range(_t.columnCount())]
     _vp = _t.viewport().width()
     _width_report[_tn] = (sum(_ws), _vp, min(_ws))
-check(all(abs(s - vp) <= 4 and mn >= 56
+    _hfm = _t.horizontalHeader().fontMetrics()
+    _bad = []
+    for _c in range(_t.columnCount()):
+        _it = _t.horizontalHeaderItem(_c)
+        if _it is None:
+            continue
+        _need = max(_hfm.horizontalAdvance(_ln) for _ln in _it.text().split("\n"))
+        if _t.columnWidth(_c) < _need:
+            _bad.append((_c, _t.columnWidth(_c), _need))
+    _min_w_bad[_tn] = _bad
+check(all(s <= vp + 4 and mn >= 56
           for s, vp, mn in _width_report.values()),
-      f"尺寸参考: 四个分页列宽按内容自适应且铺满可视区域 (实际 {_width_report})")
+      f"尺寸参考: 四个分页列宽按最小宽度设置（不再按比例放大铺满视口） (实际 {_width_report})")
+check(all(not v for v in _min_w_bad.values()),
+      f"尺寸参考: 每列宽度均 ≥ 表头完整显示所需宽度（表头不被压缩折行） (实际 {_min_w_bad})")
 _cap_w = [_ref3._tables["MLCC电容"].columnWidth(c) for c in range(12)]
 check(_cap_w[1] > _cap_w[3] and _cap_w[9] > _cap_w[0],
       f"尺寸参考: 列宽按内容差异化自适应（长文本列 > 窄列） (实际 {_cap_w})")
