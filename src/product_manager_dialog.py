@@ -269,6 +269,9 @@ class ProductManagerDialog(QDialog):
                 "description": dlg.product_description or _description_for(dlg.product_type),
                 "custom_type_display": dlg.custom_type_display,
                 "custom_model_display": dlg.custom_model_display,
+                "product_length": dlg.product_length,
+                "product_width": dlg.product_width,
+                "product_thickness": dlg.product_thickness,
                 "camera_configs": list(dlg.camera_configs),
             })
             self._refresh_table()
@@ -300,6 +303,9 @@ class ProductManagerDialog(QDialog):
             "description": src.get("description", _description_for(src["product_type"])),
             "custom_type_display": src.get("custom_type_display", ""),
             "custom_model_display": src.get("custom_model_display", ""),
+            "product_length": src.get("product_length", ""),
+            "product_width": src.get("product_width", ""),
+            "product_thickness": src.get("product_thickness", ""),
             "camera_configs": list(src.get("camera_configs", NewProductDialog.CAMERA_DEFAULTS)),
         }
         self.products.append(new_product)

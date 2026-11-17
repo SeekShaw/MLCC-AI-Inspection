@@ -39,7 +39,7 @@ class NewProductDialog(QDialog):
         super().__init__(parent)
         self._is_edit = edit_product is not None
         self.setWindowTitle("编辑产品" if self._is_edit else "新建产品")
-        self.setFixedSize(520, 560)
+        self.setFixedSize(520, 640)   # 2026-11-17：第一步新增尺寸输入区，高度 560 → 640
         self.setModal(True)
         self.setStyleSheet(f"QDialog {{ background-color: {COLORS['bg_dark']}; }}")
 
@@ -52,6 +52,10 @@ class NewProductDialog(QDialog):
         self.product_description = edit_product.get("description", "") if self._is_edit else ""
         self.custom_type_display = edit_product.get("custom_type_display", "") if self._is_edit else ""
         self.custom_model_display = edit_product.get("custom_model_display", "") if self._is_edit else ""
+        # 2026-11-17 需求：第一步新增「3.输入产品尺寸」（长度 / 宽度 / 厚度）
+        self.product_length = str(edit_product.get("product_length", "")) if self._is_edit else ""
+        self.product_width = str(edit_product.get("product_width", "")) if self._is_edit else ""
+        self.product_thickness = str(edit_product.get("product_thickness", "")) if self._is_edit else ""
         self.camera_configs = list(edit_product.get("camera_configs", self.CAMERA_DEFAULTS)) if self._is_edit else list(self.CAMERA_DEFAULTS)
 
         # 步骤切换时会重新填充内容，保留 combo 引用便于读取
@@ -173,6 +177,36 @@ class NewProductDialog(QDialog):
             le.setFont(_yahei(12))
             le.setPlaceholderText("（可选）")
             le.textChanged.connect(lambda v, a=attr: setattr(self, a, v))
+            row.addWidget(label)
+            row.addWidget(le)
+            row.addStretch()
+            layout.addLayout(row)
+
+        # 第6行起：3.输入产品尺寸（长度 / 宽度 / 厚度）——置于「产品型号（自定义）」
+        # 下方、底部「确认，并进行下一步」按钮上方原先的空白弹性区。
+        size_title = QLabel("3.输入产品尺寸")
+        size_title.setFont(_yahei(12, True))
+        size_title.setStyleSheet(f"color: {COLORS['accent_orange']};")
+        layout.addWidget(size_title)
+        size_rows = [
+            ("长度：", "product_length", self.product_length),
+            ("宽度：", "product_width", self.product_width),
+            ("厚度：", "product_thickness", self.product_thickness),
+        ]
+        self._size_edits = {}
+        for lab, attr, default in size_rows:
+            row = QHBoxLayout()
+            row.setSpacing(12)
+            label = QLabel(lab)
+            label.setFixedWidth(150)
+            label.setFont(_yahei(12))
+            label.setStyleSheet(f"color: {COLORS['text_primary']};")
+            le = QLineEdit(default)
+            le.setFixedSize(250, 32)
+            le.setFont(_yahei(12))
+            le.setPlaceholderText("（可选）")
+            le.textChanged.connect(lambda v, a=attr: setattr(self, a, v))
+            self._size_edits[attr] = le
             row.addWidget(label)
             row.addWidget(le)
             row.addStretch()

@@ -2848,6 +2848,54 @@ _dlg._on_selection_changed()
 check(_dlg._btn_delete.isEnabled(), "母版: 选中副本后「删除产品」按钮恢复启用")
 _dlg.deleteLater()
 
+# ============ 2026-11-17：产品选择第一步新增「3.输入产品尺寸」============
+from new_product_dialog import NewProductDialog as _NPD
+_npd = _NPD(None)
+_npd_labels = [lb.text() for lb in _npd.findChildren(QLabel)]
+check("3.输入产品尺寸" in _npd_labels
+      and all(t in _npd_labels for t in ("长度：", "宽度：", "厚度：")),
+      f"新建产品: 第一步含「3.输入产品尺寸」及 长度/宽度/厚度 "
+      f"(实际 {[t for t in _npd_labels if '尺寸' in t or '度：' in t]})")
+check(set(getattr(_npd, "_size_edits", {})) == {
+      "product_length", "product_width", "product_thickness"},
+      f"新建产品: 三个尺寸输入框齐全 (实际 {sorted(getattr(_npd, '_size_edits', {}))})")
+_npd._size_edits["product_length"].setText("1.2")
+_npd._size_edits["product_width"].setText("0.8")
+_npd._size_edits["product_thickness"].setText("0.5")
+check(_npd.product_length == "1.2" and _npd.product_width == "0.8"
+      and _npd.product_thickness == "0.5",
+      f"新建产品: 尺寸输入实时写入产品数据 (实际 "
+      f"{[_npd.product_length, _npd.product_width, _npd.product_thickness]})")
+_npd.deleteLater()
+_npd_edit = _NPD(None, edit_product={
+    "product_length": "2.0", "product_width": "1.0", "product_thickness": "0.4"})
+check(_npd_edit._size_edits["product_length"].text() == "2.0"
+      and _npd_edit._size_edits["product_width"].text() == "1.0"
+      and _npd_edit._size_edits["product_thickness"].text() == "0.4",
+      "编辑产品: 尺寸字段回显到输入框")
+_npd_edit.deleteLater()
+_src_app_npd = open("C:/Users/Lenovo/WorkBuddy/Teruo/src/app.py", encoding="utf-8").read()
+_src_pmd_npd = open("C:/Users/Lenovo/WorkBuddy/Teruo/src/product_manager_dialog.py", encoding="utf-8").read()
+check('"product_length": dlg.product_length' in _src_app_npd
+      and '"product_width": dlg.product_width' in _src_app_npd
+      and '"product_thickness": dlg.product_thickness' in _src_app_npd
+      and '"product_length": dlg.product_length' in _src_pmd_npd
+      and '"product_length": src.get("product_length", "")' in _src_pmd_npd,
+      "产品尺寸: 新建/编辑写回与复制保留三条链路均已接入")
+_pmd_dlg2 = ProductManagerDialog([{
+    "id": "size-test", "product_type": "电容", "product_model": "0402",
+    "product_spec": "Ver01", "description": "", "camera_configs": [],
+    "product_length": "1.1", "product_width": "0.6", "product_thickness": "0.3",
+}], None)
+_pmd_dlg2.table.selectRow(0)
+_pmd_dlg2._on_selection_changed()
+_pmd_dlg2._on_copy()
+check(_pmd_dlg2.products[-1].get("product_length") == "1.1"
+      and _pmd_dlg2.products[-1].get("product_width") == "0.6"
+      and _pmd_dlg2.products[-1].get("product_thickness") == "0.3",
+      f"拷贝产品: 尺寸字段随配方复制 (实际 {_pmd_dlg2.products[-1]})")
+_pmd_dlg2.deleteLater()
+
 # ============ 2026-11-12 修复：产品管理编辑/新增内容需持久化（退出再打开保留） ============
 import product_manager_dialog as _pmd
 import os as _os

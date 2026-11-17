@@ -1880,6 +1880,9 @@ class MainWindow(QMainWindow):
                 "description": dlg.product_description or _description_for(dlg.product_type),
                 "custom_type_display": dlg.custom_type_display,
                 "custom_model_display": dlg.custom_model_display,
+                "product_length": dlg.product_length,
+                "product_width": dlg.product_width,
+                "product_thickness": dlg.product_thickness,
                 "camera_configs": list(dlg.camera_configs),
             }
             self.products.append(product)
