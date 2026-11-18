@@ -393,8 +393,10 @@ class DistributionDialog(QDialog):
             self._orig_lo, self._orig_hi = self._spec0
             self._spec_title.setText("规格上下限（可仿真调整，联动 CPK 与限线）")
         else:
+            # 2026-11-18：用当前生效档位（N 档用 N 参数，A/B/C 用 A 参数），
+            # 与样本生成 `_defect_active_params` 保持一致——切换参数后限线与散点对得上。
             self._orig_lo, self._orig_hi = \
-                self._owner._defect_a_params(self._row)[self._active_key]
+                self._owner._defect_active_params(self._row)[self._active_key]
             self._spec_title.setText("缺陷参数判定范围（最小值/最大值，可仿真调整）")
         self._lo, self._hi = self._orig_lo, self._orig_hi
         for sb, val in ((self._sb_lo, self._lo), (self._sb_hi, self._hi)):
@@ -4923,14 +4925,32 @@ class DebugView(QWidget):
             return
         now = datetime.now()
         for r in range(table.rowCount()):
-            fv = _to_float(self._table_data[r][4]
-                           if 0 <= r < len(self._table_data) else None)
-            if fv is None:
-                continue
-            lst = self.get_distribution_samples(r)
-            lst.append((now, fv))
-            if len(lst) > 3000:
-                del lst[:len(lst) - 3000]
+            raw_v = str(self._table_data[r][4]) \
+                if 0 <= r < len(self._table_data) else ""
+            # 2026-11-18：N 档+输出缺陷尺寸时检测值为「1(0.6)」括号格式——
+            # 取前导 0/1 作为结果样本，不再因解析失败而停止累积（值分布散点不刷新的根因）。
+            import re as _re_dist
+            _m = _re_dist.match(r"\s*([0-9]+(?:\.[0-9]+)?)", raw_v)
+            fv = _to_float(_m.group(1)) if _m else None
+            if fv is not None:
+                lst = self.get_distribution_samples(r)
+                lst.append((now, fv))
+                if len(lst) > 3000:
+                    del lst[:len(lst) - 3000]
+            # 2026-11-18：同步把最近一帧缺陷参数实测值追加到参数样本池——
+            # 切换判定参数后散点图随生产实时刷新（此前只有固定 48 点基线缓存）。
+            meas = getattr(self, "_defect_meas", {}).get(r)
+            if isinstance(meas, dict) and meas:
+                store = getattr(self, "_defect_param_samples", None)
+                if store is None:
+                    store = self._defect_param_samples = {}
+                per = store.setdefault(r, {})
+                for _lbl, key, _suf in self._DEFECT_FIELDS:
+                    if key in meas:
+                        plist = per.setdefault(key, [])
+                        plist.append((now, float(meas[key])))
+                        if len(plist) > 3000:
+                            del plist[:len(plist) - 3000]
 
     def _on_freeze_toggle(self):
         """画布下方「冻结」按钮：冻结/解冻当前刷新的相机画面。"""
@@ -5621,11 +5641,18 @@ class DebugView(QWidget):
         return self._defect_a_params(r)
 
     def _defect_output_size(self, r):
-        """缺陷不分档且勾选「输出缺陷尺寸」时为 True（2026-11-18 起默认 True）。"""
+        """缺陷检测项（Dec+0/0）是否输出缺陷尺寸。
+
+        2026-11-18 需求：默认「不分档 + 勾选输出尺寸」，**无需先进缺陷定义点确认**——
+        该行没有定义记录时按默认 N + output_size=True 生效；
+        有记录时尊重其档位/开关（A/B/C 档仍不输出）。
+        """
         rec = getattr(self, "_defect_defs", {}).get(r)
-        if isinstance(rec, dict) and rec.get("cur") == "N":
+        if isinstance(rec, dict):
+            if rec.get("cur", "N") != "N":
+                return False
             return bool(rec.get("output_size", True))
-        return False
+        return self._defect_def_enabled(r)
 
     def _sim_defect_measure(self, rnd, r, params=None):
         """模拟一帧缺陷参数实测值并按 A 类参数范围判定（演示数据）。
@@ -5901,6 +5928,14 @@ class DebugView(QWidget):
             rec["output_size"] = (bool(self._chk_output_size.isChecked())
                                   if cat_radios["N"].isChecked() else False)
             self._defect_defs[r] = rec
+            # 2026-11-18：档位/参数范围/输出尺寸改变后，清掉该行的分布样本缓存，
+            # 避免值分布散点图继续显示旧档位/旧参数生成的样本（切换判定参数不刷新）。
+            _dist_store = getattr(self, "_dist_samples", None)
+            if isinstance(_dist_store, dict):
+                _dist_store.pop(r, None)
+            _dps = getattr(self, "_defect_param_samples", None)
+            if isinstance(_dps, dict):
+                _dps.pop(r, None)
             self._sync_defect_name_color(r)   # 有缺陷定义 → 文字恢复常规颜色
             self._dv_log(f"检测项「{name}」缺陷定义已更新（四档范围参数）"
                          + (f"，不分档输出缺陷尺寸={'开' if rec['output_size'] else '关'}"
@@ -6255,14 +6290,15 @@ class DebugView(QWidget):
     def _defect_tip_enabled(self, r):
         """该检测项是否需要在「检测值」悬停时浮现当前缺陷尺寸结果。
 
-        2026-11-18 需求：选择 A/B/C 档缺陷 → 显示；选择「缺陷不分档」(N)
-        且勾选「输出缺陷尺寸」→ 显示；其余（N 未勾选）→ 不显示。
+        2026-11-18 需求：默认「缺陷不分档 + 勾选输出尺寸」**开箱即生效**
+        （无需先进缺陷定义点确认）——没有定义记录的 Dec+0/0 项按默认显示；
+        有记录时 A/B/C 档 → 显示，N 档按 output_size 开关，关则不显示。
         """
         rec = getattr(self, "_defect_defs", {}).get(r)
         if not isinstance(rec, dict):
-            return False
+            return self._defect_def_enabled(r)
         cur = rec.get("cur", "N")
-        return cur in ("A", "B", "C") or (cur == "N" and bool(rec.get("output_size")))
+        return cur in ("A", "B", "C") or (cur == "N" and bool(rec.get("output_size", True)))
 
     def _defect_tip_text(self, r):
         """当前帧缺陷尺寸结果浮窗文本（7 参数实测值 + 判定）。
@@ -6275,7 +6311,7 @@ class DebugView(QWidget):
         meas = getattr(self, "_defect_meas", {}).get(r)
         if not isinstance(meas, dict) or not meas:
             return ""
-        rec = self._defect_defs[r]
+        rec = getattr(self, "_defect_defs", {}).get(r, {})
         grade = self.DEFECT_GRADES.get(rec.get("cur", "N"), "")
         lines = [f"当前缺陷尺寸（{grade}）"]
         for _lbl, key, suf in self._DEFECT_FIELDS:

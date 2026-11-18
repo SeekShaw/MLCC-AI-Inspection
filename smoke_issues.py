@@ -2758,8 +2758,9 @@ check(sorted(_meas1) == ["area_single", "area_total", "count", "len_max",
 _counts_bak = {k: list(v) for k, v in (getattr(dv, "_ok_ng_counts", {}) or {}).items()}
 dv.refresh_detection_values()
 _v1 = str(dv._table_data[_r1][4])
-check(_v1 in ("0", "1"),
-      f"缺陷判定: Dec 行按 A 类参数判定后结果输出 0/1 (实际 {_v1})")
+import re as _re_v1
+check(bool(_re_v1.match(r"^[01](?:\(.*\))?$", _v1)),
+      f"缺陷判定: Dec 行按 A 类参数判定后结果输出 0/1（可带缺陷尺寸括号）(实际 {_v1})")
 # 恢复 OK/NG 计数快照（避免污染后续「初始计数为 0」检查）
 dv._ok_ng_counts = {k: list(v) for k, v in _counts_bak.items()}
 dv._set_ok_ng_display(0)
@@ -2788,9 +2789,33 @@ check(_combo3.currentData() is None and _ddlg3._sb_lo.value() == 0
       and _ddlg3._sb_hi.value() == 0,
       f"值分布: 切回结果模式恢复原规格 0/0 (实际 "
       f"{_ddlg3._sb_lo.value()}~{_ddlg3._sb_hi.value()})")
+# 2026-11-18 需求：N 档+输出尺寸时，切换判定参数后散点样本随生产实时刷新
+_dv_def_bak = dict(dv._defect_defs.get(_r1, {}))
+dv._defect_defs[_r1] = {
+    "N": dv._defect_cat_defaults(1), "A": dv._defect_cat_defaults(1),
+    "B": dv._defect_cat_defaults(2), "C": dv._defect_cat_defaults(2),
+    "cur": "N", "output_size": True}
+dv._dist_samples.pop(_r1, None)
+dv._defect_param_samples.pop(_r1, None)
+_okng_bak3 = {k: list(v) for k, v in (getattr(dv, "_ok_ng_counts", {}) or {}).items()}
+_combo3.setCurrentIndex(1); app.processEvents()   # 切到 len_max
+_n_before = len(_ddlg3._curve.values)
+dv.refresh_detection_values()
+dv._accumulate_distribution_samples()
+_ddlg3._refresh_live(); app.processEvents()
+_n_after = len(_ddlg3._curve.values)
+check(_n_after > _n_before,
+      f"值分布: N档+输出尺寸时切换判定参数后样本随生产刷新 "
+      f"({_n_before} → {_n_after})")
+if _dv_def_bak:
+    dv._defect_defs[_r1] = _dv_def_bak
+else:
+    dv._defect_defs.pop(_r1, None)
 _ddlg3.close()
 dv._dist_samples.pop(_r1, None)
 dv._defect_param_samples.pop(_r1, None)
+dv._ok_ng_counts = {k: list(v) for k, v in _okng_bak3.items()}
+dv._set_ok_ng_display(0)
 # 2026-11-18 需求：检测值列 hover 浮现当前缺陷尺寸结果（A/B/C 档；或 N+输出尺寸）
 import debug_view as _dvmod
 from PyQt6.QtGui import QHelpEvent as _QHelpEvt
@@ -2857,6 +2882,17 @@ finally:
     if _meas_bak_tip:
         dv._defect_meas[_r1] = _meas_bak_tip
     dv._defect_defs.pop(_r1, None)
+# 2026-11-18 需求：没有缺陷定义的 Dec+0/0 检测项，默认即「不分档+输出尺寸」生效
+# （无需进缺陷定义点确定），hover 直接显示当前缺陷尺寸结果
+_r_nodef_def = next((r for r in range(len(dv._table_data))
+                     if r not in dv._defect_defs and dv._defect_def_enabled(r)), None)
+if _r_nodef_def is not None:
+    dv._defect_meas[_r_nodef_def] = {k: 3.0 for k in _meas_keys}
+check(_r_nodef_def is not None
+      and dv._defect_tip_enabled(_r_nodef_def)
+      and dv._defect_output_size(_r_nodef_def)
+      and "当前缺陷尺寸（缺陷不分档）" in dv._defect_tip_text(_r_nodef_def),
+      "缺陷尺寸浮窗: 无缺陷定义记录时按默认不分档+输出尺寸生效（无需点确定）")
 
 # ④ 急停报警行：下拉左侧「报警方案」标签
 _dlg_estop = _ad2.AlarmSettingsDialog(is_super_admin=True)
@@ -5873,14 +5909,15 @@ check(_diff_var >= len(_var_rows) - 1,
 # （区间内 OK，偶发轻微越界演示 NG）；Dec+规格0/0 二值 0/1 单独豁免范围校验
 _range_ok = True
 for r in range(108):
+    lo = _to_float(_dv1._table_data[r][6]); hi = _to_float(_dv1._table_data[r][7])
+    u = str(_dv1._table_data[r][8])
+    if u == "Dec" and lo == 0 and hi == 0:
+        # 2026-11-18：此类项默认输出缺陷尺寸 → 检测值可能为「1(0.6)」括号标注，非纯数值
+        continue
     v = _to_float(_dv1._table_data[r][4])
     if v is None:
         _range_ok = False
         break
-    lo = _to_float(_dv1._table_data[r][6]); hi = _to_float(_dv1._table_data[r][7])
-    u = str(_dv1._table_data[r][8])
-    if u == "Dec" and lo == 0 and hi == 0:
-        continue
     if lo is not None and hi is not None and lo <= hi:
         span = hi - lo
         if v < lo - span * 0.25 or v > hi + span * 0.25:
@@ -6275,15 +6312,18 @@ try:
     for _ in range(80):
         dv.refresh_detection_values()
         v = str(dv._table_data[_rd][4])
-        if v not in ("0", "1"):
+        # 2026-11-18：默认输出缺陷尺寸 → NG 帧可能显示「1(0.6)」，取其前导 0/1 判定
+        import re as _re3
+        _m3 = _re3.match(r"^([01])(?:\(.*\))?$", v)
+        if not _m3:
             _dec_gen_ok = False
             break
         if dv._table.item(_rd, _c_res).text() \
-                != dv._judge_result(True, v, 0, 0, unit="Dec"):
+                != dv._judge_result(True, _m3.group(1), 0, 0, unit="Dec"):
             _dec_gen_ok = False
             break
     check(_dec_gen_ok,
-          "示例值生成(需求③): Dec+规格0/0 的检测项示例值恒为 0/1，0=OK 1=NG 与显示一致")
+          "示例值生成(需求③): Dec+规格0/0 的检测项示例值为 0/1（可带缺陷尺寸括号），判定与显示一致")
 finally:
     dv._table_data[_rd] = _row_bak
     if _val5 is not None:
