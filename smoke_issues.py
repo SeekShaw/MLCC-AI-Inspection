@@ -2653,6 +2653,11 @@ check(sorted(_cats2) == sorted(["缺陷不分档", "A档缺陷", "B档缺陷", "
 _descs2 = [lb.text() for lb in _ddlg2.findChildren(_QLabel2) if "判定说明" in lb.text()]
 check(any("缺陷不分档" in t and "输出为 1" in t for t in _descs2),
       "缺陷定义: 窗口内含判定说明（默认不分档、按范围判定、符合则缺陷输出 1）")
+# 2026-11-18：新建缺陷定义默认「缺陷不分档」且「输出缺陷尺寸」默认勾选
+from PyQt6.QtWidgets import QCheckBox as _QChk0
+_chk_init = [c for c in _ddlg2.findChildren(_QChk0) if c.text() == "输出缺陷尺寸"]
+check(len(_chk_init) == 1 and _chk_init[0].isVisible() and _chk_init[0].isChecked(),
+      "缺陷定义: 新建默认不分档且「输出缺陷尺寸」默认勾选")
 _spins = _ddlg2.findChildren(_QSpin2)     # 缺陷个数 最小值/最大值
 _dspins = _ddlg2.findChildren(_QDSpin2)   # 6 个数值参数 最小值/最大值
 check(len(_spins) == 2 and len(_dspins) == 12,
@@ -2692,7 +2697,7 @@ check(_rec1.get("A", {}).get("count") == {"min": 1.0, "max": 5.0}
       and _rec1.get("C", {}).get("count") == {"min": 1.0, "max": 2.0}
       and _rec1.get("N", {}).get("count") == {"min": 1, "max": 1}
       and _rec1.get("output_size") is False,
-      f"缺陷定义: 确定后按档位写回范围参数(含不分档N档/默认不输出尺寸)（实际 {_rec1})")
+      f"缺陷定义: 确定后按档位写回范围参数(最后确认档位 A → 不输出缺陷尺寸)（实际 {_rec1})")
 check(getattr(dv, "_defect_dlg") is not None
       and not dv._defect_dlg.isVisible(),
       "缺陷定义: 确定后窗口关闭，再次打开回显上次值")
@@ -2708,15 +2713,17 @@ _dspins2b = dv._defect_dlg.findChildren(_QDSpin2)
 check(_dspins2b[10].value() == 0.0 and _dspins2b[11].value() == 30.0,
       f"缺陷定义: B 档范围参数已应用并回显 (实际 缺陷总面积="
       f"{[_dspins2b[10].value(), _dspins2b[11].value()]})")
-# 2026-11-17：缺陷不分档 + 输出缺陷尺寸开关（默认不输出，仅不分档可选）
+# 2026-11-17/18：缺陷不分档 + 输出缺陷尺寸开关（2026-11-18 起默认勾选，仅不分档可选）
 from PyQt6.QtWidgets import QCheckBox as _QChk2
 _chk_out = [c for c in dv._defect_dlg.findChildren(_QChk2) if c.text() == "输出缺陷尺寸"]
-check(len(_chk_out) == 1 and not _chk_out[0].isChecked() and not _chk_out[0].isVisible(),
-      "缺陷定义: 含「输出缺陷尺寸」开关，A/B/C 档下不出现且默认不勾选")
+check(len(_chk_out) == 1 and not _chk_out[0].isVisible(),
+      "缺陷定义: 含「输出缺陷尺寸」开关，A/B/C 档下不出现")
 _rb_n = [rb for rb in dv._defect_dlg.findChildren(_QRBtn2) if rb.text() == "缺陷不分档"][0]
 _rb_n.setChecked(True); app.processEvents()
-check(_chk_out[0].isVisible() and _chk_out[0].isEnabled() and not _chk_out[0].isChecked(),
-      "缺陷定义: 切到「缺陷不分档」后输出缺陷尺寸开关出现、可用、默认不勾选")
+# 该行上次确认档位为 A → output_size=False，重开切回 N 后回显 False（已有存档尊重原选择）
+check(_chk_out[0].isVisible() and _chk_out[0].isEnabled()
+      and not _chk_out[0].isChecked(),
+      "缺陷定义: 切到「缺陷不分档」后输出缺陷尺寸开关出现、可用、回显已保存的未勾选")
 _chk_out[0].setChecked(True)
 _okb2 = [b for b in dv._defect_dlg.findChildren(_QPushButton) if b.text() == "确定"][0]
 _okb2.click(); app.processEvents()

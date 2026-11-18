@@ -5621,10 +5621,10 @@ class DebugView(QWidget):
         return self._defect_a_params(r)
 
     def _defect_output_size(self, r):
-        """缺陷不分档且勾选「输出缺陷尺寸」时为 True（默认 False）。"""
+        """缺陷不分档且勾选「输出缺陷尺寸」时为 True（2026-11-18 起默认 True）。"""
         rec = getattr(self, "_defect_defs", {}).get(r)
         if isinstance(rec, dict) and rec.get("cur") == "N":
-            return bool(rec.get("output_size", False))
+            return bool(rec.get("output_size", True))
         return False
 
     def _sim_defect_measure(self, rnd, r, params=None):
@@ -5692,7 +5692,7 @@ class DebugView(QWidget):
         参数：缺陷沿长度方向的最大长度 / 占长度方向的比例 / 缺陷沿宽厚方向
         的最大长度 / 占宽厚方向的比例 / 单个缺陷面积 / 缺陷总面积 / 缺陷个数，
         每项均设 最小值 / 最大值。2026-11-17 需求：新增「缺陷不分档」档位，
-        A/B/C 类改称 A/B/C 档；不分档时可勾选「输出缺陷尺寸」（默认不输出）。
+        A/B/C 类改称 A/B/C 档；不分档时可勾选「输出缺陷尺寸」（2026-11-18 起默认勾选）。
         切换档位自动暂存当前编辑值并载入所选档位参数；「确定」写回该行全部
         档位记录（重开落在最后确认档位回显；「取消」不保存本次改动）。
         """
@@ -5724,8 +5724,9 @@ class DebugView(QWidget):
                     else:
                         migrated[k] = dict(base[k])
                 rec[cat] = migrated
-            # 不分档默认不输出缺陷尺寸；兼容旧存档
-            rec["output_size"] = bool(old.get("output_size", False))
+            # 2026-11-18 需求：不分档默认**勾选输出缺陷尺寸**（默认 True）；
+            # 旧存档中已显式保存 False（用户主动取消）时仍尊重其选择。
+            rec["output_size"] = bool(old.get("output_size", True))
             if old.get("cur") in self.DEFECT_CATS:
                 start_cat = old["cur"]
         else:
@@ -5733,7 +5734,7 @@ class DebugView(QWidget):
                    "A": self._defect_cat_defaults(1),
                    "B": self._defect_cat_defaults(2),
                    "C": self._defect_cat_defaults(2),
-                   "output_size": False}
+                   "output_size": True}
         dlg = QDialog(self)
         dlg.setWindowTitle(f"缺陷定义 - {name}")
         dlg.setWindowFlags(dlg.windowFlags() | Qt.WindowType.WindowStaysOnTopHint)
@@ -5772,11 +5773,11 @@ class DebugView(QWidget):
         cat_row.addStretch()
         cat_radios[start_cat].setChecked(True)
         v.addLayout(cat_row)
-        # —— 输出缺陷尺寸：仅「缺陷不分档」时出现，默认不输出（2026-11-17 需求）——
+        # —— 输出缺陷尺寸：仅「缺陷不分档」时出现，2026-11-18 起默认勾选 ——
         size_row = QHBoxLayout()
         size_row.setSpacing(8)
         self._chk_output_size = QCheckBox("输出缺陷尺寸")
-        self._chk_output_size.setChecked(rec.get("output_size", False))
+        self._chk_output_size.setChecked(rec.get("output_size", True))
         self._chk_output_size.setStyleSheet(
             f"QCheckBox {{ color: {COLORS['text_primary']}; font-size: 11px; spacing: 6px; }}")
         size_row.addWidget(self._chk_output_size)
@@ -5789,7 +5790,7 @@ class DebugView(QWidget):
             is_n = cat_radios["N"].isChecked()
             self._chk_output_size.setVisible(is_n)
             if is_n:
-                self._chk_output_size.setChecked(rec.get("output_size", False))
+                self._chk_output_size.setChecked(rec.get("output_size", True))
             else:
                 self._chk_output_size.setChecked(False)
 
