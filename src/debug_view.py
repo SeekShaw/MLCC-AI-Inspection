@@ -3756,18 +3756,21 @@ class DebugView(QWidget):
         _f_tbl = QFont("Microsoft YaHei")
         _f_tbl.setPixelSize(10)
         table.setFont(_f_tbl)
-        table.setColumnCount(16)
+        table.setColumnCount(17)
+        # ⚠️ 2026-11-18 需求：在「检测项目」与「标称值」之间新增「检测方法」
+        # 占位列（列号 4）——先只占位，不实现功能内容；底层 _table_data 仍
+        # 保持 12 字段不变（占位列不映射任何字段，见 _data_index_for_col）。
         # ⚠️ 2026-10-09 需求：把「检测值」整列移动到「检测结果」列的**左侧**。
         # 2026-11-12 需求：在「检测项操作」右侧新增「OK数」「NG数」两列
-        # （列号 13 / 14），「良率预警设置」顺延为最后一列（15）。
-        # 新列序：显示所有 / 是否检测 / 检测编号 / 检测项目 / 标称值 /
-        #        补偿值 / 规格下限 / 规格上限 / 单位 / 检测值 / 检测结果 /
+        # （列号 14 / 15），「良率预警设置」顺延为最后一列（16）。
+        # 新列序（17 列）：显示所有 / 是否检测 / 检测编号 / 检测项目 / 检测方法 /
+        #        标称值 / 补偿值 / 规格下限 / 规格上限 / 单位 / 检测值 / 检测结果 /
         #        收料位置 / 检测项操作 / OK数 / NG数 / 良率预警设置
-        # （检测值列号由5 → 9；单位列号由 9 → 8；结果/收料位置仍是 10 / 11）
+        # （检测值列号 10；单位列号 9；结果/收料位置 11 / 12）
         # 「检测结果」位于「收料位置」左侧的约定保持不变。
         # 首列标题作为「显示所有 / 显示已选」切换开关，与参考图保持一致；
         # 数据行首列仍显示当前序号。
-        headers = ["显示所有", "是否检测", "检测编号", "检测项目", "标称值",
+        headers = ["显示所有", "是否检测", "检测编号", "检测项目", "检测方法", "标称值",
                    "补偿值", "规格下限", "规格上限", "单位", "检测值",
                    "检测结果", "收料位置", "检测项操作", "OK数", "NG数",
                    "良率预警设置"]
@@ -3797,7 +3800,8 @@ class DebugView(QWidget):
         # 行数随出厂清单数据长度设定（见下方 raw；2026-11-11 起 109 行，不再写死 10）
         # table.setRowCount(...) 在 raw 数据定义之后调用
         # 12 个数据字段（是否检测, 编号, 项目, 标称, 检测值, 补偿, 下限, 上限, 单位, 收料, 结果, 有分布）
-        # 2026-11-12 需求：表格由 14 列扩到 16 列（新增「OK数」「NG数」），底层 raw
+        # 2026-11-12 需求：表格由 14 列扩到 16 列（新增「OK数」「NG数」）；
+        # 2026-11-18 需求：再扩到 17 列（新增「检测方法」占位列）。底层 raw
         # 仍保持 12 字段——计数是运行时统计，单独存 `_ok_ng_counts`，不进入
         # `_collect_detect_settings`（方案同步 / 存默认 / 存出厂都不复制计数）。
         # 2026-11-11 需求：出厂内置 109 项（FACTORY_DETECT_ITEMS），全部默认启用；
@@ -3872,8 +3876,15 @@ class DebugView(QWidget):
                     hl.setContentsMargins(0, 0, 0, 0)
                     hl.addWidget(chk)
                     table.setCellWidget(r, c, cell_widget)
-                elif c == 9:
-                    # 检测值（2026-10-09 由列号 5 移到 9，位于「检测结果」左侧）：
+                elif c == 4:
+                    # 检测方法（2026-11-18 需求）：占位列，先只占位，不实现功能内容。
+                    # 只读、居中、内容留空；不映射底层 _table_data 字段。
+                    item = QTableWidgetItem("")
+                    item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                    item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                    table.setItem(r, c, item)
+                elif c == 10:
+                    # 检测值（2026-11-18 由列号 9 移到 10，位于「检测结果」左侧）：
                     # 数值标签 + 「值分布」按钮（橙色填充），每一行都有；
                     # 加宽本列以完整显示「数值 + 按钮」（原「数值分布」列的按钮已移入此处）
                     val_widget = QFrame()
@@ -3905,16 +3916,17 @@ class DebugView(QWidget):
                     self._val_tip_rows[val_widget] = r
                     self._val_tip_rows[val_lbl] = r
                     table.setCellWidget(r, c, val_widget)
-                elif c == 8:
-                    # 单位（2026-10-09 由列号 9 移到 8）：
+                elif c == 9:
+                    # 单位（2026-11-18 由列号 8 移到 9）：
                     # 鼠标悬停提示「右键选择单位」，右键弹出菜单（Pixel/mm/Deg/Dec/灰度级）
                     unit_cell = UnitCell(
                         row[8] if len(row) > 8 else "",
                         on_select=lambda t, rr=r: self._set_unit(rr, t))
                     self._unit_cells[r] = unit_cell
                     table.setCellWidget(r, c, unit_cell)
-                elif c == 12:
-                    # 检测项操作：缺陷定义 / 教导 / 复制 / 删除（中性按钮+文字），
+                elif c == 13:
+                    # 检测项操作（2026-11-18 由列号 12 移到 13）：
+                    # 缺陷定义 / 教导 / 复制 / 删除（中性按钮+文字），
                     # 每一行都有（已移除「同步」）。
                     # 2026-11-12 需求：「教导」左侧新增「缺陷定义」——仅检测单位为
                     # Dec 且规格上下限均为 0 的检测项可打开，否则置灰。
@@ -3985,7 +3997,7 @@ class DebugView(QWidget):
                         val = row[di]
                     item = QTableWidgetItem(str(val))
                     item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-                    if c == 10:   # 检测结果：按实际结果着色（OK 绿 / NG 红 / 待定 橙）
+                    if c == 11:   # 检测结果：按实际结果着色（OK 绿 / NG 红 / 待定 橙）
                         self._apply_result_color(item, str(val))
                     table.setItem(r, c, item)
 
@@ -4246,7 +4258,7 @@ class DebugView(QWidget):
         QSS padding + 边框余量，数据列统一再加安全余量。
 
         ⚠️ Qt 的 ``resizeColumnsToContents`` 不计入 cell widget（开关/按钮）尺寸，
-        故对含控件的列（1 是否检测 / 9 检测值 / 15 良率预警设置）单独补最小宽，
+        故对含控件的列（1 是否检测 / 10 检测值 / 13 检测项操作 / 16 良率预警设置）单独补最小宽，
         避免控件被压窄导致文字截断。
         """
         table = getattr(self, "_table", None)
@@ -4275,9 +4287,10 @@ class DebugView(QWidget):
         for c in range(table.columnCount()):
             table.setColumnWidth(c, table.columnWidth(c) + 6)
         # 含 cell widget 的列补最小宽（resizeColumnsToContents 不计入控件尺寸）。
-        # 2026-11-12 修复：列 12「检测项操作」扩为 缺陷定义/教导/复制/删除 4 个
+        # 2026-11-12 修复：列「检测项操作」扩为 缺陷定义/教导/复制/删除 4 个
         # 按钮后未补最小宽，「缺陷定义」文字被压窄截断 → 补 190px。
-        for c, mw in ((1, 120), (9, 150), (12, 190), (15, 150)):
+        # 2026-11-18：新增「检测方法」占位列，含控件列号整体 +1。
+        for c, mw in ((1, 120), (10, 150), (13, 190), (16, 150)):
             if c < table.columnCount():
                 table.setColumnWidth(c, max(table.columnWidth(c), mw))
 
@@ -5302,31 +5315,32 @@ class DebugView(QWidget):
         """表头列号 -> 原始数据 row 索引。
 
         ⚠️ 2026-10-09 列序调整：「检测值」整列移到「检测结果」左侧。
-        2026-11-12 列序（16 列）：0 序号 / 1 是否检测 / 2 检测编号 / 3 检测项目 /
-        4 标称值 / 5 补偿值 / 6 规格下限 / 7 规格上限 / 8 单位 / 9 检测值 /
-        10 检测结果 / 11 收料位置 / 12 检测项操作 / 13 OK数 / 14 NG数 /
-        15 良率预警设置（「数值分布」列的按钮已并入「检测值」列）
+        2026-11-18 列序（17 列）：0 序号 / 1 是否检测 / 2 检测编号 / 3 检测项目 /
+        4 检测方法（占位） / 5 标称值 / 6 补偿值 / 7 规格下限 / 8 规格上限 /
+        9 单位 / 10 检测值 / 11 检测结果 / 12 收料位置 / 13 检测项操作 /
+        14 OK数 / 15 NG数 / 16 良率预警设置（「数值分布」按钮已并入「检测值」列）
 
         原始 row 结构（与列号**不再**一一对应，必须走本函数查表）：
         row[0]=是否检测 row[1]=检测编号 row[2]=检测项目 row[3]=标称值
         row[4]=检测值 row[5]=补偿值 row[6]=规格下限 row[7]=规格上限
         row[8]=单位 row[9]=收料位置 row[10]=检测结果
-        ⚠️ 列 13/14「OK数」「NG数」是系统累计计数，存在 `_ok_ng_counts`，
+        ⚠️ 列 4「检测方法」是占位列，不映射任何字段，返回 None（显示空）。
+        ⚠️ 列 14/15「OK数」「NG数」是系统累计计数，存在 `_ok_ng_counts`，
         不走本映射（构建与刷新均有独立分支）；新增/调整列时**务必同步更新本映射**。
         """
         # 列号 -> row 索引（显式查表，避免改列序时漏改）
         _COL_TO_ROW = {
             2: 1,   # 检测编号
             3: 2,   # 检测项目
-            4: 3,   # 标称值
-            5: 5,   # 补偿值
-            6: 6,   # 规格下限
-            7: 7,   # 规格上限
-            8: 8,   # 单位
-            10: 10,  # 检测结果
-            11: 9,   # 收料位置
+            5: 3,   # 标称值
+            6: 5,   # 补偿值
+            7: 6,   # 规格下限
+            8: 7,   # 规格上限
+            9: 8,   # 单位
+            11: 10,  # 检测结果
+            12: 9,   # 收料位置
         }
-        # 列 9=检测值 用 cellWidget（数值+按钮）单独构建，不走本函数。
+        # 列 4=检测方法（占位，无映射）；列 10=检测值 用 cellWidget（数值+按钮）单独构建。
         return _COL_TO_ROW.get(c)
 
     def _apply_result_color(self, item, result):

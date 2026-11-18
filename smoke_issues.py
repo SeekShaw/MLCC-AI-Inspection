@@ -376,13 +376,23 @@ check(all(b.text() == b.toolTip() and b.text() for b in dv._toolbar_buttons),
 check(all(not (isinstance(w, _QLabel) and "检测列表设置" in w.text())
           for w in dv.findChildren(_QLabel)),
       "工具条: 「检测列表设置：」说明标签已删除")
-# 2) 检测项表格列序（2026-11-12：14 列 → 16 列，「检测项操作」右侧新增 OK数 / NG数）
+# 2) 检测项表格列序（2026-11-12：14 → 16 列；2026-11-18：16 → 17 列，新增「检测方法」占位列）
 _hdrs_all = [dv._table.horizontalHeaderItem(c).text()
              for c in range(dv._table.columnCount())]
-check(dv._table.columnCount() == 16,
-      f"检测列表: 表格列数=16（实际 {dv._table.columnCount()}）")
-check(_hdrs_all[12:16] == ["检测项操作", "OK数", "NG数", "良率预警设置"],
+check(dv._table.columnCount() == 17,
+      f"检测列表: 表格列数=17（实际 {dv._table.columnCount()}）")
+check(_hdrs_all[13:17] == ["检测项操作", "OK数", "NG数", "良率预警设置"],
       "2026-11-12: 「检测项操作」右侧新增 OK数 / NG数，良率预警设置顺延为最后一列")
+# 2026-11-18 需求：「检测方法」占位列位于「检测项目」与「标称值」之间，先只占位
+check(_hdrs_all[4] == "检测方法" and _hdrs_all[3] == "检测项目" and _hdrs_all[5] == "标称值",
+      f"2026-11-18: 「检测方法」占位列位于「检测项目」与「标称值」之间（实际 {_hdrs_all[3:6]}）")
+_meth_item = dv._table.item(0, 4)
+check(_meth_item is not None and _meth_item.text() == ""
+      and not (_meth_item.flags() & _Qt.ItemFlag.ItemIsEditable)
+      and dv._data_index_for_col(4) is None,
+      "2026-11-18: 「检测方法」列只读、内容留空，不映射底层 _table_data 字段")
+check(len(dv._table_data[0]) == 12,
+      "2026-11-18: 新增占位列后底层 _table_data 仍为 12 字段")
 # 最后一列列头名称左对齐显示
 _last_hdr = dv._table.horizontalHeaderItem(dv._table.columnCount() - 1)
 check(_last_hdr.text() == "良率预警设置"
@@ -391,8 +401,8 @@ check(_last_hdr.text() == "良率预警设置"
 # 计算元素精确查找列表：行距放宽（不拥挤）
 check("inner_lay.setSpacing(10)" in src_dv and "padding-left: 6px" in src_dv,
       "精确查找列表: 行间距 10px + 名称左内边距（不再拥挤）")
-check(dv._table.horizontalHeaderItem(15).text() == "良率预警设置",
-      "良率预警列: 第16列表头为「良率预警设置」")
+check(dv._table.horizontalHeaderItem(16).text() == "良率预警设置",
+      "良率预警列: 第17列表头为「良率预警设置」")
 check(dv._yield_warn.get(0) == {"enabled": True, "threshold": 50},
       "良率预警列: 默认启用且阈值 50%")
 _cw = dv._table.cellWidget(0, _hdrs_all.index("良率预警设置"))
@@ -451,7 +461,8 @@ check("分布图" not in "".join(b.text() for b in _val_cw.findChildren(_QPushBu
       "检测值列: 按钮已改名「值分布」（不再叫「分布图」）")
 # ⚠️ 回归护栏：调列序最怕「值串列」。逐列核对**文本列**单元格文本与
 # `_data_index_for_col` 映射的原始数据一致（cellWidget 列无文本 item，跳过）。
-_CELLW_COLS = {1, _unit_col, _val_col, 12, 13}
+_CELLW_COLS = {1, _unit_col, _val_col, _hdrs_all.index("检测项操作"),
+               _hdrs_all.index("良率预警设置")}
 _bad = []
 for _r in range(6):
     for _c, _h in enumerate(_hdrs):
@@ -477,7 +488,7 @@ check(_v_ok, "检测值列: 各行显示值与底层数据 row[4] 一致（未�
 # 此处断言表格正文 = 按钮 = 检测值标签 = 单位单元格，且均为 10px。
 from PyQt6.QtGui import QFontMetrics as _QFM2
 _h_tbl = _QFM2(dv._table.font()).height()
-_tcell = dv._table.cellWidget(0, 12)
+_tcell = dv._table.cellWidget(0, _hdrs_all.index("检测项操作"))
 _teach = [b for b in _tcell.findChildren(_QPushButton) if b.text() == "教导"][0]
 _h_btn = _QFM2(_teach.font()).height()
 check(dv._table.font().pixelSize() == 10,
@@ -6238,8 +6249,12 @@ _root.close()
 # ============ 2026-11-12 需求①：检测列表「OK数 / NG数」两列 ============
 _ok_c = dv._col_by_header("OK数")
 _ng_c = dv._col_by_header("NG数")
-check(_ok_c == 13 and _ng_c == 14 and _hdrs_all[12] == "检测项操作",
-      "OK数/NG数: 列号 13 / 14，紧邻「检测项操作」列右侧")
+check(_ok_c == 14 and _ng_c == 15 and _hdrs_all[13] == "检测项操作",
+      "OK数/NG数: 列号 14 / 15，紧邻「检测项操作」列右侧")
+check(all(v._table.columnCount() == 17
+          and v._table.horizontalHeaderItem(4).text() == "检测方法"
+          for v in getattr(_mw, "debug_views", []) if getattr(v, "_table", None) is not None),
+      "2026-11-18: 各工位检测列表一致含「检测方法」占位列（17 列）")
 check(dv._ok_ng_counts.get(0) == [0, 0]
       and dv._table.item(0, _ok_c).text() == "0"
       and dv._table.item(0, _ng_c).text() == "0",
@@ -6336,8 +6351,8 @@ finally:
 check(all("ok_count" not in it and "ng_count" not in it
           for it in dv._collect_detect_settings()),
       "OK数/NG数: 运行时计数不写入检测方案（方案同步 / 存默认不复制计数）")
-check("cellWidget(r, 13)" not in src_dv and "elif c == 13:" not in src_dv,
-      "OK数/NG数: 16 列后无遗留的良率预警硬编码列号 13")
+check("elif c == 14:" not in src_dv and "elif c == 15:" not in src_dv,
+      "OK数/NG数: 17 列后 OK数/NG数 走表头名定位，无遗留硬编码列号 14/15")
 
 # ============ 2026-11-12 需求②：良率预警设置按钮 / 图标 / 默认权限 ============
 from user_manager import DEFAULT_CATEGORY_PERMISSIONS as _DEFYA
