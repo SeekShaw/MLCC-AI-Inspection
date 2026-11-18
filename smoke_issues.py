@@ -5731,10 +5731,10 @@ _old_zips = [n for n in os.listdir(_ROOT)
 check(not _old_zips,
       f"打包清理: 无旧版本 ZIP 残留 (实际 {_old_zips or '无'})")
 
-# ==== 2026-11-11：检测项出厂清单改为 109 项（100~519），恢复至出厂开启全部 ====
+# ==== 2026-11-11/2026-11-18：检测项出厂清单 108 项（删除 500，100~519），恢复至出厂开启全部 ====
 _fi = _dvmod.FACTORY_DETECT_ITEMS
-check(len(_fi) == 109 and len({c for c, _ in _fi}) == 109,
-      f"出厂清单: 共 109 项且检测编号唯一 (实际 {len(_fi)} 项)")
+check(len(_fi) == 108 and len({c for c, _ in _fi}) == 108,
+      f"出厂清单: 共 108 项且检测编号唯一 (实际 {len(_fi)} 项)")
 check(_fi[0] == ("100", "有无（飞料）") and _fi[2] == ("102", "歪料")
       and _fi[3] == ("103", "连料") and _fi[4] == ("104", "碎料")
       and _fi[-1] == ("519", "瓷体粘碎膜"),
@@ -5744,18 +5744,30 @@ _fi_map = dict(_fi)
 check(_fi_map["410"] == "端面脏污" and _fi_map["411"] == "端面偏色"
       and _fi_map["412"] == "端面开裂" and _fi_map["423"] == "端面凹坑"
       and _fi_map["424"] == "端面长瘤"
-      and _fi_map["500"] == "瓷体粘锡单个面积" and _fi_map["501"] == "瓷体粘锡总面积"
+      and "500" not in _fi_map and _fi_map["501"] == "瓷体沾锡"
       and _fi_map["509"] == "瓷体开裂" and _fi_map["510"] == "瓷体裂纹"
       and _fi_map["511"] == "瓷体划伤" and _fi_map["512"] == "瓷体刮伤"
       and _fi_map["513"] == "瓷体压伤" and _fi_map["514"] == "瓷体凹痕"
       and _fi_map["515"] == "瓷体漏铜" and _fi_map["516"] == "瓷体漏基材"
       and _fi_map["517"] == "瓷体凹坑" and _fi_map["518"] == "瓷体凸起"
       and _fi_map["519"] == "瓷体粘碎膜",
-      "检测项改名: 410/411/412/423/424/500/501/509~519 按最新清单生效（端面/瓷体前缀）")
+      "检测项改名: 410/411/412/423/424/501/509~519 按最新清单生效（删除500、501瓷体沾锡）")
 # 名称在所有相机工位的检测项列表中一致（单位/出料/规格弹窗均读 _table_data，自动一致）
 check(all(_mw.debug_views[i]._table_data[r][2] == _fi_map[_mw.debug_views[i]._table_data[r][1]]
-          for i in range(8) for r in range(109)),
+          for i in range(8) for r in range(108)),
       "检测项改名: 8 工位检测项列表名称与出厂清单逐行一致（单位/出料/规格弹窗同源）")
+# 2026-11-18 需求：删除 500；501「瓷体沾锡」默认单位 Dec、规格上下限 0/0，8 工位一致
+check(all("500" not in {str(r[1]) for r in v._table_data}
+          and (lambda rr: rr is not None
+               and str(rr[2]) == "瓷体沾锡" and str(rr[8]) == "Dec"
+               and float(rr[6] or 0) == 0 and float(rr[7] or 0) == 0)(
+              next((r for r in v._table_data if str(r[1]) == "501"), None))
+          for v in _mw.debug_views),
+      "检测项 500/501: 500 已删除、501 瓷体沾锡默认 Dec/0/0（8 工位全部一致）")
+check(set(_pvm_paths._DEFECT_TYPES) == set(_pvm_paths._DEFECT_SPEC)
+      and "瓷体沾锡" in _pvm_paths._DEFECT_TYPES
+      and "瓷体粘锡总面积" not in _pvm_paths._DEFECT_TYPES,
+      "统计示例: 缺陷项统计名称同步为「瓷体沾锡」（与出厂清单一致）")
 
 # 模拟生产模式：节拍触发检测项示例值刷新（每一项给结果示例值并按生产节奏刷新，2026-11-11）
 _dv = _dvmod.DebugView()
@@ -5808,10 +5820,10 @@ else:
     check(_refr["n"] >= 1, "模拟生产: 节拍触发检测项示例值刷新（每一项给结果示例值并按生产节奏刷新）")
     check(all(str(_dv._table_data[r][4]).strip() != ""
               and str(_dv._table_data[r][10]).strip() != ""
-              for r in range(109)),
-          "模拟生产: 109 项检测项均带示例检测值与结果（OK/NG/待定）")
+              for r in range(108)),
+          "模拟生产: 108 项检测项均带示例检测值与结果（OK/NG/待定）")
     _nz_bad = [(r, _dv._table_data[r][4])
-               for r in range(109)
+               for r in range(108)
                if (_dv._row_checks.get(r) is None or _dv._row_checks[r].is_on())
                and _to_float(_dv._table_data[r][4]) in (None, 0)
                and str(_dv._table_data[r][8]) != "Dec"   # Dec 二值 0/1：0 合法
@@ -5819,15 +5831,15 @@ else:
                         and float(_dv._table_data[r][7] or 0) == 0)]
     check(not _nz_bad,
           f"示例值非 0: 启用且应产生非零示例值的检测项均生成非 0 示例演示值（异常 {_nz_bad[:3]}）")
-    _okn = sum(1 for r in range(109)
+    _okn = sum(1 for r in range(108)
                if str(_dv._table_data[r][10]) in ("OK", "NG", "待定"))
     # 中性规格（0/0）非 Dec 检测项：判定应为 OK（不误报 NG）；有效规格项可 OK 可 NG
     _neutral_ok = all(str(_dv._table_data[r][10]) == "OK"
-                      for r in range(109)
+                      for r in range(108)
                       if float(_dv._table_data[r][6] or 0) == 0
                       and float(_dv._table_data[r][7] or 0) == 0
                       and str(_dv._table_data[r][8]) != "Dec")
-    check(_okn == 109 and _neutral_ok,
+    check(_okn == 108 and _neutral_ok,
           "示例值非 0: 中性规格（0/0）非 Dec 项示例演示值判 OK（不误报 NG）")
 _dv.close()
 
@@ -5841,19 +5853,19 @@ for _d in (_dv1, _dv2):
     for _ in range(3):
         _d._on_play_tick()
 # 可变行 = 具备有效规格（lo<hi）的检测项（0/0 与 lo==hi 项示例值固定，不计入）
-_var_rows = [r for r in range(109)
+_var_rows = [r for r in range(108)
              if (lambda lo, hi: lo is not None and hi is not None and lo < hi)
                 (_to_float(_dv1._table_data[r][6]), _to_float(_dv1._table_data[r][7]))]
 _diff_var = sum(1 for r in _var_rows
                 if str(_dv1._table_data[r][4]) != str(_dv2._table_data[r][4]))
-_diff_n = sum(1 for r in range(109)
+_diff_n = sum(1 for r in range(108)
               if str(_dv1._table_data[r][4]) != str(_dv2._table_data[r][4]))
 check(_diff_var >= len(_var_rows) - 1,
-      f"示例值各机差异: 可变规格项在相机1/相机2 示例值不同（差异 {_diff_n}/109 项，可变项内 {_diff_var}/{len(_var_rows)}）")
+      f"示例值各机差异: 可变规格项在相机1/相机2 示例值不同（差异 {_diff_n}/108 项，可变项内 {_diff_var}/{len(_var_rows)}）")
 # 示例值范围：所有检测项示例值均为有效数值；具备规格的项落在规格上下限范围内
 # （区间内 OK，偶发轻微越界演示 NG）；Dec+规格0/0 二值 0/1 单独豁免范围校验
 _range_ok = True
-for r in range(109):
+for r in range(108):
     v = _to_float(_dv1._table_data[r][4])
     if v is None:
         _range_ok = False
@@ -5903,10 +5915,10 @@ class _FakeCombo:
     def __init__(self, t): self._t = t
     def currentText(self): return self._t
 _gd0u, _gd1u, _gd2u = (_mw.debug_views[0], _mw.debug_views[1], _mw.debug_views[2])
-_r106u = next(r for r in range(109) if str(_gd0u._table_data[r][1]) == "106")
+_r106u = next(r for r in range(108) if str(_gd0u._table_data[r][1]) == "106")
 _gd0u._unit_set_default_global([(_r106u, _FakeCombo("mm"))], show_msg=False)
-_r106_1 = next(r for r in range(109) if str(_gd1u._table_data[r][1]) == "106")
-_r106_2 = next(r for r in range(109) if str(_gd2u._table_data[r][1]) == "106")
+_r106_1 = next(r for r in range(108) if str(_gd1u._table_data[r][1]) == "106")
+_r106_2 = next(r for r in range(108) if str(_gd2u._table_data[r][1]) == "106")
 check(str(_gd1u._table_data[_r106_1][8]) == "mm"
       and str(_gd2u._table_data[_r106_2][8]) == "mm",
       "单位设置-设为默认: 应用到所有相机工位（工位2/工位3 同编号项变 mm）")
@@ -6026,18 +6038,18 @@ _gd_d.close()
 
 # 单位设置 / 出料设置全局联动：本工位修改 → 其它工位同编号检测项同步生效（2026-11-11）
 _gd0, _gd1, _gd2 = (_mw.debug_views[0], _mw.debug_views[1], _mw.debug_views[2])
-_cu_r = next(r for r in range(109) if str(_gd0._table_data[r][1]) == "106")
+_cu_r = next(r for r in range(108) if str(_gd0._table_data[r][1]) == "106")
 _gd0._sync_units_global(_cu_r, "mm")
-_cu_r1 = next(r for r in range(109) if str(_gd1._table_data[r][1]) == "106")
-_cu_r2 = next(r for r in range(109) if str(_gd2._table_data[r][1]) == "106")
+_cu_r1 = next(r for r in range(108) if str(_gd1._table_data[r][1]) == "106")
+_cu_r2 = next(r for r in range(108) if str(_gd2._table_data[r][1]) == "106")
 check(str(_gd1._table_data[_cu_r1][8]) == "mm"
       and str(_gd2._table_data[_cu_r2][8]) == "mm",
       "单位全局联动: 工位1 改 106 元件长度单位 → 工位2/工位3 同编号项同步生效")
 _gd0._sync_units_global(_cu_r, "Dec")     # 还原默认
-_cp_r = next(r for r in range(109) if str(_gd0._table_data[r][1]) == "103")
+_cp_r = next(r for r in range(108) if str(_gd0._table_data[r][1]) == "103")
 _gd0._sync_ports_global({"103": "NG2"})
-_cp_r1 = next(r for r in range(109) if str(_gd1._table_data[r][1]) == "103")
-_cp_r2 = next(r for r in range(109) if str(_gd2._table_data[r][1]) == "103")
+_cp_r1 = next(r for r in range(108) if str(_gd1._table_data[r][1]) == "103")
+_cp_r2 = next(r for r in range(108) if str(_gd2._table_data[r][1]) == "103")
 check(str(_gd1._table_data[_cp_r1][9]) == "NG2"
       and str(_gd2._table_data[_cp_r2][9]) == "NG2",
       "出料全局联动: 工位1 改 103 连料收料位置 → 工位2/工位3 同编号项同步生效")
@@ -6068,12 +6080,12 @@ check(len(_pvm_paths._DEFECT_TYPES) == 13
       "统计示例改名: _DEFECT_TYPES/_SPEC/_SPLIT/_BASE 四表键一致（13 项，示例数值未变）")
 
 _dv0 = _mw.debug_views[0]
-check(len(_dv0._table_data) == 109
+check(len(_dv0._table_data) == 108
       and all(bool(r[0]) for r in _dv0._table_data)
       and [str(r[1]) for r in _dv0._table_data] == [c for c, _ in _fi]
       and [str(r[2]) for r in _dv0._table_data] == [n for _, n in _fi],
-      "出厂配置: 检测项列表内置 109 项且默认全部启用")
-check(all(v._table_data[r][0] for v in _mw.debug_views[1:] for r in (0, 50, 108)),
+      "出厂配置: 检测项列表内置 108 项且默认全部启用")
+check(all(v._table_data[r][0] for v in _mw.debug_views[1:] for r in (0, 50, 107)),
       "出厂配置: 全部相机工位共用同一份出厂检测项清单")
 check(_dvmod.DebugView._DEBUG_DETECT_CODES == {"100", "101", "102", "103"}
       and _dvmod.DebugView._DEBUG_DETECT_NAMES == {"有无（飞料）", "偏位", "歪料", "连料"},
@@ -6091,9 +6103,9 @@ _fac = [{"code": str(row[1]), "detect": bool(row[0]), "lo": row[6], "hi": row[7]
          "warn_enabled": True, "warn_threshold": 50}
         for row in _dv0._factory_data]
 _n = _dv0._apply_detect_settings(_fac)
-check(_n == 109 and _dv0._table_data[0][0] is True
+check(_n == 108 and _dv0._table_data[0][0] is True
       and _dv0._table_data[5][7] == "0",
-      f"恢复至出厂: 按 _factory_data 还原 109 项并全部开启（实际恢复 {_n} 项）")
+      f"恢复至出厂: 按 _factory_data 还原 108 项并全部开启（实际恢复 {_n} 项）")
 
 # ==== 2026-11-11：用户中心加宽 / 默认登录 o1 / 姓名可修改 / 导航底栏对齐 ====
 import user_manager as _ummod
