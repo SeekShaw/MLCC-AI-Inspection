@@ -11,10 +11,11 @@ from PyQt6.QtWidgets import (
     QComboBox, QCheckBox, QLineEdit, QSizePolicy, QDialog, QMenu,
     QAbstractItemView, QMessageBox, QApplication, QDateTimeEdit,
     QTabWidget, QScrollArea, QFileDialog, QSpinBox, QSlider,
-    QGroupBox, QStackedWidget, QDoubleSpinBox, QRadioButton, QButtonGroup,
+    QGroupBox, QStackedWidget, QDoubleSpinBox, QRadioButton, QButtonGroup, QToolTip,
 )
-from PyQt6.QtCore import Qt, QTimer, QPointF, QDateTime, QRect, QSize, QEvent
-from PyQt6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPen, QBrush, QImage, QPixmap
+from PyQt6.QtCore import Qt, QTimer, QPointF, QDateTime, QRect, QSize, QEvent, QPoint
+from PyQt6.QtGui import (QColor, QFont, QFontMetrics, QPainter, QPen, QBrush,
+                         QImage, QPixmap, QCursor)
 
 from styles import COLORS, register_restyle
 from permission_ui import bind
@@ -3826,6 +3827,12 @@ class DebugView(QWidget):
         self._defect_defs = {}
         # Dec 检测项最近一帧缺陷参数实测值（按 A 类参数判定，供值分布细化显示）
         self._defect_meas = {}
+        # 2026-11-18 需求：检测值列悬停浮窗（当前帧缺陷尺寸实测结果）
+        # _val_cells: 行号 → 检测值单元格 QFrame（安装事件过滤器捕获 ToolTip）
+        # _val_tip_rows: 该 QFrame → 行号（事件过滤器由 obj 反查行号）
+        self._val_cells = {}
+        self._val_tip_rows = {}
+        self._defect_tip_row = None   # 当前悬停且有浮窗的行（None=无）
         # Dec 检测项判定参数分布样本缓存：{行号: {参数键: [(datetime, value), ...]}}
         self._defect_param_samples = {}
         # 出厂设置快照（「恢复至出厂」用）：内置原始数据的副本
@@ -3887,6 +3894,13 @@ class DebugView(QWidget):
                         lambda _, n=item_name, rr=r: self._open_distribution(n, rr))
                     val_lay.addWidget(dist_btn)
                     self._val_labels[r] = val_lbl
+                    # 2026-11-18 需求：检测值单元格悬停浮窗（当前帧缺陷尺寸结果）。
+                    # 事件过滤器装在单元格与标签上——两者都在「结果值附近」范围内。
+                    val_widget.installEventFilter(self)
+                    val_lbl.installEventFilter(self)
+                    self._val_cells[r] = val_widget
+                    self._val_tip_rows[val_widget] = r
+                    self._val_tip_rows[val_lbl] = r
                     table.setCellWidget(r, c, val_widget)
                 elif c == 8:
                     # 单位（2026-10-09 由列号 9 移到 8）：
@@ -6236,9 +6250,84 @@ class DebugView(QWidget):
             th.setValue(int(rec["threshold"]))
             th.blockSignals(False)
 
+    def _defect_tip_enabled(self, r):
+        """该检测项是否需要在「检测值」悬停时浮现当前缺陷尺寸结果。
+
+        2026-11-18 需求：选择 A/B/C 档缺陷 → 显示；选择「缺陷不分档」(N)
+        且勾选「输出缺陷尺寸」→ 显示；其余（N 未勾选）→ 不显示。
+        """
+        rec = getattr(self, "_defect_defs", {}).get(r)
+        if not isinstance(rec, dict):
+            return False
+        cur = rec.get("cur", "N")
+        return cur in ("A", "B", "C") or (cur == "N" and bool(rec.get("output_size")))
+
+    def _defect_tip_text(self, r):
+        """当前帧缺陷尺寸结果浮窗文本（7 参数实测值 + 判定）。
+
+        数据取自 `self._defect_meas[r]`（最近一帧 `_sim_defect_measure` 结果），
+        每次 `refresh_detection_values()` 都会重写；浮窗在同一位置会随刷新更新。
+        """
+        if not self._defect_tip_enabled(r):
+            return ""
+        meas = getattr(self, "_defect_meas", {}).get(r)
+        if not isinstance(meas, dict) or not meas:
+            return ""
+        rec = self._defect_defs[r]
+        grade = self.DEFECT_GRADES.get(rec.get("cur", "N"), "")
+        lines = [f"当前缺陷尺寸（{grade}）"]
+        for _lbl, key, suf in self._DEFECT_FIELDS:
+            lines.append(f"{_lbl}: {meas.get(key, 0):g}{suf}")
+        params = self._defect_active_params(r)
+        ok = all(params[k][0] <= meas.get(k, 0) <= params[k][1]
+                 for _l, k, _s in self._DEFECT_FIELDS)
+        lines.append(f"判定: {'缺陷 (1)' if ok else '非缺陷 (0)'}")
+        return "\n".join(lines)
+
+    def _show_defect_tip(self, r, pos=None):
+        """在指定位置显示该行缺陷尺寸浮窗；返回实际显示的文本（空=不显示）。"""
+        text = self._defect_tip_text(r)
+        if not text:
+            return ""
+        widget = self._val_cells.get(r)
+        if widget is None:
+            return ""
+        QToolTip.showText(pos if pos is not None else QCursor.pos(), text, widget)
+        self._defect_tip_row = r
+        return text
+
+    def _refresh_defect_tip(self):
+        """结果刷新后同步刷新悬停浮窗——鼠标位置不动、仍在检测值单元格内即更新。
+
+        由 `refresh_detection_values()` 末尾调用。鼠标已移出范围则清除悬停行，
+        避免旧浮窗内容残留。
+        """
+        r = getattr(self, "_defect_tip_row", None)
+        if r is None:
+            return
+        widget = self._val_cells.get(r)
+        if widget is None:
+            self._defect_tip_row = None
+            return
+        pos = QCursor.pos()
+        if widget.rect().contains(widget.mapFromGlobal(pos)):
+            self._show_defect_tip(r, pos)
+        else:
+            self._defect_tip_row = None
+            QToolTip.hideText()
+
     def eventFilter(self, obj, event):
         """列头视口尺寸变化时重贴列头覆盖控件；
-        右侧 R/G/B 通道预览的左键点击 → 主画布切换到该通道画面。"""
+        右侧 R/G/B 通道预览的左键点击 → 主画布切换到该通道画面；
+        检测值单元格 hover → 浮现当前帧缺陷尺寸结果。"""
+        _tip_row = getattr(self, "_val_tip_rows", {}).get(obj)
+        if _tip_row is not None:
+            if event.type() == QEvent.Type.ToolTip:
+                if self._show_defect_tip(_tip_row, event.globalPos()):
+                    return True
+            elif event.type() == QEvent.Type.Leave:
+                if getattr(self, "_defect_tip_row", None) == _tip_row:
+                    self._defect_tip_row = None
         mode = getattr(self, "_channel_preview_map", {}).get(obj)
         if mode is not None and event.type() == QEvent.Type.MouseButtonPress \
                 and event.button() == Qt.MouseButton.LeftButton:
@@ -7381,3 +7470,5 @@ class DebugView(QWidget):
                     self._apply_result_color(res_item, result)
         finally:
             table.blockSignals(False)
+        # 2026-11-18 需求：鼠标不动、仍停在检测值单元格内时，浮窗随本帧结果刷新
+        self._refresh_defect_tip()

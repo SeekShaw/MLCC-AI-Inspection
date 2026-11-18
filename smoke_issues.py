@@ -2784,6 +2784,72 @@ check(_combo3.currentData() is None and _ddlg3._sb_lo.value() == 0
 _ddlg3.close()
 dv._dist_samples.pop(_r1, None)
 dv._defect_param_samples.pop(_r1, None)
+# 2026-11-18 需求：检测值列 hover 浮现当前缺陷尺寸结果（A/B/C 档；或 N+输出尺寸）
+import debug_view as _dvmod
+from PyQt6.QtGui import QHelpEvent as _QHelpEvt
+from PyQt6.QtCore import QPoint as _QPoint2, QEvent as _QEvent2
+class _FakeTip:
+    calls = []
+    @staticmethod
+    def showText(pos, text, w):
+        _FakeTip.calls.append(text)
+    @staticmethod
+    def hideText():
+        pass
+class _FakeCursor:
+    @staticmethod
+    def pos():
+        _c = dv._val_cells.get(_r1)
+        return _c.mapToGlobal(_c.rect().center()) if _c is not None else _QPoint2(0, 0)
+_orig_tip, _orig_cursor = _dvmod.QToolTip, _dvmod.QCursor
+_dvmod.QToolTip, _dvmod.QCursor = _FakeTip, _FakeCursor
+try:
+    _tip_r = dv._defect_defs.setdefault(
+        _r1, {"cur": "A", "output_size": False})
+    _meas_keys = [k for _l, k, _s in dv._DEFECT_FIELDS]
+    _meas_bak_tip = dict(dv._defect_meas.get(_r1, {}))
+    dv._defect_meas[_r1] = {k: 5.0 for k in _meas_keys}
+    _tip_a = dv._defect_tip_text(_r1)
+    check(_tip_a.startswith("当前缺陷尺寸（A档缺陷）")
+          and all(_l in _tip_a for _l, _k, _s in dv._DEFECT_FIELDS)
+          and "判定:" in _tip_a,
+          f"缺陷尺寸浮窗: A 档悬停文本含 7 参数实测与判定 (实际 {_tip_a[:40]!r})")
+    for _cat in ("B", "C"):
+        _tip_r["cur"] = _cat
+        check(dv._defect_tip_text(_r1).startswith(f"当前缺陷尺寸（{dv.DEFECT_GRADES[_cat]}）"),
+              f"缺陷尺寸浮窗: {_cat} 档悬停显示当前缺陷尺寸结果")
+    _tip_r["cur"], _tip_r["output_size"] = "N", False
+    check(dv._defect_tip_text(_r1) == "",
+          "缺陷尺寸浮窗: 不分档未勾选输出尺寸 → 不显示浮窗")
+    _tip_r["output_size"] = True
+    check("当前缺陷尺寸（缺陷不分档）" in dv._defect_tip_text(_r1),
+          "缺陷尺寸浮窗: 不分档勾选输出尺寸 → 显示当前缺陷尺寸结果")
+    # hover 事件触发 ToolTip
+    _cell = dv._val_cells[_r1]
+    _ev_tip = _QHelpEvt(_QEvent2.Type.ToolTip, _QPoint2(10, 10),
+                        _cell.mapToGlobal(_QPoint2(10, 10)))
+    _FakeTip.calls.clear()
+    check(dv.eventFilter(_cell, _ev_tip) is True
+          and dv._defect_tip_row == _r1 and len(_FakeTip.calls) == 1,
+          f"缺陷尺寸浮窗: 检测值单元格 hover 事件触发浮窗 (调用 {len(_FakeTip.calls)} 次)")
+    # 鼠标位置不动（仍在单元格内）时，结果刷新 → 浮窗内容随之刷新
+    _FakeTip.calls.clear()
+    dv._defect_meas[_r1] = {k: 2.0 for k in _meas_keys}
+    dv._refresh_defect_tip()
+    _tip_before = _FakeTip.calls[-1] if _FakeTip.calls else ""
+    dv._defect_meas[_r1] = {k: 8.0 for k in _meas_keys}
+    dv._refresh_defect_tip()
+    _tip_after = _FakeTip.calls[-1] if _FakeTip.calls else ""
+    check(len(_FakeTip.calls) >= 2 and "2 Pixel" in _tip_before
+          and "8 Pixel" in _tip_after and dv._defect_tip_row == _r1,
+          f"缺陷尺寸浮窗: 鼠标不动仍在范围内时随结果刷新 "
+          f"({_tip_before.splitlines()[1:3]} → {_tip_after.splitlines()[1:3]})")
+finally:
+    _dvmod.QToolTip, _dvmod.QCursor = _orig_tip, _orig_cursor
+    dv._defect_tip_row = None
+    if _meas_bak_tip:
+        dv._defect_meas[_r1] = _meas_bak_tip
+    dv._defect_defs.pop(_r1, None)
 
 # ④ 急停报警行：下拉左侧「报警方案」标签
 _dlg_estop = _ad2.AlarmSettingsDialog(is_super_admin=True)
@@ -4483,14 +4549,17 @@ check(_ng_rec is not None
       f"设备状态: 右列最后一行新增「NG料仓漏踢频率」（单位 Pcs/H、无百分比、"
       f"位于设备门下方）(实际 {_ng_rec['val_box'].text() if _ng_rec else None})")
 _ng_before = _ng_rec["val_box"].text()
+_ng_rate_before = pv._ng_miss_rate
 pv._playing = True
 for _ in range(8):
     pv._update_mis_freq_display()
 pv._playing = False
+# 文本四舍五入后可能恰好相同（如 6 → 6），改校验内部浮点值确实变化
 check(_ng_rec["val_box"].text().isdigit()
-      and _ng_rec["val_box"].text() != _ng_before,
-      f"设备状态: NG料仓漏踢频率运行期间实时波动（{_ng_before} → "
-      f"{_ng_rec['val_box'].text()}）")
+      and abs(pv._ng_miss_rate - _ng_rate_before) > 1e-6,
+      f"设备状态: NG料仓漏踢频率运行期间实时波动（显示 {_ng_before} → "
+      f"{_ng_rec['val_box'].text()}，值 {_ng_rate_before:.3f} → "
+      f"{pv._ng_miss_rate:.3f}）")
 # ---- 核心断言：同列各行名称框宽度**完全一致**（边框齐平），且已明显拉长 ----
 for _tag, _recs in (("左列", _col0), ("右列", _col1)):
     _ws = sorted(set(r["nm"].width() for r in _recs))
